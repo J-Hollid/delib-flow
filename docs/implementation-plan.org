@@ -23,10 +23,19 @@ intend to implement.
 - Slice E has been implemented: managed regions are protected, conflicts are
   detected and reflected in action state, and refresh now rerenders the control
   buffer section-by-section.
+- Milestone 2 is underway beyond the minimum exit criteria: a generic local
+  stage execution contract exists, `Inspect Source` executes end to end
+  through it, and `Match Project` now executes through the same contract
+  against the configured My Projects file. `Discover Relevant Reference
+  Material` now also executes through the same contract against the configured
+  ZK root. `Filter Useful Reference Material` now executes over the retrieved
+  candidates from that discovery path. `Extract Actions` now executes through
+  the same contract and produces draft filing artifacts.
 - The validation scaffold is implemented: `make test`, `make coverage`,
   `make complexity`, and `make validate` are now the project gates.
-- The current codebase remains an early scaffold for one active run, a frozen
-  source snapshot, and a placeholder control buffer.
+- The current codebase now includes a stable control-buffer foundation plus two
+  executable local stages with stage-history persistence and stage-dependent
+  next actions.
 - This plan should be kept in sync with changes in scope or implementation
   order.
 
@@ -53,7 +62,6 @@ Delivered behavior:
 
 Known Milestone 1 limits:
 
-- No real stage execution yet.
 - No prompt resolution yet.
 - No adapter-backed model execution yet.
 - No audit-log append yet.
@@ -98,6 +106,108 @@ Implications for Milestone 2:
   rendered views second.
 - Preserve the current gate discipline: no new stage machinery should land
   without passing coverage and complexity validation.
+
+* Milestone 2 outcome
+
+Milestone 2 now has a working minimum implementation.
+
+Delivered behavior:
+
+- Stage descriptors exist for executable workflow stages.
+- A generic local stage execution path exists:
+  - resolve stage descriptor
+  - assemble input package
+  - execute through the configured local adapter
+  - normalize output
+  - append stage history
+  - update run state and rerender the control buffer
+- `Inspect Source` is the first stage implemented through that contract.
+- `Match Project` is the second stage implemented through that contract.
+- `Discover Relevant Reference Material` is the third stage implemented through
+  that contract.
+- `Filter Useful Reference Material` is the fourth stage implemented through
+  that contract.
+- `Extract Actions` is the fifth stage implemented through that contract.
+- `Match Project` uses deterministic local heuristics over the configured My
+  Projects file and records matched, ambiguous, or no-match outcomes.
+- `Discover Relevant Reference Material` uses deterministic local retrieval
+  heuristics over the configured ZK root and records scored candidate notes.
+- `Filter Useful Reference Material` uses deterministic local filtering over
+  retrieved candidates and records retained versus rejected counts.
+- `Extract Actions` uses deterministic local heuristics over the source title
+  and retained context and records draft next-action artifacts.
+- Completed and failed stage runs both produce stage-history entries.
+- The `Inspect Source` action now executes instead of acting as a placeholder.
+- Retrying `Inspect Source` is represented in action state after the first run.
+- The `Match Project` action now executes instead of acting as a placeholder.
+- The `Discover Relevant Reference Material` action now executes instead of
+  acting as a placeholder.
+- The `Filter Useful Reference Material` action now executes instead of acting
+  as a placeholder.
+- The `Extract Actions` action now executes instead of acting as a placeholder.
+- Match results update working context and branch the placeholder follow-up
+  action set for matched versus no-match outcomes.
+- Discovery results update working context and unlock the filtering placeholder
+  stage.
+- Filtering results update both `:filtered-context` and the retained-context
+  artifact used by later stages.
+- Action extraction results update `:filing :draft-items` and the first real
+  filing-preview render path.
+
+Known Milestone 2 limits:
+
+- The local adapter contract exists, but cloud execution is still unimplemented.
+- Prompt resolution is currently minimal and descriptor-based rather than backed
+  by the prompt library.
+- Stage normalization is implemented for `Inspect Source`, `Match Project`,
+  `Discover Relevant Reference Material`, and `Filter Useful Reference
+  Material`, and `Extract Actions`.
+- Rich retry editing, repair passes, and timeout-specific behavior are not yet
+  implemented beyond the current generic failure path.
+- Project matching is currently title-term heuristic matching only; it does not
+  yet use project metadata, linked artifacts, or human disagreement flows
+  beyond placeholder follow-up actions.
+- Reference-material discovery is currently simple weighted term matching over
+  Org files in the configured ZK root; it does not yet prioritize linked
+  project support files, contacts, tags, or deeper link-tracing heuristics.
+- Reference-material filtering is currently score-threshold based with a simple
+  fallback retain-one rule; it does not yet reason about action relevance,
+  prior decisions, or constraint salience in the richer way the design allows.
+- Action extraction is currently simple heuristic drafting; it does not yet
+  validate pomodoro scope, direct executability, or action quality beyond
+  producing deterministic candidate items.
+
+* Milestone 2 learnings
+
+- Introducing the stage contract before richer domain stages was the right
+  order; it gave `Inspect Source` a place to land without hard-coding stage
+  behavior directly into actions or rendering.
+- Stage-history rendering and working-context updates should be kept separate.
+  A stage can affect both, but the update paths should remain independent so
+  future stages do not entangle history persistence with context presentation.
+- Descriptor-backed stage execution keeps prompt IDs, labels, executors, and
+  normalizers in one place, which should scale better than per-action bespoke
+  logic.
+- Failure entries are worth recording even in the minimal contract; they make
+  retry and diagnostics semantics easier to extend later.
+- Deterministic local heuristics are a good fit for early project matching.
+  They let the workflow unlock the next branch without depending on model
+  access for a decision that should remain inspectable and cheap.
+- Stage-dependent next actions should be derived from accepted workflow state
+  rather than from stage order alone.
+  `Match Project` changed the legal next-step set in a way that the action
+  layer could represent cleanly once the stage result lived in run state.
+- Retrieval behaves better as a separate candidate-collection stage than as
+  immediate retained-context mutation.
+  Keeping retrieved candidates distinct from filtered or accepted context
+  preserves the intended later review step.
+- Treating retained context as the output of filtering instead of discovery
+  simplified the workflow model.
+  It keeps the meaning of `:retained-context` stable for later artifact stages.
+- The filing-preview section became useful as soon as one stage wrote draft
+  artifacts into filing state.
+  That suggests later artifact stages should reuse the same filing-surface
+  pattern instead of inventing separate ad hoc render locations.
 
 * Project constraints
 

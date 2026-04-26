@@ -58,3 +58,30 @@ dated entries.
   1 outcomes, current status, and implementation learnings.
 - Updated `docs/design.org` with a Milestone 1 implementation-status note and
   design-level learnings confirmed by the current control-buffer foundation.
+- Implemented the first Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding a generic local stage execution contract
+  and an end-to-end `Inspect Source` stage.
+- Updated `README.org` and `docs/implementation-plan.org` to reflect Milestone
+  2 execution-contract progress and learnings.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Match Project` stage backed
+  by deterministic My Projects matching and stage-dependent follow-up actions.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current Milestone 2 state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Discover Relevant Reference
+  Material` stage backed by deterministic local retrieval from the configured
+  ZK root and discovery-dependent follow-up actions.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current discovery-stage state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Filter Useful Reference
+  Material` stage backed by deterministic filtering over retrieved candidates.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current filtering-stage state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Extract Actions` stage
+  backed by deterministic local drafting into filing preview.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current action-extraction
+  state.

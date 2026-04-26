@@ -14,14 +14,25 @@ normalized for repository use. The substantive workflow design remains the same.
 
 - Milestone 1 control-buffer foundation has now been implemented in the
   repository.
+- Milestone 2 has begun with two executable local stages in the repository:
+  `Inspect Source`, `Match Project`, `Discover Relevant Reference Material`,
+  `Filter Useful Reference Material`, and `Extract Actions`.
 - The current implementation confirms the viability of:
   - one active run at a time
   - frozen source snapshots
   - a structured Org-mode control buffer
   - direct editable blocks inside the control workflow
   - managed-region protection with editable-region preservation across refresh
-- The implementation does not yet cover real stage execution, audit-log append,
-  or deterministic filing, so those parts of this design remain forward-looking.
+- The current implementation also confirms the viability of:
+  - a generic local stage execution contract
+  - stage-history persistence across successful and failed runs
+  - deterministic project matching against the configured My Projects file
+  - deterministic local reference-material discovery against the configured ZK
+    root
+  - deterministic local filtering of retrieved candidates into retained context
+  - deterministic drafting of next-action artifacts into the filing-preview path
+- Audit-log append, cloud routing, retrieval, and deterministic filing still
+  remain forward-looking.
 
 * Design learnings from Milestone 1
 

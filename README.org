@@ -13,12 +13,24 @@ This repository is being built incrementally from a design-first process.
 - Structured control buffer with managed and editable regions
 - Editable block contents persist across refresh
 - Managed-region conflicts are detected and reflected in action state
+- Generic local stage execution contract implemented
+- `Inspect Source` executes end-to-end and is recorded in stage history
+- `Match Project` executes end-to-end against the configured My Projects file
+- `Discover Relevant Reference Material` executes end-to-end against the
+  configured `delib-flow-zk-root`
+- `Filter Useful Reference Material` executes end-to-end over retrieved
+  candidates
+- `Extract Actions` executes end-to-end and populates draft filing artifacts
+- Project-match outcomes update working context and valid next actions
+- Retrieved reference candidates update working context and unlock filtering
+- Filtered retained context now updates the downstream working-context artifact
+- Draft next actions now render in `Filing preview`
 - Validation gates implemented:
   - `make test`
   - `make coverage`
   - `make complexity`
   - `make validate`
-- No real stage execution yet
+- Broader stage coverage not implemented yet
 
 * Development
 

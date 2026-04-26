@@ -10,6 +10,37 @@
      (org-mode)
      ,@body))
 
+(defmacro delib-flow-test--with-temp-project-file (content &rest body)
+  "Run BODY with a temporary My Projects file containing CONTENT."
+  (declare (indent 1))
+  `(let ((file (make-temp-file "delib-flow-projects" nil ".org" ,content)))
+     (unwind-protect
+         (let ((delib-flow-my-projects-file file))
+           ,@body)
+       (when (file-exists-p file)
+         (delete-file file)))))
+
+(defmacro delib-flow-test--with-temp-zk-root (files &rest body)
+  "Run BODY with a temporary ZK root populated from FILES.
+
+FILES is an alist of relative path to file content."
+  (declare (indent 1))
+  `(let ((root (make-temp-file "delib-flow-zk" t)))
+     (unwind-protect
+         (progn
+           (dolist (entry ,files)
+             (let* ((relative (car entry))
+                    (content (cdr entry))
+                    (target (expand-file-name relative root))
+                    (dir (file-name-directory target)))
+               (make-directory dir t)
+               (with-temp-file target
+                 (insert content))))
+           (let ((delib-flow-zk-root root))
+             ,@body))
+       (when (file-directory-p root)
+         (delete-directory root t)))))
+
 (ert-deftest delib-flow-snapshot-heading-captures-title-and-content ()
   (delib-flow-test--with-temp-org
    (insert "* Example heading\nSome body text.\n")
@@ -98,7 +129,7 @@
          (actions (plist-get (delib-flow--run-actions run) :items))
          (action-ids (mapcar (lambda (action) (plist-get action :id)) actions)))
     (should (equal '(inspect-source refresh-buffer abort-run) action-ids))
-    (should (equal 'placeholder
+    (should (equal 'available
                    (plist-get (car actions) :status)))))
 
 (ert-deftest delib-flow-set-editable-block-text-marks-edited-status ()
@@ -148,7 +179,7 @@
     (unwind-protect
         (with-current-buffer buffer
           (goto-char (point-min))
-          (should (search-forward "- Inspect Source [placeholder]" nil t))
+          (should (search-forward "- Inspect Source [available]" nil t))
           (should (search-forward "- Refresh Buffer [available]" nil t))
           (should (search-forward "- Abort Run [available]" nil t)))
       (when (buffer-live-p buffer)
@@ -281,6 +312,355 @@
             (should (equal 'available (plist-get refresh-action :status)))))
       (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
         (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
+
+(ert-deftest delib-flow-inspect-source-updates-stage-history-and-context ()
+  (let* ((run (delib-flow--initialize-run
+               (list :title "Example"
+                     :content "* Example\nBody line one\nBody line two\n")))
+         (updated-run (delib-flow--run-stage-locally run 'inspect-source))
+         (history (delib-flow--run-stage-history updated-run))
+         (entry (car (plist-get history :entries)))
+         (working (delib-flow--run-working-context updated-run)))
+    (should (equal 'inspect-source (plist-get history :latest-stage)))
+    (should (equal 'completed (plist-get history :latest-status)))
+    (should (equal 'inspect-source (plist-get entry :stage-id)))
+    (should (plist-get working :inspect-output))
+    (should (string-match-p "Body lines: 2"
+                            (plist-get working :retained-context)))
+    (should (equal '(inspect-source
+                     match-project
+                     discover-reference-material
+                     decide-cloud-pass
+                     refresh-buffer
+                     abort-run)
+                   (mapcar (lambda (action)
+                             (plist-get action :id))
+                           (plist-get (delib-flow--run-actions updated-run)
+                                      :items))))))
+
+(ert-deftest delib-flow-inspect-source-command-rerenders-history ()
+  (let* ((run (delib-flow--initialize-run
+               (list :title "Example"
+                     :content "* Example\nBody line\n")))
+         (delib-flow--active-run run)
+         (buffer (delib-flow--render-control-buffer run)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local delib-flow--active-run-buffer t))
+          (delib-flow-action-inspect-source)
+          (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+            (goto-char (point-min))
+            (should (search-forward "** Inspect Source" nil t))
+            (should (search-forward "Body lines: 1" nil t))
+            (goto-char (point-min))
+            (should (search-forward "- Retry Inspect Source [available]" nil t))
+            (should (search-forward "- Match Project [available]" nil t))
+            (should (search-forward "- Discover Relevant Reference Material [available]" nil t))
+            (should (search-forward "- Decide on Cloud Pass [placeholder]" nil t))))
+      (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+        (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
+
+(ert-deftest delib-flow-match-project-updates-stage-history-and-context ()
+  (delib-flow-test--with-temp-project-file
+      "* Alpha Project\n* Beta Project\n"
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Alpha Project kickoff"
+                       :content "* Alpha Project kickoff\nAgenda\n")))
+           (inspected (delib-flow--run-stage-locally run 'inspect-source))
+           (updated-run (delib-flow--run-stage-locally inspected 'match-project))
+           (history (delib-flow--run-stage-history updated-run))
+           (entry (car (last (plist-get history :entries))))
+           (working (delib-flow--run-working-context updated-run))
+           (project-match (plist-get working :project-match)))
+      (should (equal 'match-project (plist-get history :latest-stage)))
+      (should (equal 'completed (plist-get history :latest-status)))
+      (should (equal 'match-project (plist-get entry :stage-id)))
+      (should (equal 'matched (plist-get project-match :match-status)))
+      (should (equal "Alpha Project"
+                     (plist-get (plist-get project-match :best-project) :title)))
+      (should (string-match-p "Review project match"
+                              (plist-get (delib-flow--run-session updated-run)
+                                         :current-decision)))
+      (should (equal '(inspect-source
+                       match-project
+                       discover-reference-material
+                       extract-actions
+                       extract-waiting-for
+                       suggest-reference-notes
+                       decide-cloud-pass
+                       refresh-buffer
+                       abort-run)
+                     (mapcar (lambda (action)
+                               (plist-get action :id))
+                             (plist-get (delib-flow--run-actions updated-run)
+                                        :items)))))))
+
+(ert-deftest delib-flow-match-project-no-match-updates-follow-up-actions ()
+  (delib-flow-test--with-temp-project-file
+      "* Alpha Project\n* Beta Project\n"
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Completely Different Topic"
+                       :content "* Completely Different Topic\nAgenda\n")))
+           (inspected (delib-flow--run-stage-locally run 'inspect-source))
+           (updated-run (delib-flow--run-stage-locally inspected 'match-project))
+           (project-match
+            (plist-get (delib-flow--run-working-context updated-run)
+                       :project-match)))
+      (should (equal 'no-match (plist-get project-match :match-status)))
+      (should (equal '(inspect-source
+                       match-project
+                       discover-reference-material
+                       manual-project-match
+                       propose-new-project
+                       decide-cloud-pass
+                       refresh-buffer
+                       abort-run)
+                     (mapcar (lambda (action)
+                               (plist-get action :id))
+                             (plist-get (delib-flow--run-actions updated-run)
+                                        :items)))))))
+
+(ert-deftest delib-flow-match-project-command-rerenders-history ()
+  (delib-flow-test--with-temp-project-file
+      "* Alpha Project\n* Beta Project\n"
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Alpha Project kickoff"
+                       :content "* Alpha Project kickoff\nBody line\n")))
+           (delib-flow--active-run (delib-flow--run-stage-locally run 'inspect-source))
+           (buffer (delib-flow--render-control-buffer delib-flow--active-run)))
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (setq-local delib-flow--active-run-buffer t))
+            (delib-flow-action-match-project)
+            (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+              (goto-char (point-min))
+              (should (search-forward "Project match: matched." nil t))
+              (goto-char (point-min))
+              (should (search-forward "** Match Project" nil t))
+              (should (search-forward "Best project: Alpha Project" nil t))
+              (goto-char (point-min))
+              (should (search-forward "- Discover Relevant Reference Material [available]" nil t))
+              (goto-char (point-min))
+              (should (search-forward "- Extract Actions [available]" nil t))
+              (should (search-forward "- Extract Waiting-For [placeholder]" nil t))
+              (should (search-forward "- Suggest Reference Notes [placeholder]" nil t))))
+        (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+          (kill-buffer (get-buffer delib-flow-control-buffer-name)))))))
+
+(ert-deftest delib-flow-discover-reference-material-updates-stage-history-and-context ()
+  (delib-flow-test--with-temp-zk-root
+      '(("alpha.org" . "#+title: Alpha Project Notes\nKickoff agenda and blockers.\n")
+        ("beta.org" . "#+title: Beta Notes\nUnrelated material.\n"))
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Alpha Project kickoff"
+                       :content "* Alpha Project kickoff\nAgenda\n")))
+           (inspected (delib-flow--run-stage-locally run 'inspect-source))
+           (updated-run
+            (delib-flow--run-stage-locally inspected
+                                           'discover-reference-material))
+           (history (delib-flow--run-stage-history updated-run))
+           (entry (car (last (plist-get history :entries))))
+           (working (delib-flow--run-working-context updated-run))
+           (retrieved (plist-get working :retrieved-candidates)))
+      (should (equal 'discover-reference-material
+                     (plist-get history :latest-stage)))
+      (should (equal 'completed (plist-get history :latest-status)))
+      (should (equal 'discover-reference-material (plist-get entry :stage-id)))
+      (should retrieved)
+      (should (equal "Alpha Project Notes"
+                     (plist-get (car retrieved) :title)))
+      (should (string-match-p "Review retrieved reference candidates"
+                              (plist-get (delib-flow--run-session updated-run)
+                                         :current-decision)))
+      (should (member 'discover-reference-material
+                      (mapcar (lambda (action)
+                                (plist-get action :id))
+                              (plist-get (delib-flow--run-actions updated-run)
+                                         :items)))))))
+
+(ert-deftest delib-flow-discover-reference-material-command-rerenders-history ()
+  (delib-flow-test--with-temp-zk-root
+      '(("alpha.org" . "#+title: Alpha Project Notes\nKickoff agenda and blockers.\n")
+        ("beta.org" . "#+title: Beta Notes\nUnrelated material.\n"))
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Alpha Project kickoff"
+                       :content "* Alpha Project kickoff\nBody line\n")))
+           (delib-flow--active-run (delib-flow--run-stage-locally run 'inspect-source))
+           (buffer (delib-flow--render-control-buffer delib-flow--active-run)))
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (setq-local delib-flow--active-run-buffer t))
+            (delib-flow-action-discover-reference-material)
+            (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+              (goto-char (point-min))
+              (should (search-forward "Retrieved context: available." nil t))
+              (should (search-forward "Alpha Project Notes" nil t))
+              (goto-char (point-min))
+              (should (search-forward "** Discover Relevant Reference Material" nil t))
+              (should (search-forward "- Candidate count: 1" nil t))
+              (goto-char (point-min))
+              (should (search-forward "- Filter Useful Reference Material [available]" nil t))))
+        (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+          (kill-buffer (get-buffer delib-flow-control-buffer-name)))))))
+
+(ert-deftest delib-flow-filter-reference-material-updates-stage-history-and-context ()
+  (delib-flow-test--with-temp-zk-root
+      '(("alpha.org" . "#+title: Alpha Project Notes\nKickoff agenda and blockers.\n")
+        ("gamma.org" . "#+title: Alpha Constraints\nProject constraint detail.\n")
+        ("beta.org" . "#+title: Beta Notes\nUnrelated material.\n"))
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Alpha Project kickoff"
+                       :content "* Alpha Project kickoff\nAgenda\n")))
+           (inspected (delib-flow--run-stage-locally run 'inspect-source))
+           (discovered
+            (delib-flow--run-stage-locally inspected
+                                           'discover-reference-material))
+           (updated-run
+            (delib-flow--run-stage-locally discovered
+                                           'filter-reference-material))
+           (history (delib-flow--run-stage-history updated-run))
+           (entry (car (last (plist-get history :entries))))
+           (working (delib-flow--run-working-context updated-run))
+           (filtered (plist-get working :filtered-context)))
+      (should (equal 'filter-reference-material
+                     (plist-get history :latest-stage)))
+      (should (equal 'completed (plist-get history :latest-status)))
+      (should (equal 'filter-reference-material (plist-get entry :stage-id)))
+      (should filtered)
+      (should (> (plist-get filtered :retained-count) 0))
+      (should (string-match-p "Alpha Project Notes"
+                              (plist-get working :retained-context)))
+      (should (string-match-p "Review retained context"
+                              (plist-get (delib-flow--run-session updated-run)
+                                         :current-decision)))
+      (should (member 'filter-reference-material
+                      (mapcar (lambda (action)
+                                (plist-get action :id))
+                              (plist-get (delib-flow--run-actions updated-run)
+                                         :items)))))))
+
+(ert-deftest delib-flow-filter-reference-material-command-rerenders-history ()
+  (delib-flow-test--with-temp-zk-root
+      '(("alpha.org" . "#+title: Alpha Project Notes\nKickoff agenda and blockers.\n")
+        ("gamma.org" . "#+title: Alpha Constraints\nProject constraint detail.\n")
+        ("beta.org" . "#+title: Beta Notes\nUnrelated material.\n"))
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Alpha Project kickoff"
+                       :content "* Alpha Project kickoff\nBody line\n")))
+           (inspected (delib-flow--run-stage-locally run 'inspect-source))
+           (discovered
+            (delib-flow--run-stage-locally inspected
+                                           'discover-reference-material))
+           (delib-flow--active-run discovered)
+           (buffer (delib-flow--render-control-buffer discovered)))
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (setq-local delib-flow--active-run-buffer t))
+            (delib-flow-action-filter-reference-material)
+            (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+              (goto-char (point-min))
+              (should (search-forward "Filtered context: available." nil t))
+              (should (search-forward "Retained: 2. Rejected: 0." nil t))
+              (should (search-forward "Alpha Project Notes" nil t))
+              (goto-char (point-min))
+              (should (search-forward "** Filter Useful Reference Material" nil t))
+              (should (search-forward "- Retained count: 2" nil t))
+              (goto-char (point-min))
+              (should (search-forward "- Retry Filter Useful Reference Material [available]" nil t))))
+        (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+          (kill-buffer (get-buffer delib-flow-control-buffer-name)))))))
+
+(ert-deftest delib-flow-extract-actions-updates-stage-history-and-filing ()
+  (delib-flow-test--with-temp-zk-root
+      '(("alpha.org" . "#+title: Alpha Project Notes\nKickoff agenda and blockers.\n")
+        ("gamma.org" . "#+title: Alpha Constraints\nProject constraint detail.\n"))
+    (delib-flow-test--with-temp-project-file
+        "* Alpha Project\n"
+      (let* ((run (delib-flow--initialize-run
+                   (list :title "Alpha Project kickoff"
+                         :content "* Alpha Project kickoff\nAgenda\n")))
+             (inspected (delib-flow--run-stage-locally run 'inspect-source))
+             (matched (delib-flow--run-stage-locally inspected 'match-project))
+             (filtered
+              (delib-flow--run-stage-locally
+               (delib-flow--run-stage-locally matched
+                                              'discover-reference-material)
+               'filter-reference-material))
+             (updated-run
+              (delib-flow--run-stage-locally filtered 'extract-actions))
+             (history (delib-flow--run-stage-history updated-run))
+             (entry (car (last (plist-get history :entries))))
+             (filing (plist-get updated-run :filing))
+             (draft-items (plist-get filing :draft-items)))
+        (should (equal 'extract-actions (plist-get history :latest-stage)))
+        (should (equal 'completed (plist-get history :latest-status)))
+        (should (equal 'extract-actions (plist-get entry :stage-id)))
+        (should draft-items)
+        (should (string-match-p "Clarify the next step"
+                                (plist-get (car draft-items) :text)))
+        (should (string-match-p "Review drafted actions"
+                                (plist-get (delib-flow--run-session updated-run)
+                                           :current-decision)))
+        (should (string-match-p "TODO"
+                                (plist-get filing :preview-text)))))))
+
+(ert-deftest delib-flow-extract-actions-command-rerenders-filing-preview ()
+  (delib-flow-test--with-temp-zk-root
+      '(("alpha.org" . "#+title: Alpha Project Notes\nKickoff agenda and blockers.\n")
+        ("gamma.org" . "#+title: Alpha Constraints\nProject constraint detail.\n"))
+    (delib-flow-test--with-temp-project-file
+        "* Alpha Project\n"
+      (let* ((run (delib-flow--initialize-run
+                   (list :title "Alpha Project kickoff"
+                         :content "* Alpha Project kickoff\nBody line\n")))
+             (inspected (delib-flow--run-stage-locally run 'inspect-source))
+             (matched (delib-flow--run-stage-locally inspected 'match-project))
+             (filtered
+              (delib-flow--run-stage-locally
+               (delib-flow--run-stage-locally matched
+                                              'discover-reference-material)
+               'filter-reference-material))
+             (delib-flow--active-run filtered)
+             (buffer (delib-flow--render-control-buffer filtered)))
+        (unwind-protect
+            (progn
+              (with-current-buffer buffer
+                (setq-local delib-flow--active-run-buffer t))
+              (delib-flow-action-extract-actions)
+              (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+                (goto-char (point-min))
+                (should (search-forward "** Extract Actions" nil t))
+                (should (search-forward "- Candidate count: 3" nil t))
+                (goto-char (point-min))
+                (should (search-forward "Draft filing artifacts are available." nil t))
+                (should (search-forward "- TODO Clarify the next step for Alpha Project kickoff" nil t))
+                (goto-char (point-min))
+                (should (search-forward "- Retry Extract Actions [available]" nil t))))
+          (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+            (kill-buffer (get-buffer delib-flow-control-buffer-name))))))))
+
+(ert-deftest delib-flow-placeholder-stage-action-errors ()
+  (should-error (delib-flow-action-stage-placeholder)))
+
+(ert-deftest delib-flow-stage-failure-updates-history ()
+  (let* ((delib-flow-local-stage-adapter
+          (lambda (_descriptor _package)
+            (error "adapter failure")))
+         (run (delib-flow--initialize-run (list :title "Example")))
+         (updated-run (delib-flow--run-stage-locally run 'inspect-source))
+         (history (delib-flow--run-stage-history updated-run))
+         (entry (car (plist-get history :entries))))
+    (should (equal 'failed (plist-get history :latest-status)))
+    (should (equal 'failed (plist-get entry :status)))
+    (should (string-match-p "adapter failure"
+                            (plist-get entry :normalized-output)))
+    (should (string-match-p "Review stage failure"
+                            (plist-get (delib-flow--run-session updated-run)
+                                       :current-decision)))))
 
 (ert-deftest delib-flow-abort-run-clears-active-run ()
   (let* ((run (delib-flow--initialize-run (list :title "Example")))
