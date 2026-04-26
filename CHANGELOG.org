@@ -17,3 +17,15 @@ dated entries.
 - Updated `docs/implementation-plan.org` with agreed planning decisions:
   shared adapter recommendation, direct in-control-buffer editing, and
   audit-before-filing milestone order.
+- Refined Milestone 1 in `docs/implementation-plan.org` into concrete
+  workstreams for run state, control-buffer regions, lifecycle, action
+  legality, rendering behavior, and test coverage.
+- Recorded the agreed Milestone 1 editing representation: package-managed
+  headings with explicit editable blocks inside the control buffer.
+- Added the accepted control-buffer contract recommendations and a concrete
+  section schema to `docs/implementation-plan.org`.
+- Added accepted literal internal schema recommendations for run state,
+  editable blocks, valid actions, and anchor lookup to
+  `docs/implementation-plan.org`.
+- Added a code-facing Milestone 1 breakdown mapping planned work onto
+  `delib-flow.el` and `test/delib-flow-test.el`.
