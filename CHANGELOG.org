@@ -29,3 +29,11 @@ dated entries.
   `docs/implementation-plan.org`.
 - Added a code-facing Milestone 1 breakdown mapping planned work onto
   `delib-flow.el` and `test/delib-flow-test.el`.
+- Added enforced project constraints to `docs/implementation-plan.org`:
+  validated test coverage of at least 90 percent and validated cyclomatic
+  complexity of at most 5.
+- Added an operational validation design to `docs/implementation-plan.org`
+  covering `ERT`, coverage gating, complexity gating, and `make` command
+  expectations.
+- Added an exact Slice A plan to `docs/implementation-plan.org` covering the
+  first run-state refactor and baseline test expansion.

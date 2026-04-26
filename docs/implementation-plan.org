@@ -16,6 +16,78 @@ intend to implement.
 - This plan should be kept in sync with changes in scope or implementation
   order.
 
+* Project constraints
+
+These constraints should be treated as enforcement gates for implementation
+work, not as optional quality goals.
+
+- Test coverage must remain at or above 90 percent, and this must be validated
+  as part of implementation work.
+- Cyclomatic complexity must remain at or below 5 per function or equivalent
+  unit under the chosen validator, and this must also be validated.
+- If a proposed implementation slice cannot meet these constraints cleanly, the
+  slice should be decomposed further before code is merged.
+
+Validation design:
+
+- `ERT` in batch mode should be the authoritative test runner.
+- Coverage validation should be implemented as a project-local command that
+  instruments Emacs Lisp test execution, computes repository coverage, and
+  fails when coverage is below 90 percent.
+- Cyclomatic complexity validation should be implemented as a project-local
+  Emacs batch command that analyzes Emacs Lisp function forms and fails when
+  any function exceeds complexity 5.
+- These validators should be runnable both locally and in CI with the same
+  command surface.
+
+Recommended command contract:
+
+- `make test`
+  Runs the authoritative batch `ERT` test suite.
+- `make coverage`
+  Runs coverage instrumentation and fails if total validated coverage is below
+  90 percent.
+- `make complexity`
+  Runs the Emacs Lisp cyclomatic complexity validator and fails if any function
+  exceeds 5.
+- `make validate`
+  Runs `test`, `coverage`, and `complexity` as the full project gate.
+
+Recommended repository layout for validators:
+
+- `Makefile`
+  Public command surface for local and CI validation.
+- `scripts/`
+  Small validation entry points or wrappers if the commands become too large
+  for inline Make recipes.
+- `test/`
+  Test definitions and any shared test helpers.
+
+Complexity policy:
+
+- Complexity should be measured per `defun` and other equivalent top-level
+  executable units we intentionally decide to validate.
+- The validator should count standard branch and path-increasing constructs in
+  Emacs Lisp, such as `if`, `cond`, `when`, `unless`, boolean branching forms,
+  `pcase` branch paths, and loop-like control structures.
+- The validator should ignore comments, docstrings, and data-only forms.
+- Generated code, if any appears later, should be excluded explicitly rather
+  than implicitly ignored.
+- If a helper is hard to understand but technically below complexity 5, we
+  should still refactor when appropriate; the validator is a floor, not a full
+  readability guarantee.
+
+Coverage policy:
+
+- Coverage should be evaluated for repository Emacs Lisp source under the main
+  package, not for external dependencies.
+- Test helper code may be excluded if needed, but exclusions should be explicit
+  and kept minimal.
+- New package logic should not be merged with untested branches on the theory
+  that aggregate coverage remains above the threshold.
+- If aggregate coverage remains above 90 percent but a new slice adds obvious
+  untested paths, the slice should still be extended with tests before merge.
+
 * Current understanding
 
 - `delib-flow` starts from the Org heading at point and captures a frozen source
@@ -822,6 +894,147 @@ Slice E: protection and rerender
 - Add conflict detection.
 - Add section-by-section rerender and refresh tests.
 
+** Slice A: exact breakdown
+
+Slice A is the first implementation slice. Its purpose is to replace the
+current scaffold state model with the agreed run-state contract and lock that
+contract down with tests before UI behavior becomes more complex.
+
+Scope limits:
+- No action buttons yet.
+- No editable block rendering yet.
+- No section-by-section rerender yet.
+- No explicit lifecycle commands beyond what is necessary to keep
+  `delib-flow-start` coherent under the new state shape.
+
+Target files:
+- [delib-flow.el](/home/j-holliday/.emacs.d/site-lisp/delib-flow/delib-flow.el:1)
+- [test/delib-flow-test.el](/home/j-holliday/.emacs.d/site-lisp/delib-flow/test/delib-flow-test.el:1)
+
+Planned changes in `delib-flow.el`:
+
+1. Replace the current `delib-flow--initialize-run` shape
+- Remove the current top-level domains:
+  - `:stage-results`
+  - `:approvals`
+  - `:filing-plan`
+  - `:audit-metadata`
+  - `:session-metadata`
+- Introduce the agreed top-level domains:
+  - `:source`
+  - `:working-context`
+  - `:stage-history`
+  - `:actions`
+  - `:routing`
+  - `:filing`
+  - `:audit`
+  - `:session`
+  - `:ui`
+- Move source snapshot storage from `:working-context` to `:source`.
+
+2. Add small state-construction helpers
+- Add `delib-flow--make-editable-block`
+- Add `delib-flow--initial-editable-blocks`
+- Add `delib-flow--initial-section-anchors`
+- Add `delib-flow--initial-actions-state`
+- Add `delib-flow--initial-session-state`
+- Add `delib-flow--initial-ui-state`
+
+Rationale:
+- These helpers keep `delib-flow--initialize-run` below the complexity ceiling
+  and make the state contract testable in pieces.
+
+3. Add small state-access helpers
+- Add `delib-flow--run-source`
+- Add `delib-flow--run-working-context`
+- Add `delib-flow--run-session`
+- Add `delib-flow--run-ui`
+- Add `delib-flow--run-actions`
+
+Rationale:
+- Slice A should begin moving away from deep repeated `plist-get` chains even
+  before the rendering refactor.
+
+4. Update code that currently assumes the old shape
+- Update `delib-flow--section-content` so the `Source` and `Current decision`
+  sections read from `:source` and `:session`.
+- Keep placeholder content elsewhere if needed, but make it read from the new
+  state shape where applicable.
+- Keep `delib-flow-start` behavior intact while ensuring the active run uses the
+  new schema.
+
+5. Keep lifecycle changes minimal in Slice A
+- Preserve the current active-run singleton variable.
+- Preserve the current kill-buffer teardown hook.
+- Only make the minimum adjustments needed so teardown clears the new run state
+  cleanly.
+
+Functions expected to exist after Slice A:
+- `delib-flow--snapshot-heading`
+- `delib-flow--make-editable-block`
+- `delib-flow--initial-editable-blocks`
+- `delib-flow--initial-section-anchors`
+- `delib-flow--initial-actions-state`
+- `delib-flow--initial-session-state`
+- `delib-flow--initial-ui-state`
+- `delib-flow--initialize-run`
+- `delib-flow--run-source`
+- `delib-flow--run-working-context`
+- `delib-flow--run-session`
+- `delib-flow--run-ui`
+- `delib-flow--run-actions`
+
+Planned test changes in `test/delib-flow-test.el`:
+
+1. Keep and update existing tests
+- Keep `delib-flow-snapshot-heading-captures-title-and-content`.
+- Replace `delib-flow-initialize-run-contains-source-snapshot` with a stronger
+  schema test that asserts the new top-level domains and source placement.
+- Keep `delib-flow-start-requires-heading-at-point`.
+- Keep `delib-flow-render-control-buffer-contains-required-sections`, but update
+  any fixture shape needed for the new run contract.
+
+2. Add new state-shape tests
+- `delib-flow-initialize-run-contains-required-top-level-keys`
+- `delib-flow-initialize-run-stores-source-in-source-domain`
+- `delib-flow-initialize-run-seeds-editable-blocks`
+- `delib-flow-initialize-run-seeds-section-anchors`
+- `delib-flow-initialize-run-seeds-session-state`
+
+3. Add helper-focused tests where useful
+- `delib-flow-make-editable-block-returns-expected-shape`
+- `delib-flow-initial-section-anchors-contains-required-sections`
+
+4. Add a minimal active-run lifecycle assertion
+- `delib-flow-control-buffer-killed-clears-active-run`
+
+Expected test assertions:
+- Top-level run keys match the agreed domains.
+- `:source` contains the frozen source snapshot.
+- `:working-context :editable-block-ids` includes `context-main` and
+  `operator-notes`.
+- `:ui :editable-blocks` contains block objects keyed by those IDs.
+- `:ui :section-anchors` contains all seven top-level sections.
+- `:session :status` starts as `active`.
+- `:session :current-decision` is seeded from the new session domain.
+
+Acceptance criteria for Slice A:
+- `delib-flow--initialize-run` conforms to the new schema.
+- Existing rendering still works against the new schema without introducing new
+  UI behavior yet.
+- Tests cover the new schema and initial helper outputs strongly enough to keep
+  aggregate coverage on track for the 90 percent gate.
+- No function introduced in Slice A should exceed cyclomatic complexity 5.
+
+Recommended implementation order inside Slice A:
+
+1. Add helper constructors first.
+2. Rewrite `delib-flow--initialize-run`.
+3. Add access helpers.
+4. Update `delib-flow--section-content` to read the new state shape.
+5. Update and expand tests.
+6. Run validation before moving to Slice B.
+
 ** Known implementation risks
 
 - Removing `view-mode` too late will complicate every later step; it should be
@@ -832,3 +1045,7 @@ Slice E: protection and rerender
   need to be rewritten again before stage execution.
 - Tests that only assert visible text will be too weak; Milestone 1 also needs
   state-shape and lifecycle assertions.
+- Coverage and complexity validation may force smaller implementation slices
+  than the architectural sequence alone would suggest.
+- If validation commands are not introduced early, later work may accumulate in
+  ways that are expensive to split back down under the complexity ceiling.
