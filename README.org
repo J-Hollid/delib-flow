@@ -20,11 +20,32 @@ This repository is being built incrementally from a design-first process.
   configured `delib-flow-zk-root`
 - `Filter Useful Reference Material` executes end-to-end over retrieved
   candidates
+- `Choose Project Manually` executes end-to-end on ambiguous or no-match project branches
+- `Propose New Project` executes end-to-end on the no-match branch and drafts a project artifact
 - `Extract Actions` executes end-to-end and populates draft filing artifacts
+- `Extract Waiting-For` executes end-to-end and populates draft filing artifacts
+- `Suggest Reference Notes` executes end-to-end and populates draft filing artifacts
+- `Decide on Cloud Pass` executes end-to-end and records pending cloud-routing state
+- `Sanitize for Cloud` executes end-to-end and prepares a reviewable sanitized package
+- `Run Cloud Stage` executes end-to-end through the cloud adapter path and records returned cloud output
+- `Integrate into Source` executes end-to-end and prepares draft filing artifacts for explicit review
+- `Select Approved Filing Actions` executes end-to-end and approves one filing artifact at a time
+- `File Approved Outputs` executes end-to-end and writes the current approved artifact to deterministic targets
 - Project-match outcomes update working context and valid next actions
 - Retrieved reference candidates update working context and unlock filtering
 - Filtered retained context now updates the downstream working-context artifact
-- Draft next actions now render in `Filing preview`
+- No-match project decisions now can produce a draft project plus first next action
+- Ambiguous or rejected project matches now can take a deterministic manual-selection path
+- Cloud-routing decisions now update working context and routing state
+- Cloud sanitization now updates working context with a prepared sanitized package
+- Cloud execution now updates working context with returned cloud output
+- Integration now updates retained context while preserving draft artifacts for filing review
+- Filing review now promotes one approved artifact at a time out of the current draft queue
+- Deterministic filing now inserts project child items into the My Projects file and creates reference-note files in the configured ZK root
+- Deterministic filing now also creates new project headings with a first child action from approved project proposals
+- Audit logging now records run and stage snapshots in the configured audit log file and surfaces append status in `Audit status`
+- Draft next actions, waiting-for items, and reference-note suggestions now
+  render in `Filing preview`
 - Validation gates implemented:
   - `make test`
   - `make coverage`

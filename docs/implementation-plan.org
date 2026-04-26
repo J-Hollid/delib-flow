@@ -29,13 +29,29 @@ intend to implement.
   against the configured My Projects file. `Discover Relevant Reference
   Material` now also executes through the same contract against the configured
   ZK root. `Filter Useful Reference Material` now executes over the retrieved
-  candidates from that discovery path. `Extract Actions` now executes through
-  the same contract and produces draft filing artifacts.
+  candidates from that discovery path. `Choose Project Manually` now executes
+  on ambiguous or no-match branches and records a deterministic manual
+  selection. `Propose New Project` now executes on the no-match branch and
+  drafts a filing-ready project artifact. `Extract Actions` now executes
+  through the same contract and produces draft filing artifacts. `Extract
+  Waiting-For` now also executes through that same contract and produces draft
+  filing artifacts. `Suggest Reference Notes` now also executes through that
+  same contract and produces draft filing artifacts. `Decide on Cloud Pass`
+  now also executes through that same contract and records pending routing
+  state. `Sanitize for Cloud` now also executes through that same contract and
+  prepares a sanitized review package. `Run Cloud Stage` now executes through
+  the dedicated cloud adapter path and records returned cloud output.
+  `Integrate into Source` now executes locally and prepares draft filing
+  artifacts for explicit review. `Select Approved Filing Actions` now executes
+  locally and approves one filing artifact at a time. `File Approved Outputs`
+  now executes locally and writes the current approved artifact to
+  deterministic project and note targets. Audit logging now records run and
+  stage snapshots in the configured audit log file.
 - The validation scaffold is implemented: `make test`, `make coverage`,
   `make complexity`, and `make validate` are now the project gates.
-- The current codebase now includes a stable control-buffer foundation plus two
-  executable local stages with stage-history persistence and stage-dependent
-  next actions.
+- The current codebase now includes a stable control-buffer foundation plus
+  fifteen executable stage implementations with stage-history persistence and
+  stage-dependent next actions.
 - This plan should be kept in sync with changes in scope or implementation
   order.
 
@@ -127,15 +143,56 @@ Delivered behavior:
   that contract.
 - `Filter Useful Reference Material` is the fourth stage implemented through
   that contract.
-- `Extract Actions` is the fifth stage implemented through that contract.
+- `Choose Project Manually` is the fifth stage implemented through that
+  contract.
+- `Propose New Project` is the sixth stage implemented through that contract.
+- `Extract Actions` is the seventh stage implemented through that contract.
+- `Extract Waiting-For` is the eighth stage implemented through that contract.
+- `Suggest Reference Notes` is the ninth stage implemented through that
+  contract.
+- `Decide on Cloud Pass` is the tenth stage implemented through that
+  contract.
+- `Sanitize for Cloud` is the eleventh stage implemented through that contract.
+- `Run Cloud Stage` is the twelfth stage implemented through the cloud adapter
+  path.
+- `Integrate into Source` is the thirteenth stage implemented through that
+  contract.
+- `Select Approved Filing Actions` is the fourteenth stage implemented through
+  that contract.
+- `File Approved Outputs` is the fifteenth stage implemented through that
+  contract.
 - `Match Project` uses deterministic local heuristics over the configured My
   Projects file and records matched, ambiguous, or no-match outcomes.
 - `Discover Relevant Reference Material` uses deterministic local retrieval
   heuristics over the configured ZK root and records scored candidate notes.
 - `Filter Useful Reference Material` uses deterministic local filtering over
   retrieved candidates and records retained versus rejected counts.
+- `Choose Project Manually` uses deterministic fallback selection over
+  available project candidates and records that the resulting match came from
+  the manual-selection path.
+- `Propose New Project` uses deterministic local heuristics over the source
+  title and drafts a project artifact with one first next action and tags.
 - `Extract Actions` uses deterministic local heuristics over the source title
   and retained context and records draft next-action artifacts.
+- `Extract Waiting-For` uses deterministic local heuristics over the source
+  title and retained context and records draft waiting-for artifacts.
+- `Suggest Reference Notes` uses deterministic local heuristics over the source
+  title and retained context and records draft reference-note artifacts.
+- `Decide on Cloud Pass` uses deterministic local heuristics over the current
+  run state and records pending cloud-routing metadata.
+- `Sanitize for Cloud` uses deterministic local redaction over source and
+  working-context material and records a prepared sanitized package.
+- `Run Cloud Stage` uses the configured cloud adapter and records returned
+  cloud output for local review.
+- `Integrate into Source` uses deterministic local reintegration of current
+- `Select Approved Filing Actions` uses deterministic local review over the
+  current draft queue and approves one filing artifact at a time.
+- `File Approved Outputs` uses deterministic local target resolution and writes
+  approved project items into the configured My Projects file while creating
+  approved reference-note files in the configured ZK root.
+- Audit logging now records one run heading with nested stage headings,
+  persists input packages, raw outputs, normalized results, and current filing
+  target information, and surfaces append readiness in the control buffer.
 - Completed and failed stage runs both produce stage-history entries.
 - The `Inspect Source` action now executes instead of acting as a placeholder.
 - Retrying `Inspect Source` is represented in action state after the first run.
@@ -144,24 +201,72 @@ Delivered behavior:
   acting as a placeholder.
 - The `Filter Useful Reference Material` action now executes instead of acting
   as a placeholder.
+- The `Choose Project Manually` action now executes instead of acting as a
+  placeholder.
+- The `Propose New Project` action now executes instead of acting as a
+  placeholder.
 - The `Extract Actions` action now executes instead of acting as a placeholder.
+- The `Extract Waiting-For` action now executes instead of acting as a
+  placeholder.
+- The `Suggest Reference Notes` action now executes instead of acting as a
+  placeholder.
+- The `Decide on Cloud Pass` action now executes instead of acting as a
+  placeholder.
+- The `Sanitize for Cloud` action now executes instead of acting as a
+  placeholder.
+- The `Run Cloud Stage` action now executes instead of acting as a
+  placeholder.
+- The `Integrate into Source` action now executes instead of acting as a
+  placeholder.
+- The `Select Approved Filing Actions` action now executes instead of acting
+  as a placeholder.
+- The `File Approved Outputs` action now executes instead of acting as a
+  placeholder.
 - Match results update working context and branch the placeholder follow-up
   action set for matched versus no-match outcomes.
 - Discovery results update working context and unlock the filtering placeholder
   stage.
 - Filtering results update both `:filtered-context` and the retained-context
   artifact used by later stages.
+- Manual project-selection results update `:working-context :project-match`
+  with a matched project and a recorded manual selection method.
+- New-project proposal results update `:working-context :project-proposal` and
+  `:filing :draft-items` with a filing-ready project artifact.
 - Action extraction results update `:filing :draft-items` and the first real
   filing-preview render path.
+- Waiting-for extraction results also update `:filing :draft-items`, reusing
+  the same filing-preview render path with artifact-kind-specific keywords.
+- Reference-note suggestion results also update `:filing :draft-items`,
+  reusing the same filing-preview render path with artifact-kind-specific
+  keywords.
+- Cloud-routing decisions now update `:routing` and surface pending
+  sanitization state in working context.
+- Cloud sanitization results now update `:working-context
+  :cloud-sanitized-context` and mark routing sanitization status as prepared.
+- Cloud execution results now update `:working-context :cloud-returned-context`
+  and mark routing sanitization status as returned.
+- Integration results now update `:working-context :retained-context` and
+- preserve `:filing :draft-items` for downstream filing review.
+- Filing-selection results now move one artifact at a time from
+  `:filing :draft-items` into `:filing :approved-items` for deterministic
+  filing.
+- Deterministic filing results now update `:filing :target-locations` with the
+  exact targets that were written while clearing the current approved filing
+  slot.
+- Audit updates now refresh `:audit :run-record`, append `:audit
+  :stage-records`, and persist the current run subtree into the configured
+  audit log file.
 
 Known Milestone 2 limits:
 
-- The local adapter contract exists, but cloud execution is still unimplemented.
 - Prompt resolution is currently minimal and descriptor-based rather than backed
   by the prompt library.
 - Stage normalization is implemented for `Inspect Source`, `Match Project`,
   `Discover Relevant Reference Material`, and `Filter Useful Reference
-  Material`, and `Extract Actions`.
+  Material`, `Extract Actions`, `Extract Waiting-For`, `Suggest Reference
+  Notes`, `Decide on Cloud Pass`, `Sanitize for Cloud`, `Run Cloud Stage`,
+  `Integrate into Source`, `Select Approved Filing Actions`, and `File
+  Approved Outputs`.
 - Rich retry editing, repair passes, and timeout-specific behavior are not yet
   implemented beyond the current generic failure path.
 - Project matching is currently title-term heuristic matching only; it does not
@@ -173,9 +278,40 @@ Known Milestone 2 limits:
 - Reference-material filtering is currently score-threshold based with a simple
   fallback retain-one rule; it does not yet reason about action relevance,
   prior decisions, or constraint salience in the richer way the design allows.
+- Manual project selection is currently deterministic fallback selection only;
+  it does not yet support real user-entered project choice, disagreement notes,
+  or richer candidate presentation.
+- New-project proposal is currently simple deterministic drafting; it does not
+  yet support optional checklist selection, contact linking, metadata review,
+  or human correction flows beyond the current artifact path.
 - Action extraction is currently simple heuristic drafting; it does not yet
   validate pomodoro scope, direct executability, or action quality beyond
   producing deterministic candidate items.
+- Waiting-for extraction is currently simple heuristic drafting; it does not
+  yet validate dependency semantics, owner identity, or review urgency beyond
+  producing deterministic candidate items.
+- Reference-note suggestion is currently simple heuristic drafting; it does not
+  yet validate note title quality, capture-template fit, or Org-roam metadata
+  readiness beyond producing deterministic candidate items.
+- Cloud-routing decision is currently a simple deterministic state transition;
+  it does not yet support reviewed sanitization packages, provider-specific
+  policy checks, or reviewed send approval.
+- Cloud sanitization is currently simple deterministic redaction; it does not
+  yet support editable review packages or policy profiles.
+- Cloud execution is currently a deterministic adapter handoff; it does not yet
+  support provider-specific error handling, approval snapshots, or
+  model-specific result shaping.
+- Integration into source is currently simple deterministic reintegration; it
+  does not yet support selective approval, merge editing, or a dedicated
+  approve-send/reintegrate review split.
+- Deterministic filing is currently narrow and heuristic.
+  It does not yet support capture-template-backed note creation, target-change
+  conflict detection, one-approved-action-at-a-time filing review, or richer
+  filing target types such as project metadata updates.
+- Audit logging is currently rewrite-based per run subtree rather than append
+  only.
+  It does not yet support checkpoint-specific approval annotations, prompt
+  version metadata, or separate human-edit audit snapshots.
 
 * Milestone 2 learnings
 
@@ -193,6 +329,14 @@ Known Milestone 2 limits:
 - Deterministic local heuristics are a good fit for early project matching.
   They let the workflow unlock the next branch without depending on model
   access for a decision that should remain inspectable and cheap.
+- Reusing the filing surface for no-match project creation kept the branch
+  smaller and more coherent.
+  The project-proposal stage could land without inventing a separate review UI
+  because the project artifact already fit the same integrate/file path.
+- Reusing the existing project-match state shape for manual selection was also
+  the right move.
+  Downstream stages did not need to distinguish ordinary matched state from a
+  manual override except where retry visibility mattered.
 - Stage-dependent next actions should be derived from accepted workflow state
   rather than from stage order alone.
   `Match Project` changed the legal next-step set in a way that the action
@@ -206,8 +350,31 @@ Known Milestone 2 limits:
   It keeps the meaning of `:retained-context` stable for later artifact stages.
 - The filing-preview section became useful as soon as one stage wrote draft
   artifacts into filing state.
-  That suggests later artifact stages should reuse the same filing-surface
-  pattern instead of inventing separate ad hoc render locations.
+- Keeping cloud execution separate from reintegration was the right boundary.
+  It makes the cloud adapter easier to test and keeps local acceptance logic
+  out of the provider handoff path.
+- Approved artifacts need an explicit state transition rather than being
+  inferred from draft existence alone.
+  Making filing selection its own stage produced a cleaner review loop than
+  promoting approvals inside `Integrate into Source`.
+  That keeps reintegration focused on context state and lets filing review
+  operate one item at a time.
+- Deterministic filing works best when artifact kinds own their own target
+  resolver.
+  Project-child insertion and reference-note creation were simple to add once
+  the approved-item kind already carried enough information to choose a target.
+- Audit logging is easiest to keep correct when it is attached to the single
+  stage-finalization boundary.
+  Updating audit state anywhere else would have duplicated failure and cloud
+  path logic unnecessarily.
+- Routing state became easier to reason about once it lived in the same stage
+  contract and history machinery as artifact-producing stages.
+  That suggests sanitization should be added as the next explicit stage rather
+  than as implicit side effects on actions.
+- Treating sanitization as its own stage produced a cleaner boundary than
+  folding redaction into the cloud-routing decision.
+  It keeps the run state honest about what is merely requested versus what is
+  actually prepared for review.
 
 * Project constraints
 

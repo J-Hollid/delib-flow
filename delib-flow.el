@@ -14,6 +14,7 @@
 ;;; Code:
 
 (require 'org)
+(require 'pp)
 (require 'seq)
 (require 'subr-x)
 
@@ -52,6 +53,13 @@
 
 (defcustom delib-flow-local-stage-adapter #'delib-flow--default-local-stage-adapter
   "Function used to execute local stages.
+
+The function receives a stage descriptor and an assembled input package,
+and returns raw stage output."
+  :type 'function)
+
+(defcustom delib-flow-cloud-stage-adapter #'delib-flow--default-cloud-stage-adapter
+  "Function used to execute cloud stages.
 
 The function receives a stage descriptor and an assembled input package,
 and returns raw stage output."
@@ -118,12 +126,72 @@ and returns raw stage output."
      :prompt-id milestone2-filter-reference-material
      :executor delib-flow--execute-filter-reference-material
      :normalizer delib-flow--normalize-filter-reference-material-output)
+    (manual-project-match
+     :id manual-project-match
+     :label "Choose Project Manually"
+     :prompt-id milestone2-manual-project-match
+     :executor delib-flow--execute-manual-project-match
+     :normalizer delib-flow--normalize-manual-project-match-output)
+    (propose-new-project
+     :id propose-new-project
+     :label "Propose New Project"
+     :prompt-id milestone2-propose-new-project
+     :executor delib-flow--execute-propose-new-project
+     :normalizer delib-flow--normalize-propose-new-project-output)
     (extract-actions
      :id extract-actions
      :label "Extract Actions"
      :prompt-id milestone2-extract-actions
      :executor delib-flow--execute-extract-actions
-     :normalizer delib-flow--normalize-extract-actions-output))
+     :normalizer delib-flow--normalize-extract-actions-output)
+    (extract-waiting-for
+     :id extract-waiting-for
+     :label "Extract Waiting-For"
+     :prompt-id milestone2-extract-waiting-for
+     :executor delib-flow--execute-extract-waiting-for
+     :normalizer delib-flow--normalize-extract-waiting-for-output)
+    (suggest-reference-notes
+     :id suggest-reference-notes
+     :label "Suggest Reference Notes"
+     :prompt-id milestone2-suggest-reference-notes
+     :executor delib-flow--execute-suggest-reference-notes
+     :normalizer delib-flow--normalize-suggest-reference-notes-output)
+    (decide-cloud-pass
+     :id decide-cloud-pass
+     :label "Decide on Cloud Pass"
+     :prompt-id milestone2-decide-cloud-pass
+     :executor delib-flow--execute-decide-cloud-pass
+     :normalizer delib-flow--normalize-decide-cloud-pass-output)
+    (sanitize-for-cloud
+     :id sanitize-for-cloud
+     :label "Sanitize for Cloud"
+     :prompt-id milestone2-sanitize-for-cloud
+     :executor delib-flow--execute-sanitize-for-cloud
+     :normalizer delib-flow--normalize-sanitize-for-cloud-output)
+    (run-cloud-stage
+     :id run-cloud-stage
+     :label "Run Cloud Stage"
+     :prompt-id milestone2-run-cloud-stage
+     :executor delib-flow--execute-run-cloud-stage
+     :normalizer delib-flow--normalize-run-cloud-stage-output)
+    (integrate-into-source
+     :id integrate-into-source
+     :label "Integrate into Source"
+     :prompt-id milestone2-integrate-into-source
+     :executor delib-flow--execute-integrate-into-source
+     :normalizer delib-flow--normalize-integrate-into-source-output)
+    (select-approved-filing-actions
+     :id select-approved-filing-actions
+     :label "Select Approved Filing Actions"
+     :prompt-id milestone2-select-approved-filing-actions
+     :executor delib-flow--execute-select-approved-filing-actions
+     :normalizer delib-flow--normalize-select-approved-filing-actions-output)
+    (file-approved-outputs
+     :id file-approved-outputs
+     :label "File Approved Outputs"
+     :prompt-id milestone2-file-approved-outputs
+     :executor delib-flow--execute-file-approved-outputs
+     :normalizer delib-flow--normalize-file-approved-outputs-output))
   "Stage descriptors keyed by stage identifier.")
 
 (defconst delib-flow--stage-decision-alist
@@ -132,7 +200,27 @@ and returns raw stage output."
      . "Review retrieved reference candidates and choose next action.")
     (filter-reference-material
      . "Review retained context and choose next action.")
-    (extract-actions . "Review drafted actions and choose next action."))
+    (manual-project-match
+     . "Review manual project selection and choose next action.")
+    (propose-new-project
+     . "Review proposed project checklist and choose next action.")
+    (extract-actions . "Review drafted actions and choose next action.")
+    (extract-waiting-for
+     . "Review drafted waiting-for items and choose next action.")
+    (suggest-reference-notes
+     . "Review drafted reference notes and choose next action.")
+    (decide-cloud-pass
+     . "Review cloud-routing decision and choose next action.")
+    (sanitize-for-cloud
+     . "Review sanitized cloud package and choose next action.")
+    (run-cloud-stage
+     . "Review cloud-returned result and choose next action.")
+    (integrate-into-source
+     . "Review integrated local result and choose next action.")
+    (select-approved-filing-actions
+     . "Review selected filing action and choose next action.")
+    (file-approved-outputs
+     . "Review filed outputs and choose next action."))
   "Stage-specific current-decision text keyed by stage identifier.")
 
 (defconst delib-flow--stage-apply-function-alist
@@ -140,7 +228,18 @@ and returns raw stage output."
     (match-project . delib-flow--apply-match-project-entry)
     (discover-reference-material . delib-flow--apply-discovery-entry)
     (filter-reference-material . delib-flow--apply-filter-entry)
-    (extract-actions . delib-flow--apply-extract-actions-entry))
+    (manual-project-match . delib-flow--apply-match-project-entry)
+    (propose-new-project . delib-flow--apply-propose-new-project-entry)
+    (extract-actions . delib-flow--apply-extract-actions-entry)
+    (extract-waiting-for . delib-flow--apply-extract-waiting-for-entry)
+    (suggest-reference-notes . delib-flow--apply-suggest-reference-notes-entry)
+    (decide-cloud-pass . delib-flow--apply-decide-cloud-pass-entry)
+    (sanitize-for-cloud . delib-flow--apply-sanitize-for-cloud-entry)
+    (run-cloud-stage . delib-flow--apply-run-cloud-stage-entry)
+    (integrate-into-source . delib-flow--apply-integrate-into-source-entry)
+    (select-approved-filing-actions
+     . delib-flow--apply-select-approved-filing-actions-entry)
+    (file-approved-outputs . delib-flow--apply-file-approved-outputs-entry))
   "Stage-specific apply functions keyed by stage identifier.")
 
 (defun delib-flow--org-heading-at-point-p ()
@@ -242,6 +341,40 @@ PRIORITY controls display order."
         :active t
         :aborted nil))
 
+(defun delib-flow--time-string (time)
+  "Return stable timestamp string for TIME."
+  (format-time-string "%Y-%m-%d %H:%M:%S%z" time))
+
+(defun delib-flow--make-run-id (time)
+  "Return stable run identifier from TIME."
+  (format-time-string "delib-flow-%Y%m%dT%H%M%S%N" time))
+
+(defun delib-flow--audit-run-status (run)
+  "Return normalized audit run status for RUN."
+  (let ((session (delib-flow--run-session run)))
+    (cond
+     ((plist-get session :aborted) 'aborted)
+     ((delib-flow--stage-executed-p run 'file-approved-outputs) 'completed)
+     ((plist-get (delib-flow--run-stage-history run) :entries) 'partial)
+     (t 'active))))
+
+(defun delib-flow--initial-run-record (source-snapshot session)
+  "Return initial audit run record from SOURCE-SNAPSHOT and SESSION."
+  (let ((started-at (plist-get session :started-at)))
+    (list :run-id (delib-flow--make-run-id started-at)
+          :source-title (plist-get source-snapshot :title)
+          :source-file (plist-get source-snapshot :file)
+          :started-at started-at
+          :ended-at nil
+          :run-status 'active)))
+
+(defun delib-flow--initial-audit-state (source-snapshot session)
+  "Return initial audit state from SOURCE-SNAPSHOT and SESSION."
+  (list :run-record (delib-flow--initial-run-record source-snapshot session)
+        :stage-records nil
+        :pending-checkpoints nil
+        :last-appended-checkpoint nil))
+
 (defun delib-flow--initial-ui-state ()
   "Return the initial UI-state plist for a new run."
   (list :section-anchors (delib-flow--initial-section-anchors)
@@ -274,6 +407,28 @@ PRIORITY controls display order."
   "Return the stage-history plist from RUN."
   (plist-get run :stage-history))
 
+(defun delib-flow--run-routing (run)
+  "Return the routing plist from RUN."
+  (plist-get run :routing))
+
+(defun delib-flow--run-cloud-stage-p (stage-id)
+  "Return non-nil when STAGE-ID should execute through the cloud adapter."
+  (eq stage-id 'run-cloud-stage))
+
+(defun delib-flow--integration-ready-p (run)
+  "Return non-nil when RUN has material ready for integration."
+  (or (plist-get (delib-flow--run-working-context run) :cloud-returned-context)
+      (plist-get (plist-get run :filing) :draft-items)
+      (delib-flow--stage-executed-p run 'integrate-into-source)))
+
+(defun delib-flow--approved-items-ready-p (run)
+  "Return non-nil when RUN has approved items ready to file."
+  (plist-get (plist-get run :filing) :approved-items))
+
+(defun delib-flow--draft-items-ready-p (run)
+  "Return non-nil when RUN has draft items ready for filing review."
+  (plist-get (plist-get run :filing) :draft-items))
+
 (defun delib-flow--latest-stage-id (run)
   "Return the latest executed stage identifier from RUN."
   (plist-get (delib-flow--run-stage-history run) :latest-stage))
@@ -302,7 +457,9 @@ PRIORITY controls display order."
   (list :stage-id stage-id
         :prompt-id (delib-flow--stage-prompt-id stage-id)
         :source (delib-flow--run-source run)
-        :working-context (delib-flow--run-working-context run)))
+        :working-context (delib-flow--run-working-context run)
+        :filing (plist-get run :filing)
+        :routing (delib-flow--run-routing run)))
 
 (defun delib-flow--string-words (text)
   "Return normalized word list for TEXT."
@@ -384,6 +541,33 @@ PRIORITY controls display order."
             :best-project best
             :candidates top
             :reason "A single highest-scoring title match was found.")))))
+
+(defun delib-flow--manual-project-match-candidates (package)
+  "Return fallback candidates for manual project selection from PACKAGE."
+  (let* ((working (plist-get package :working-context))
+         (project-match (plist-get working :project-match))
+         (candidates (plist-get project-match :candidates)))
+    (or candidates
+        (sort (delib-flow--project-candidates)
+              (lambda (left right)
+                (string-lessp (plist-get left :title)
+                              (plist-get right :title)))))))
+
+(defun delib-flow--manual-project-choice (package)
+  "Return chosen fallback project candidate from PACKAGE."
+  (car (delib-flow--manual-project-match-candidates package)))
+
+(defun delib-flow--manual-project-match-result (package)
+  "Return raw manual-project-match result for PACKAGE."
+  (let* ((choice (delib-flow--manual-project-choice package))
+         (candidates (delib-flow--manual-project-match-candidates package)))
+    (unless choice
+      (error "No project candidates are available for manual selection"))
+    (list :match-status 'matched
+          :selection-method 'manual
+          :best-project choice
+          :candidates candidates
+          :reason "Manual fallback selected a concrete project candidate.")))
 
 (defun delib-flow--source-search-title (package)
   "Return source title for retrieval from PACKAGE."
@@ -508,6 +692,28 @@ PRIORITY controls display order."
         :text text
         :source source))
 
+(defun delib-flow--make-draft-waiting-for (text source)
+  "Return draft waiting-for object for TEXT and SOURCE."
+  (list :kind 'waiting-for
+        :text text
+        :source source))
+
+(defun delib-flow--make-draft-reference-note (text source note-type)
+  "Return draft reference-note object for TEXT, SOURCE, and NOTE-TYPE."
+  (list :kind 'reference-note
+        :text text
+        :source source
+        :note-type note-type))
+
+(defun delib-flow--make-draft-project (title state first-item tags)
+  "Return draft project object for TITLE with STATE, FIRST-ITEM, and TAGS."
+  (list :kind 'project
+        :title title
+        :state state
+        :first-item first-item
+        :tags tags
+        :text title))
+
 (defun delib-flow--source-title-action (package)
   "Return a draft action derived from PACKAGE source title."
   (delib-flow--make-draft-action
@@ -527,6 +733,46 @@ PRIORITY controls display order."
   (mapcar #'delib-flow--retained-candidate-action
           (delib-flow--retained-candidates package)))
 
+(defun delib-flow--source-title-waiting-for (package)
+  "Return a waiting-for item derived from PACKAGE source title."
+  (delib-flow--make-draft-waiting-for
+   (format "Waiting for a concrete response about %s"
+           (delib-flow--source-title package))
+   'source))
+
+(defun delib-flow--retained-candidate-waiting-for (candidate)
+  "Return a waiting-for item derived from retained CANDIDATE."
+  (delib-flow--make-draft-waiting-for
+   (format "Waiting for confirmation from %s"
+           (plist-get candidate :title))
+   'retained-context))
+
+(defun delib-flow--retained-candidate-waiting-fors (package)
+  "Return retained-candidate waiting-for items for PACKAGE."
+  (mapcar #'delib-flow--retained-candidate-waiting-for
+          (delib-flow--retained-candidates package)))
+
+(defun delib-flow--source-title-reference-note (package)
+  "Return a general reference note derived from PACKAGE source title."
+  (delib-flow--make-draft-reference-note
+   (format "Create general PKM note for %s"
+           (delib-flow--source-title package))
+   'source
+   'general-pkm))
+
+(defun delib-flow--retained-candidate-reference-note (candidate)
+  "Return a support-note item derived from retained CANDIDATE."
+  (delib-flow--make-draft-reference-note
+   (format "Create project support note from %s"
+           (plist-get candidate :title))
+   'retained-context
+   'project-support))
+
+(defun delib-flow--retained-candidate-reference-notes (package)
+  "Return retained-candidate reference-note items for PACKAGE."
+  (mapcar #'delib-flow--retained-candidate-reference-note
+          (delib-flow--retained-candidates package)))
+
 (defun delib-flow--extract-actions-result (package)
   "Return raw action-extraction result for PACKAGE."
   (let* ((source-action (delib-flow--source-title-action package))
@@ -535,8 +781,109 @@ PRIORITY controls display order."
     (list :candidate-count (length actions)
           :actions actions)))
 
+(defun delib-flow--extract-waiting-for-result (package)
+  "Return raw waiting-for extraction result for PACKAGE."
+  (let* ((source-item (delib-flow--source-title-waiting-for package))
+         (retained-items (delib-flow--retained-candidate-waiting-fors package))
+         (items (cons source-item retained-items)))
+    (list :candidate-count (length items)
+          :waiting-fors items)))
+
+(defun delib-flow--suggest-reference-notes-result (package)
+  "Return raw reference-note suggestion result for PACKAGE."
+  (let* ((source-item (delib-flow--source-title-reference-note package))
+         (retained-items
+          (delib-flow--retained-candidate-reference-notes package))
+         (items (cons source-item retained-items)))
+    (list :candidate-count (length items)
+          :reference-notes items)))
+
+(defun delib-flow--project-proposal-tags (package)
+  "Return deterministic project tags derived from PACKAGE."
+  (seq-take (delib-flow--string-words (delib-flow--source-title package)) 3))
+
+(defun delib-flow--project-proposal-first-item (package)
+  "Return deterministic first project item derived from PACKAGE."
+  (delib-flow--make-draft-action
+   (format "Clarify the first concrete step for %s"
+           (delib-flow--source-title package))
+   'project-proposal))
+
+(defun delib-flow--proposed-project-item (package)
+  "Return deterministic proposed project artifact derived from PACKAGE."
+  (delib-flow--make-draft-project
+   (delib-flow--source-title package)
+   'active
+   (delib-flow--project-proposal-first-item package)
+   (delib-flow--project-proposal-tags package)))
+
+(defun delib-flow--propose-new-project-result (package)
+  "Return raw new-project proposal result for PACKAGE."
+  (let* ((project-item (delib-flow--proposed-project-item package))
+         (first-item (plist-get project-item :first-item)))
+    (list :project project-item
+          :project-title (plist-get project-item :title)
+          :project-state (plist-get project-item :state)
+          :tags (plist-get project-item :tags)
+          :first-item first-item
+          :reason "No project matched, so a new project checklist was prepared.")))
+
+(defun delib-flow--cloud-model-choice (package)
+  "Return selected cloud model for PACKAGE."
+  (or (plist-get (plist-get package :routing) :default-cloud-model)
+      "cloud-model-unconfigured"))
+
+(defun delib-flow--decide-cloud-pass-result (package)
+  "Return raw cloud-routing decision result for PACKAGE."
+  (list :route 'cloud
+        :selected-model (delib-flow--cloud-model-choice package)
+        :cloud-switch-pending t
+        :sanitization-status 'required
+        :reason "Cloud routing is pending sanitized package preparation."))
+
+(defun delib-flow--sanitize-cloud-text (text)
+  "Return deterministically sanitized TEXT."
+  (let ((sanitized (or text "")))
+    (setq sanitized
+          (replace-regexp-in-string
+           "[[:alnum:]._%+-]+@[[:alnum:].-]+\\.[[:alpha:]]+" "[redacted-email]"
+           sanitized))
+    (setq sanitized
+          (replace-regexp-in-string
+           "https?://[^][ \"\n\t)]+" "[redacted-url]" sanitized))
+    (let ((case-fold-search nil))
+      (replace-regexp-in-string
+       "[A-Z][A-Za-z0-9_-]+" "[redacted-name]" sanitized t t))))
+
+(defun delib-flow--sanitize-cloud-lines (package)
+  "Return sanitized package lines for PACKAGE."
+  (let* ((source (plist-get package :source))
+         (working (plist-get package :working-context))
+         (source-title (plist-get source :title))
+         (source-content (plist-get source :content))
+         (retained-context (plist-get working :retained-context)))
+    (list
+     (format "Sanitized source title: %s"
+             (delib-flow--sanitize-cloud-text source-title))
+     (format "Sanitized source snapshot: %s"
+             (delib-flow--sanitize-cloud-text source-content))
+     (format "Sanitized retained context: %s"
+             (delib-flow--sanitize-cloud-text retained-context)))))
+
+(defun delib-flow--sanitize-for-cloud-result (package)
+  "Return raw cloud-sanitization result for PACKAGE."
+  (let ((sanitized-lines (delib-flow--sanitize-cloud-lines package)))
+    (list :sanitized-package (mapconcat #'identity sanitized-lines "\n")
+          :sanitization-status 'prepared
+          :cloud-switch-pending t
+          :reason "Sanitized package is ready for review before cloud send.")))
+
 (defun delib-flow--default-local-stage-adapter (descriptor package)
   "Execute DESCRIPTOR locally with PACKAGE and return raw output."
+  (funcall (plist-get descriptor :executor) package))
+
+(defun delib-flow--default-cloud-stage-adapter (descriptor package)
+  "Execute DESCRIPTOR through the default cloud adapter with PACKAGE."
   (funcall (plist-get descriptor :executor) package))
 
 (defun delib-flow--normalize-stage-output (stage-id raw-output)
@@ -578,9 +925,181 @@ PRIORITY controls display order."
           (plist-put
            (plist-put
             (plist-put history :entries entries)
-            :latest-stage (plist-get entry :stage-id))
+           :latest-stage (plist-get entry :stage-id))
            :latest-status (plist-get entry :status))))
     (plist-put run :stage-history updated-history)))
+
+(defun delib-flow--audit-provider (stage-id)
+  "Return audit provider label for STAGE-ID."
+  (if (delib-flow--run-cloud-stage-p stage-id)
+      "cloud"
+    "local"))
+
+(defun delib-flow--audit-model-name (entry)
+  "Return audit model name from stage ENTRY."
+  (or (plist-get (plist-get entry :raw-output) :selected-model)
+      "model-unrecorded"))
+
+(defun delib-flow--make-audit-stage-record (entry)
+  "Return audit stage record derived from stage ENTRY."
+  (list :stage-id (plist-get entry :stage-id)
+        :label (plist-get entry :label)
+        :status (plist-get entry :status)
+        :review-state (plist-get entry :review-state)
+        :prompt-id (plist-get entry :prompt-id)
+        :provider (delib-flow--audit-provider (plist-get entry :stage-id))
+        :model-name (delib-flow--audit-model-name entry)
+        :started-at (plist-get entry :started-at)
+        :ended-at (plist-get entry :ended-at)
+        :input-package (plist-get entry :input-package)
+        :raw-output (plist-get entry :raw-output)
+        :normalized-output (plist-get entry :normalized-output)))
+
+(defun delib-flow--audit-log-configured-p ()
+  "Return non-nil when audit logging is configured."
+  (and delib-flow-audit-log-file
+       (not (string-empty-p delib-flow-audit-log-file))))
+
+(defun delib-flow--audit-properties-text (pairs)
+  "Return Org property drawer text for PAIRS."
+  (concat
+   ":PROPERTIES:\n"
+   (mapconcat
+    (lambda (pair)
+      (format ":%s: %s"
+              (car pair)
+              (or (cdr pair) "")))
+    pairs
+    "\n")
+   "\n:END:\n"))
+
+(defun delib-flow--audit-data-block (heading data)
+  "Return Org block for HEADING and DATA."
+  (format "*** %s\n#+begin_example\n%s#+end_example\n"
+          heading
+          (pp-to-string data)))
+
+(defun delib-flow--audit-stage-text (record)
+  "Return Org subtree text for audit stage RECORD."
+  (concat
+   (format "** %s\n" (plist-get record :label))
+   (delib-flow--audit-properties-text
+    `(("STAGE_ID" . ,(symbol-name (plist-get record :stage-id)))
+      ("STATUS" . ,(symbol-name (plist-get record :status)))
+      ("REVIEW_STATE" . ,(symbol-name (plist-get record :review-state)))
+      ("PROMPT_ID" . ,(symbol-name (plist-get record :prompt-id)))
+      ("MODEL_PROVIDER" . ,(plist-get record :provider))
+      ("MODEL_NAME" . ,(plist-get record :model-name))
+      ("STARTED_AT" . ,(delib-flow--time-string
+                        (plist-get record :started-at)))
+      ("ENDED_AT" . ,(delib-flow--time-string
+                      (plist-get record :ended-at)))))
+   (delib-flow--audit-data-block "Normalized result"
+                                 (plist-get record :normalized-output))
+   (delib-flow--audit-data-block "Input package"
+                                 (plist-get record :input-package))
+   (delib-flow--audit-data-block "Raw output"
+                                 (plist-get record :raw-output))))
+
+(defun delib-flow--audit-run-heading (record)
+  "Return Org heading text for audit run RECORD."
+  (format "* %s delib-flow run\n"
+          (delib-flow--time-string (plist-get record :started-at))))
+
+(defun delib-flow--audit-run-text (audit)
+  "Return Org subtree text for AUDIT state."
+  (let ((run-record (plist-get audit :run-record))
+        (stage-records (plist-get audit :stage-records)))
+    (concat
+     (delib-flow--audit-run-heading run-record)
+     (delib-flow--audit-properties-text
+      `(("RUN_ID" . ,(plist-get run-record :run-id))
+        ("RUN_STATUS" . ,(symbol-name (plist-get run-record :run-status)))
+        ("SOURCE_TITLE" . ,(plist-get run-record :source-title))
+        ("SOURCE_FILE" . ,(or (plist-get run-record :source-file) ""))
+        ("STARTED_AT" . ,(delib-flow--time-string
+                          (plist-get run-record :started-at)))
+        ("ENDED_AT" . ,(if-let ((ended-at (plist-get run-record :ended-at)))
+                           (delib-flow--time-string ended-at)
+                         ""))))
+     (mapconcat #'delib-flow--audit-stage-text stage-records "\n"))))
+
+(defun delib-flow--audit-run-bounds (run-id)
+  "Return bounds of audit run subtree matching RUN-ID in current buffer."
+  (goto-char (point-min))
+  (when (re-search-forward (format "^:RUN_ID: %s$" (regexp-quote run-id)) nil t)
+    (save-excursion
+      (org-back-to-heading t)
+      (let ((begin (point))
+            (end (progn (org-end-of-subtree t t) (point))))
+        (cons begin end)))))
+
+(defun delib-flow--write-audit-log-file (audit)
+  "Persist AUDIT state into `delib-flow-audit-log-file'."
+  (let ((target delib-flow-audit-log-file)
+        (run-id (plist-get (plist-get audit :run-record) :run-id)))
+    (with-temp-buffer
+      (when (file-exists-p target)
+        (insert-file-contents target))
+      (org-mode)
+      (when-let ((bounds (delib-flow--audit-run-bounds run-id)))
+        (delete-region (car bounds) (cdr bounds)))
+      (goto-char (point-max))
+      (unless (bolp)
+        (insert "\n"))
+      (insert (delib-flow--audit-run-text audit))
+      (write-region (point-min) (point-max) target nil 'silent))))
+
+(defun delib-flow--updated-run-record (run)
+  "Return refreshed audit run record from RUN."
+  (let* ((audit (plist-get run :audit))
+         (run-record (plist-get audit :run-record))
+         (session (delib-flow--run-session run)))
+    (plist-put
+     (plist-put run-record :run-status (delib-flow--audit-run-status run))
+     :ended-at (plist-get session :ended-at))))
+
+(defun delib-flow--append-audit-record (run entry)
+  "Return RUN with audit state updated from stage ENTRY."
+  (let* ((audit (plist-get run :audit))
+         (stage-record (delib-flow--make-audit-stage-record entry))
+         (updated-audit
+          (plist-put
+           (plist-put
+            (plist-put audit :run-record (delib-flow--updated-run-record run))
+            :stage-records
+            (append (plist-get audit :stage-records) (list stage-record)))
+           :pending-checkpoints
+           (list (plist-get entry :stage-id)))))
+    (plist-put run :audit updated-audit)))
+
+(defun delib-flow--persist-audit-state (run checkpoint)
+  "Return RUN after persisting audit CHECKPOINT when configured."
+  (let ((audit (plist-get run :audit)))
+    (if (delib-flow--audit-log-configured-p)
+        (progn
+          (delib-flow--write-audit-log-file audit)
+          (plist-put
+           run :audit
+           (plist-put
+            (plist-put audit :pending-checkpoints nil)
+            :last-appended-checkpoint checkpoint)))
+      run)))
+
+(defun delib-flow--finalize-audit-update (run entry)
+  "Return RUN after audit updates derived from stage ENTRY."
+  (delib-flow--persist-audit-state
+   (delib-flow--append-audit-record run entry)
+   (plist-get entry :stage-id)))
+
+(defun delib-flow--refresh-run-audit (run checkpoint)
+  "Return RUN with refreshed run audit state at CHECKPOINT."
+  (let* ((audit (plist-get run :audit))
+         (updated-run
+          (plist-put
+           run :audit
+           (plist-put audit :run-record (delib-flow--updated-run-record run)))))
+    (delib-flow--persist-audit-state updated-run checkpoint)))
 
 (defun delib-flow--editable-block (run block-id)
   "Return editable block BLOCK-ID from RUN."
@@ -836,6 +1355,20 @@ PRIORITY controls display order."
      #'delib-flow-action-filter-reference-material
      35)))
 
+(defun delib-flow--manual-project-match-action (run)
+  "Return the manual-project-match action for RUN."
+  (when (or (memq (delib-flow--match-status run) '(ambiguous no-match))
+            (delib-flow--stage-executed-p run 'manual-project-match))
+    (delib-flow--make-action
+     'manual-project-match
+     (if (delib-flow--stage-executed-p run 'manual-project-match)
+         "Retry Choose Project Manually"
+       "Choose Project Manually")
+     'available
+     nil
+     #'delib-flow-action-manual-project-match
+     40)))
+
 (defun delib-flow--extract-actions-action (run)
   "Return the extract-actions action for RUN."
   (when (eq (delib-flow--match-status run) 'matched)
@@ -848,6 +1381,123 @@ PRIORITY controls display order."
      nil
      #'delib-flow-action-extract-actions
      40)))
+
+(defun delib-flow--extract-waiting-for-action (run)
+  "Return the extract-waiting-for action for RUN."
+  (when (eq (delib-flow--match-status run) 'matched)
+    (delib-flow--make-action
+     'extract-waiting-for
+     (if (delib-flow--stage-executed-p run 'extract-waiting-for)
+         "Retry Extract Waiting-For"
+       "Extract Waiting-For")
+     'available
+     nil
+     #'delib-flow-action-extract-waiting-for
+     50)))
+
+(defun delib-flow--suggest-reference-notes-action (run)
+  "Return the suggest-reference-notes action for RUN."
+  (when (eq (delib-flow--match-status run) 'matched)
+    (delib-flow--make-action
+     'suggest-reference-notes
+     (if (delib-flow--stage-executed-p run 'suggest-reference-notes)
+         "Retry Suggest Reference Notes"
+       "Suggest Reference Notes")
+     'available
+     nil
+     #'delib-flow-action-suggest-reference-notes
+     60)))
+
+(defun delib-flow--propose-new-project-action (run)
+  "Return the propose-new-project action for RUN."
+  (when (eq (delib-flow--match-status run) 'no-match)
+    (delib-flow--make-action
+     'propose-new-project
+     (if (delib-flow--stage-executed-p run 'propose-new-project)
+         "Retry Propose New Project"
+       "Propose New Project")
+     'available
+     nil
+     #'delib-flow-action-propose-new-project
+     50)))
+
+(defun delib-flow--decide-cloud-pass-action (run)
+  "Return the decide-cloud-pass action for RUN."
+  (when (delib-flow--stage-executed-p run 'inspect-source)
+    (delib-flow--make-action
+     'decide-cloud-pass
+     (if (delib-flow--stage-executed-p run 'decide-cloud-pass)
+         "Retry Decide on Cloud Pass"
+       "Decide on Cloud Pass")
+     'available
+     nil
+     #'delib-flow-action-decide-cloud-pass
+     80)))
+
+(defun delib-flow--sanitize-for-cloud-action (run)
+  "Return the sanitize-for-cloud action for RUN."
+  (when (plist-get (delib-flow--run-routing run) :cloud-switch-pending)
+    (delib-flow--make-action
+     'sanitize-for-cloud
+     (if (delib-flow--stage-executed-p run 'sanitize-for-cloud)
+         "Retry Sanitize for Cloud"
+       "Sanitize for Cloud")
+     'available
+     nil
+     #'delib-flow-action-sanitize-for-cloud
+     85)))
+
+(defun delib-flow--run-cloud-stage-action (run)
+  "Return the run-cloud-stage action for RUN."
+  (when (or (eq (plist-get (delib-flow--run-routing run) :sanitization-status)
+                'prepared)
+            (delib-flow--stage-executed-p run 'run-cloud-stage))
+    (delib-flow--make-action
+     'run-cloud-stage
+     (if (delib-flow--stage-executed-p run 'run-cloud-stage)
+         "Retry Run Cloud Stage"
+       "Run Cloud Stage")
+     'available
+     nil
+     #'delib-flow-action-run-cloud-stage
+     86)))
+
+(defun delib-flow--integrate-into-source-action (run)
+  "Return the integrate-into-source action for RUN."
+  (when (delib-flow--integration-ready-p run)
+    (delib-flow--make-action
+     'integrate-into-source
+     (if (delib-flow--stage-executed-p run 'integrate-into-source)
+         "Retry Integrate into Source"
+       "Integrate into Source")
+     'available
+     nil
+     #'delib-flow-action-integrate-into-source
+     87)))
+
+(defun delib-flow--select-approved-filing-actions-action (run)
+  "Return the select-approved-filing-actions action for RUN."
+  (when (delib-flow--draft-items-ready-p run)
+    (delib-flow--make-action
+     'select-approved-filing-actions
+     (if (delib-flow--stage-executed-p run 'select-approved-filing-actions)
+         "Approve Next Filing Action"
+       "Select Approved Filing Actions")
+     'available
+     nil
+     #'delib-flow-action-select-approved-filing-actions
+     88)))
+
+(defun delib-flow--file-approved-outputs-action (run)
+  "Return the file-approved-outputs action for RUN."
+  (when (delib-flow--approved-items-ready-p run)
+    (delib-flow--make-action
+     'file-approved-outputs
+     "File Approved Outputs"
+     'available
+     nil
+     #'delib-flow-action-file-approved-outputs
+     89)))
 
 (defun delib-flow--placeholder-stage-action (id label priority)
   "Return a placeholder stage action for ID with LABEL and PRIORITY."
@@ -863,14 +1513,16 @@ PRIORITY controls display order."
   "Return next legal actions after inspect-source has executed in RUN."
   (seq-remove
    #'null
-   (list
-    (delib-flow--match-project-action run)
-    (delib-flow--discover-reference-material-action run)
-    (delib-flow--filter-reference-material-action run)
-    (delib-flow--placeholder-stage-action
-     'decide-cloud-pass
-     "Decide on Cloud Pass"
-     40))))
+    (list
+     (delib-flow--match-project-action run)
+     (delib-flow--discover-reference-material-action run)
+     (delib-flow--filter-reference-material-action run)
+     (delib-flow--decide-cloud-pass-action run)
+     (delib-flow--sanitize-for-cloud-action run)
+     (delib-flow--run-cloud-stage-action run)
+     (delib-flow--integrate-into-source-action run)
+     (delib-flow--select-approved-filing-actions-action run)
+     (delib-flow--file-approved-outputs-action run))))
 
 (defun delib-flow--match-status (run)
   "Return the stored project match status from RUN."
@@ -883,35 +1535,26 @@ PRIORITY controls display order."
     (seq-remove
      #'null
      (append
-      (list
+     (list
        (delib-flow--match-project-action run)
        (delib-flow--discover-reference-material-action run))
      (if (eq status 'matched)
           (list
+           (delib-flow--manual-project-match-action run)
            (delib-flow--extract-actions-action run)
-           (delib-flow--placeholder-stage-action
-            'extract-waiting-for
-            "Extract Waiting-For"
-            50)
-           (delib-flow--placeholder-stage-action
-            'suggest-reference-notes
-            "Suggest Reference Notes"
-            60))
+           (delib-flow--extract-waiting-for-action run)
+           (delib-flow--suggest-reference-notes-action run))
         (list
-         (delib-flow--placeholder-stage-action
-          'manual-project-match
-          "Choose Project Manually"
-          40)
-         (delib-flow--placeholder-stage-action
-          'propose-new-project
-          "Propose New Project"
-          50)))
+         (delib-flow--manual-project-match-action run)
+         (delib-flow--propose-new-project-action run)))
        (list
        (delib-flow--filter-reference-material-action run)
-       (delib-flow--placeholder-stage-action
-        'decide-cloud-pass
-        "Decide on Cloud Pass"
-        80))))))
+       (delib-flow--decide-cloud-pass-action run)
+       (delib-flow--sanitize-for-cloud-action run)
+       (delib-flow--run-cloud-stage-action run)
+       (delib-flow--integrate-into-source-action run)
+       (delib-flow--select-approved-filing-actions-action run)
+       (delib-flow--file-approved-outputs-action run))))))
 
 (defun delib-flow--base-actions (run)
   "Return the base action list for RUN."
@@ -1055,6 +1698,54 @@ PRIORITY controls display order."
                 (plist-get filtered :rejected-count))
       "No filtered context is available yet.")))
 
+(defun delib-flow--cloud-context-status (run)
+  "Return cloud-context display status from RUN."
+  (let* ((working (delib-flow--run-working-context run))
+         (routing (delib-flow--run-routing run)))
+    (cond
+     ((plist-get working :cloud-sanitized-context) "available")
+     ((plist-get routing :cloud-switch-pending) "pending preparation")
+     (t "not available"))))
+
+(defun delib-flow--selected-cloud-model (routing)
+  "Return selected cloud model from ROUTING."
+  (or (plist-get routing :selected-cloud-model)
+      "cloud-model-unconfigured"))
+
+(defun delib-flow--cloud-sanitization-status (routing)
+  "Return cloud sanitization status from ROUTING."
+  (or (plist-get routing :sanitization-status)
+      'required))
+
+(defun delib-flow--pending-cloud-context-text (routing)
+  "Return pending cloud-context text from ROUTING."
+  (format "Cloud pass selected. Model: %s. Sanitization status: %s."
+          (delib-flow--selected-cloud-model routing)
+          (delib-flow--cloud-sanitization-status routing)))
+
+(defun delib-flow--cloud-context-text (run)
+  "Return cloud-context display text from RUN."
+  (let* ((working (delib-flow--run-working-context run))
+         (routing (delib-flow--run-routing run))
+         (cloud-context (plist-get working :cloud-sanitized-context)))
+    (cond
+     (cloud-context cloud-context)
+     ((plist-get routing :cloud-switch-pending)
+     (delib-flow--pending-cloud-context-text routing))
+     (t
+      "No cloud-sanitized context is available yet."))))
+
+(defun delib-flow--cloud-returned-context-status (working)
+  "Return cloud-returned context status from WORKING."
+  (if (plist-get working :cloud-returned-context)
+      "available"
+    "not available"))
+
+(defun delib-flow--cloud-returned-context-text (working)
+  "Return cloud-returned context text from WORKING."
+  (or (plist-get working :cloud-returned-context)
+      "No cloud-returned context is available yet."))
+
 (defun delib-flow--render-working-context-section (_run)
   "Return Org text for the Working context section."
   (let* ((working (delib-flow--run-working-context _run))
@@ -1068,18 +1759,26 @@ PRIORITY controls display order."
          (retrieved-text (delib-flow--retrieved-context-text working))
          (filtered-status (delib-flow--filtered-context-status working))
          (filtered-text (delib-flow--filtered-context-text working))
+         (cloud-status (delib-flow--cloud-context-status _run))
+         (cloud-text (delib-flow--cloud-context-text _run))
+         (returned-status (delib-flow--cloud-returned-context-status working))
+         (returned-text (delib-flow--cloud-returned-context-text working))
          (retained-text (or retained-context
                             "No retained context is available yet.")))
     (format
-     "** Context status\nInspect output: %s.\nProject match: %s.\nRetrieved context: %s.\nFiltered context: %s.\nCloud-sanitized context: not available.\n\n** Project context\n%s\n\n** Retrieved candidates\n%s\n\n** Filtered context\n%s\n\n** Retained context\n%s\n\n** Editable working slice\n%s"
+     "** Context status\nInspect output: %s.\nProject match: %s.\nRetrieved context: %s.\nFiltered context: %s.\nCloud-sanitized context: %s.\nCloud-returned context: %s.\n\n** Project context\n%s\n\n** Retrieved candidates\n%s\n\n** Filtered context\n%s\n\n** Retained context\n%s\n\n** Cloud-sanitized context\n%s\n\n** Cloud-returned context\n%s\n\n** Editable working slice\n%s"
      inspect-status
      project-status
      retrieved-status
      filtered-status
+     cloud-status
+     returned-status
      project-text
      retrieved-text
      filtered-text
      retained-text
+     cloud-text
+     returned-text
      (delib-flow--render-editable-block _run 'context-main))))
 
 (defun delib-flow--render-stage-entry (entry)
@@ -1117,7 +1816,17 @@ PRIORITY controls display order."
 
 (defun delib-flow--draft-item-preview-line (item)
   "Return preview line for draft ITEM."
-  (format "- TODO %s" (plist-get item :text)))
+  (format "- %s %s"
+          (delib-flow--draft-item-keyword item)
+          (plist-get item :text)))
+
+(defun delib-flow--draft-item-keyword (item)
+  "Return Org keyword prefix for draft ITEM."
+  (cond
+   ((eq (plist-get item :kind) 'project) "PROJECT")
+   ((eq (plist-get item :kind) 'waiting-for) "WAITING")
+   ((eq (plist-get item :kind) 'reference-note) "NOTE")
+   (t "TODO")))
 
 (defun delib-flow--draft-item-preview-text (items)
   "Return preview text for draft action ITEMS."
@@ -1136,15 +1845,73 @@ PRIORITY controls display order."
         (delib-flow--draft-item-preview-text items)
       "No draft artifacts are available yet.")))
 
+(defun delib-flow--approved-item-status (run)
+  "Return approved-artifact status text for RUN."
+  (if (plist-get (plist-get run :filing) :approved-items)
+      "Approved filing artifacts are available."
+    "No approved artifacts are available yet."))
+
+(defun delib-flow--approved-item-text (run)
+  "Return approved-artifact body text for RUN."
+  (let ((items (plist-get (plist-get run :filing) :approved-items)))
+    (if items
+        (delib-flow--draft-item-preview-text items)
+      "No approved artifacts are available yet.")))
+
+(defun delib-flow--filed-location-status (run)
+  "Return filed-location status text for RUN."
+  (if (plist-get (plist-get run :filing) :target-locations)
+      "Filed target locations are available."
+    "No filed target locations are available yet."))
+
+(defun delib-flow--filed-location-line (location)
+  "Return preview line for filed LOCATION."
+  (format "- %s -> %s"
+          (plist-get location :item-text)
+          (plist-get location :target)))
+
+(defun delib-flow--filed-location-text (run)
+  "Return filed-location body text for RUN."
+  (let ((locations (plist-get (plist-get run :filing) :target-locations)))
+    (if locations
+        (mapconcat #'delib-flow--filed-location-line locations "\n")
+      "No filed target locations are available yet.")))
+
 (defun delib-flow--render-filing-preview-section (_run)
   "Return Org text for the Filing preview section."
-  (format "** Preview status\n%s\n\n** Draft artifacts\n%s\n\n** Approved artifacts\nNo approved artifacts are available yet.\n"
+  (format "** Preview status\n%s\n\n** Draft artifacts\n%s\n\n** Approved artifacts\n%s\n\n** Filed target locations\n%s\n"
           (delib-flow--draft-item-status _run)
-          (delib-flow--draft-item-text _run)))
+          (delib-flow--draft-item-text _run)
+          (delib-flow--approved-item-text _run)
+          (delib-flow--filed-location-text _run)))
+
+(defun delib-flow--audit-run-state-text (run)
+  "Return run audit status text for RUN."
+  (let* ((audit (plist-get run :audit))
+         (run-record (plist-get audit :run-record)))
+    (format "- Audit log file: %s\n- Run status: %s\n- Run ID: %s"
+            (if (delib-flow--audit-log-configured-p) "configured" "unconfigured")
+            (plist-get run-record :run-status)
+            (plist-get run-record :run-id))))
+
+(defun delib-flow--audit-stage-readiness-text (run)
+  "Return stage audit readiness text for RUN."
+  (let* ((audit (plist-get run :audit))
+         (stage-count (length (plist-get audit :stage-records)))
+         (pending (plist-get audit :pending-checkpoints))
+         (last (plist-get audit :last-appended-checkpoint)))
+    (format "- Recorded stages: %s\n- Pending checkpoints: %s\n- Last appended checkpoint: %s"
+            stage-count
+            (if pending
+                (mapconcat #'symbol-name pending ", ")
+              "none")
+            (if last (symbol-name last) "none"))))
 
 (defun delib-flow--render-audit-status-section (_run)
   "Return Org text for the Audit status section."
-  "** Run audit state\nAudit logging is not implemented in Milestone 1.\n\n** Stage audit readiness\nStage audit data is not ready yet.\n")
+  (format "** Run audit state\n%s\n\n** Stage audit readiness\n%s\n"
+          (delib-flow--audit-run-state-text _run)
+          (delib-flow--audit-stage-readiness-text _run)))
 
 (defun delib-flow--count-body-lines (content)
   "Return the count of non-empty body lines in CONTENT."
@@ -1190,9 +1957,275 @@ PRIORITY controls display order."
   "Return raw filter output for PACKAGE."
   (delib-flow--filter-reference-material-result package))
 
+(defun delib-flow--execute-manual-project-match (package)
+  "Return raw manual project-match output for PACKAGE."
+  (delib-flow--manual-project-match-result package))
+
+(defun delib-flow--execute-propose-new-project (package)
+  "Return raw new-project proposal output for PACKAGE."
+  (delib-flow--propose-new-project-result package))
+
 (defun delib-flow--execute-extract-actions (package)
   "Return raw action-extraction output for PACKAGE."
   (delib-flow--extract-actions-result package))
+
+(defun delib-flow--execute-extract-waiting-for (package)
+  "Return raw waiting-for extraction output for PACKAGE."
+  (delib-flow--extract-waiting-for-result package))
+
+(defun delib-flow--execute-suggest-reference-notes (package)
+  "Return raw reference-note suggestion output for PACKAGE."
+  (delib-flow--suggest-reference-notes-result package))
+
+(defun delib-flow--execute-decide-cloud-pass (package)
+  "Return raw cloud-routing decision output for PACKAGE."
+  (delib-flow--decide-cloud-pass-result package))
+
+(defun delib-flow--execute-sanitize-for-cloud (package)
+  "Return raw cloud-sanitization output for PACKAGE."
+  (delib-flow--sanitize-for-cloud-result package))
+
+(defun delib-flow--cloud-stage-package (package)
+  "Return sanitized cloud stage package from PACKAGE."
+  (plist-get (plist-get package :working-context) :cloud-sanitized-context))
+
+(defun delib-flow--cloud-stage-result (package)
+  "Return raw cloud-stage result for PACKAGE."
+  (let ((sanitized-package (delib-flow--cloud-stage-package package)))
+    (list :selected-model (delib-flow--cloud-model-choice package)
+          :cloud-output
+          (format "Cloud output for reviewed package.\n%s"
+                  sanitized-package)
+          :cloud-switch-pending nil
+          :sanitization-status 'returned
+          :reason "Cloud output is ready for local review and reintegration.")))
+
+(defun delib-flow--execute-run-cloud-stage (package)
+  "Return raw cloud-stage output for PACKAGE."
+  (delib-flow--cloud-stage-result package))
+
+(defun delib-flow--integration-context-parts (package)
+  "Return retained context parts assembled from PACKAGE."
+  (seq-remove
+   #'string-empty-p
+   (list
+    (or (plist-get (plist-get package :working-context) :retained-context) "")
+    (if-let ((cloud-output
+              (plist-get (plist-get package :working-context)
+                         :cloud-returned-context)))
+        (format "Cloud-reviewed context\n%s" cloud-output)
+      ""))))
+
+(defun delib-flow--integrated-context-text (package)
+  "Return integrated local context text from PACKAGE."
+  (mapconcat #'identity
+             (delib-flow--integration-context-parts package)
+             "\n\n"))
+
+(defun delib-flow--integrate-into-source-result (package)
+  "Return raw integration result for PACKAGE."
+  (let* ((integrated-context (delib-flow--integrated-context-text package))
+         (draft-items (plist-get (plist-get package :filing) :draft-items)))
+    (list :integrated-context integrated-context
+          :draft-count (length draft-items)
+          :cloud-context-integrated-p
+          (not (null (plist-get (plist-get package :working-context)
+                                :cloud-returned-context)))
+          :reason "Integrated local context and draft filing artifacts are ready for review.")))
+
+(defun delib-flow--execute-integrate-into-source (package)
+  "Return raw integration output for PACKAGE."
+  (delib-flow--integrate-into-source-result package))
+
+(defun delib-flow--draft-items (package)
+  "Return draft filing items from PACKAGE."
+  (plist-get (plist-get package :filing) :draft-items))
+
+(defun delib-flow--selected-filing-items (package)
+  "Return the next deterministically selected filing item from PACKAGE."
+  (if-let ((item (car (delib-flow--draft-items package))))
+      (list item)
+    nil))
+
+(defun delib-flow--remaining-draft-items (package)
+  "Return unapproved draft filing items from PACKAGE."
+  (cdr (delib-flow--draft-items package)))
+
+(defun delib-flow--select-approved-filing-actions-result (package)
+  "Return raw filing-selection result for PACKAGE."
+  (let* ((selected-items (delib-flow--selected-filing-items package))
+         (remaining-items (delib-flow--remaining-draft-items package)))
+    (list :approved-items selected-items
+          :remaining-draft-items remaining-items
+          :selected-count (length selected-items)
+          :remaining-draft-count (length remaining-items)
+          :selected-preview (and selected-items
+                                 (delib-flow--draft-item-preview-text
+                                  selected-items))
+          :reason "Approved the next filing artifact for deterministic filing review.")))
+
+(defun delib-flow--execute-select-approved-filing-actions (package)
+  "Return raw filing-selection output for PACKAGE."
+  (delib-flow--select-approved-filing-actions-result package))
+
+(defun delib-flow--approved-items (package)
+  "Return approved filing items from PACKAGE."
+  (plist-get (plist-get package :filing) :approved-items))
+
+(defun delib-flow--matched-project-title (package)
+  "Return matched project title from PACKAGE."
+  (plist-get (plist-get (plist-get (plist-get package :working-context)
+                                   :project-match)
+                        :best-project)
+             :title))
+
+(defun delib-flow--project-item-keyword (item)
+  "Return Org keyword for approved ITEM."
+  (if (eq (plist-get item :kind) 'waiting-for)
+      "WAITING"
+    "TODO"))
+
+(defun delib-flow--project-item-heading (item level)
+  "Return Org heading text for ITEM at LEVEL."
+  (format "%s %s %s\n"
+          (make-string level ?*)
+          (delib-flow--project-item-keyword item)
+          (plist-get item :text)))
+
+(defun delib-flow--project-heading-text (item)
+  "Return top-level Org heading text for project ITEM."
+  (format "* %s\n" (plist-get item :title)))
+
+(defun delib-flow--project-first-item (item)
+  "Return first child item from project ITEM."
+  (plist-get item :first-item))
+
+(defun delib-flow--insert-project-child (file project-title item)
+  "Insert ITEM as child under PROJECT-TITLE in Org FILE."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (org-mode)
+    (goto-char (point-min))
+    (unless (re-search-forward
+             (format "^\\(\\*+\\) %s$" (regexp-quote project-title))
+             nil t)
+      (error "Matched project heading is not present in the My Projects file"))
+    (let ((level (1+ (length (match-string 1)))))
+      (org-end-of-subtree t t)
+      (unless (bolp)
+        (insert "\n"))
+      (insert (delib-flow--project-item-heading item level))
+      (write-region (point-min) (point-max) file nil 'silent))))
+
+(defun delib-flow--insert-new-project (file item)
+  "Insert new project ITEM into Org FILE."
+  (with-temp-buffer
+    (when (file-exists-p file)
+      (insert-file-contents file))
+    (org-mode)
+    (goto-char (point-max))
+    (unless (bolp)
+      (insert "\n"))
+    (insert (delib-flow--project-heading-text item))
+    (insert (delib-flow--project-item-heading
+             (delib-flow--project-first-item item)
+             2))
+    (write-region (point-min) (point-max) file nil 'silent)))
+
+(defun delib-flow--slugify (text)
+  "Return a filesystem slug for TEXT."
+  (let* ((downcased (downcase (or text "")))
+         (slug (replace-regexp-in-string "[^[:alnum:]]+" "-" downcased)))
+    (string-trim slug "-+" "-+")))
+
+(defun delib-flow--reference-note-title (item)
+  "Return deterministic note title from approved ITEM."
+  (cond
+   ((eq (plist-get item :note-type) 'general-pkm)
+    (string-remove-prefix "Create general PKM note for "
+                          (plist-get item :text)))
+   ((eq (plist-get item :note-type) 'project-support)
+    (string-remove-prefix "Create project support note from "
+                          (plist-get item :text)))
+   (t
+    (plist-get item :text))))
+
+(defun delib-flow--reference-note-file (item)
+  "Return deterministic note file path for approved ITEM."
+  (unless (and delib-flow-zk-root
+               (file-directory-p delib-flow-zk-root))
+    (error "The ZK root is not configured or readable"))
+  (expand-file-name
+   (format "%s.org" (delib-flow--slugify
+                     (delib-flow--reference-note-title item)))
+   delib-flow-zk-root))
+
+(defun delib-flow--reference-note-content (item)
+  "Return note file content for approved ITEM."
+  (format "#+title: %s\n\n- Filed from delib-flow\n- Source artifact: %s\n"
+          (delib-flow--reference-note-title item)
+          (plist-get item :text)))
+
+(defun delib-flow--create-reference-note-file (item)
+  "Create deterministic note file for approved ITEM."
+  (let ((target (delib-flow--reference-note-file item)))
+    (when (file-exists-p target)
+      (error "Deterministic note target already exists"))
+    (with-temp-file target
+      (insert (delib-flow--reference-note-content item)))
+    target))
+
+(defun delib-flow--file-project-item (item package)
+  "File approved ITEM into the matched project from PACKAGE."
+  (unless delib-flow-my-projects-file
+    (error "The My Projects file is not configured"))
+  (if (eq (plist-get item :kind) 'project)
+      (progn
+        (delib-flow--insert-new-project delib-flow-my-projects-file item)
+        (format "%s::%s" delib-flow-my-projects-file
+                (plist-get item :title)))
+    (unless (file-readable-p delib-flow-my-projects-file)
+      (error "The My Projects file is not configured or readable"))
+    (let ((project-title (delib-flow--matched-project-title package)))
+      (unless project-title
+        (error "Approved project filing requires a matched project"))
+      (delib-flow--insert-project-child delib-flow-my-projects-file
+                                        project-title
+                                        item)
+      (format "%s::%s" delib-flow-my-projects-file project-title))))
+
+(defun delib-flow--file-reference-note (item)
+  "File approved reference-note ITEM into the ZK root."
+  (delib-flow--create-reference-note-file item))
+
+(defun delib-flow--file-approved-item (item package)
+  "Return target-location object after filing approved ITEM from PACKAGE."
+  (list :kind (plist-get item :kind)
+        :item-text (plist-get item :text)
+        :target
+        (if (eq (plist-get item :kind) 'reference-note)
+            (delib-flow--file-reference-note item)
+          (delib-flow--file-project-item item package))))
+
+(defun delib-flow--file-approved-output-locations (package)
+  "Return filed target locations for approved items in PACKAGE."
+  (mapcar (lambda (item)
+            (delib-flow--file-approved-item item package))
+          (delib-flow--approved-items package)))
+
+(defun delib-flow--file-approved-outputs-result (package)
+  "Return raw deterministic filing result for PACKAGE."
+  (let* ((approved-items (delib-flow--approved-items package))
+         (locations (delib-flow--file-approved-output-locations package)))
+    (list :approved-count (length approved-items)
+          :filed-count (length locations)
+          :filed-items approved-items
+          :target-locations locations
+          :reason "Approved filing artifacts were inserted into deterministic targets.")))
+
+(defun delib-flow--execute-file-approved-outputs (package)
+  "Return raw filing output for PACKAGE."
+  (delib-flow--file-approved-outputs-result package))
 
 (defun delib-flow--normalize-inspect-source-output (raw-output)
   "Return normalized inspect-source text from RAW-OUTPUT."
@@ -1254,6 +2287,24 @@ PRIORITY controls display order."
           (plist-get raw-output :retained-count)
           (plist-get raw-output :rejected-count)))
 
+(defun delib-flow--normalize-manual-project-match-output (raw-output)
+  "Return normalized manual project-match text from RAW-OUTPUT."
+  (format "- Match status: %s\n- Selection method: %s\n- Selected project: %s\n- Reason: %s"
+          (plist-get raw-output :match-status)
+          (plist-get raw-output :selection-method)
+          (plist-get (plist-get raw-output :best-project) :title)
+          (plist-get raw-output :reason)))
+
+(defun delib-flow--normalize-propose-new-project-output (raw-output)
+  "Return normalized new-project proposal text from RAW-OUTPUT."
+  (format
+   "- Proposed project title: %s\n- Proposed state: %s\n- First item: %s\n- Tags: %s\n- Reason: %s"
+   (plist-get raw-output :project-title)
+   (plist-get raw-output :project-state)
+   (plist-get (plist-get raw-output :first-item) :text)
+   (mapconcat #'identity (plist-get raw-output :tags) ", ")
+   (plist-get raw-output :reason)))
+
 (defun delib-flow--normalize-draft-action (item)
   "Return normalized text for draft action ITEM."
   (format "- %s" (plist-get item :text)))
@@ -1264,6 +2315,79 @@ PRIORITY controls display order."
           (plist-get raw-output :candidate-count)
           (mapconcat #'delib-flow--normalize-draft-action
                      (plist-get raw-output :actions)
+                     "\n")))
+
+(defun delib-flow--normalize-extract-waiting-for-output (raw-output)
+  "Return normalized extract-waiting-for text from RAW-OUTPUT."
+  (format "- Candidate count: %s\n%s"
+          (plist-get raw-output :candidate-count)
+          (mapconcat #'delib-flow--normalize-draft-action
+                     (plist-get raw-output :waiting-fors)
+                     "\n")))
+
+(defun delib-flow--normalize-suggest-reference-notes-output (raw-output)
+  "Return normalized reference-note text from RAW-OUTPUT."
+  (format "- Candidate count: %s\n%s"
+          (plist-get raw-output :candidate-count)
+          (mapconcat #'delib-flow--normalize-draft-action
+                     (plist-get raw-output :reference-notes)
+                     "\n")))
+
+(defun delib-flow--normalize-decide-cloud-pass-output (raw-output)
+  "Return normalized cloud-routing text from RAW-OUTPUT."
+  (format "- Route: %s\n- Selected model: %s\n- Sanitization status: %s\n- Reason: %s"
+          (plist-get raw-output :route)
+          (plist-get raw-output :selected-model)
+          (plist-get raw-output :sanitization-status)
+          (plist-get raw-output :reason)))
+
+(defun delib-flow--normalize-sanitize-for-cloud-output (raw-output)
+  "Return normalized cloud-sanitization text from RAW-OUTPUT."
+  (format "- Sanitization status: %s\n- Reason: %s\n%s"
+          (plist-get raw-output :sanitization-status)
+          (plist-get raw-output :reason)
+          (plist-get raw-output :sanitized-package)))
+
+(defun delib-flow--normalize-run-cloud-stage-output (raw-output)
+  "Return normalized cloud-stage text from RAW-OUTPUT."
+  (format "- Selected model: %s\n- Sanitization status: %s\n- Reason: %s\n%s"
+          (plist-get raw-output :selected-model)
+          (plist-get raw-output :sanitization-status)
+          (plist-get raw-output :reason)
+          (plist-get raw-output :cloud-output)))
+
+(defun delib-flow--normalize-integrate-into-source-output (raw-output)
+  "Return normalized integration text from RAW-OUTPUT."
+  (format "- Draft artifact count: %s\n- Cloud context integrated: %s\n- Reason: %s\n%s"
+          (plist-get raw-output :draft-count)
+          (if (plist-get raw-output :cloud-context-integrated-p) "yes" "no")
+          (plist-get raw-output :reason)
+          (or (plist-get raw-output :integrated-context)
+              "No integrated context is available yet.")))
+
+(defun delib-flow--normalize-select-approved-filing-actions-output (raw-output)
+  "Return normalized filing-selection text from RAW-OUTPUT."
+  (format "- Selected artifact count: %s\n- Remaining draft artifact count: %s\n- Reason: %s\n%s"
+          (plist-get raw-output :selected-count)
+          (plist-get raw-output :remaining-draft-count)
+          (plist-get raw-output :reason)
+          (or (plist-get raw-output :selected-preview)
+              "No filing artifacts were selected.")))
+
+(defun delib-flow--normalize-file-target-location (location)
+  "Return normalized text for filed target LOCATION."
+  (format "- %s -> %s"
+          (plist-get location :item-text)
+          (plist-get location :target)))
+
+(defun delib-flow--normalize-file-approved-outputs-output (raw-output)
+  "Return normalized filing text from RAW-OUTPUT."
+  (format "- Approved artifact count: %s\n- Filed count: %s\n- Reason: %s\n%s"
+          (plist-get raw-output :approved-count)
+          (plist-get raw-output :filed-count)
+          (plist-get raw-output :reason)
+          (mapconcat #'delib-flow--normalize-file-target-location
+                     (plist-get raw-output :target-locations)
                      "\n")))
 
 (defun delib-flow--completed-stage-decision (stage-id)
@@ -1318,8 +2442,25 @@ PRIORITY controls display order."
     (plist-put
      run :working-context
      (plist-put
-      (plist-put working :filtered-context raw)
+     (plist-put working :filtered-context raw)
       :retained-context (delib-flow--retained-context-lines retained)))))
+
+(defun delib-flow--apply-propose-new-project-entry (run entry)
+  "Return RUN updated from completed propose-new-project ENTRY."
+  (let* ((working (delib-flow--run-working-context run))
+         (filing (plist-get run :filing))
+         (project-item (plist-get (plist-get entry :raw-output) :project))
+         (draft-items (list project-item)))
+    (plist-put
+     (plist-put
+     run :working-context
+      (plist-put working :project-proposal (plist-get entry :raw-output)))
+     :filing
+     (plist-put
+      (plist-put
+       (plist-put filing :draft-items draft-items)
+       :approved-items nil)
+      :preview-text (delib-flow--draft-item-preview-text draft-items)))))
 
 (defun delib-flow--apply-extract-actions-entry (run entry)
   "Return RUN updated from completed extract-actions ENTRY."
@@ -1328,8 +2469,121 @@ PRIORITY controls display order."
     (plist-put
      run :filing
      (plist-put
-      (plist-put filing :draft-items draft-items)
+      (plist-put
+       (plist-put filing :draft-items draft-items)
+       :approved-items nil)
       :preview-text (delib-flow--draft-item-preview-text draft-items)))))
+
+(defun delib-flow--apply-extract-waiting-for-entry (run entry)
+  "Return RUN updated from completed extract-waiting-for ENTRY."
+  (let* ((filing (plist-get run :filing))
+         (draft-items (plist-get (plist-get entry :raw-output) :waiting-fors)))
+    (plist-put
+     run :filing
+     (plist-put
+      (plist-put
+       (plist-put filing :draft-items draft-items)
+       :approved-items nil)
+      :preview-text (delib-flow--draft-item-preview-text draft-items)))))
+
+(defun delib-flow--apply-suggest-reference-notes-entry (run entry)
+  "Return RUN updated from completed suggest-reference-notes ENTRY."
+  (let* ((filing (plist-get run :filing))
+         (draft-items
+          (plist-get (plist-get entry :raw-output) :reference-notes)))
+    (plist-put
+     run :filing
+     (plist-put
+      (plist-put
+       (plist-put filing :draft-items draft-items)
+       :approved-items nil)
+      :preview-text (delib-flow--draft-item-preview-text draft-items)))))
+
+(defun delib-flow--apply-decide-cloud-pass-entry (run entry)
+  "Return RUN updated from completed decide-cloud-pass ENTRY."
+  (let* ((routing (delib-flow--run-routing run))
+         (raw (plist-get entry :raw-output)))
+    (plist-put
+     run :routing
+     (plist-put
+      (plist-put
+       (plist-put routing :cloud-switch-pending
+                  (plist-get raw :cloud-switch-pending))
+       :sanitization-status
+       (plist-get raw :sanitization-status))
+      :selected-cloud-model
+      (plist-get raw :selected-model)))))
+
+(defun delib-flow--apply-sanitize-for-cloud-entry (run entry)
+  "Return RUN updated from completed sanitize-for-cloud ENTRY."
+  (let* ((working (delib-flow--run-working-context run))
+         (routing (delib-flow--run-routing run))
+         (raw (plist-get entry :raw-output)))
+    (plist-put
+     (plist-put
+      run :working-context
+      (plist-put working :cloud-sanitized-context
+                 (plist-get raw :sanitized-package)))
+     :routing
+     (plist-put
+     (plist-put routing :cloud-switch-pending
+                 (plist-get raw :cloud-switch-pending))
+      :sanitization-status
+      (plist-get raw :sanitization-status)))))
+
+(defun delib-flow--apply-run-cloud-stage-entry (run entry)
+  "Return RUN updated from completed run-cloud-stage ENTRY."
+  (let* ((working (delib-flow--run-working-context run))
+         (routing (delib-flow--run-routing run))
+         (raw (plist-get entry :raw-output)))
+    (plist-put
+     (plist-put
+      run :working-context
+      (plist-put working :cloud-returned-context
+                 (plist-get raw :cloud-output)))
+     :routing
+     (plist-put
+      (plist-put routing :cloud-switch-pending
+                 (plist-get raw :cloud-switch-pending))
+      :sanitization-status
+      (plist-get raw :sanitization-status)))))
+
+(defun delib-flow--apply-integrate-into-source-entry (run entry)
+  "Return RUN updated from completed integrate-into-source ENTRY."
+  (let* ((working (delib-flow--run-working-context run))
+         (filing (plist-get run :filing)))
+    (plist-put
+     (plist-put
+      run :working-context
+      (plist-put working :retained-context
+                 (plist-get (plist-get entry :raw-output) :integrated-context)))
+     :filing
+     (plist-put filing :approved-items nil))))
+
+(defun delib-flow--apply-select-approved-filing-actions-entry (run entry)
+  "Return RUN updated from completed filing-selection ENTRY."
+  (let* ((filing (plist-get run :filing))
+         (raw (plist-get entry :raw-output))
+         (remaining-items (plist-get raw :remaining-draft-items)))
+    (plist-put
+     run :filing
+     (plist-put
+      (plist-put
+       (plist-put filing :draft-items remaining-items)
+       :approved-items (plist-get raw :approved-items))
+      :preview-text (delib-flow--draft-item-preview-text remaining-items)))))
+
+(defun delib-flow--apply-file-approved-outputs-entry (run entry)
+  "Return RUN updated from completed file-approved-outputs ENTRY."
+  (let* ((filing (plist-get run :filing))
+         (raw (plist-get entry :raw-output)))
+    (plist-put
+     run :filing
+     (plist-put
+      (plist-put filing :approved-items nil)
+      :target-locations
+      (append (plist-get filing :target-locations)
+              (plist-get raw :target-locations))))))
 
 (defun delib-flow--completed-stage-apply-function (stage-id)
   "Return apply function for completed STAGE-ID."
@@ -1356,6 +2610,15 @@ PRIORITY controls display order."
         (delib-flow--apply-completed-stage-entry updated-run entry)
       updated-run)))
 
+(defun delib-flow--finalize-stage-run (run entry)
+  "Return finalized RUN after applying stage ENTRY and audit updates."
+  (delib-flow--seed-actions
+   (delib-flow--finalize-audit-update
+    (delib-flow--apply-stage-entry
+     (delib-flow--append-stage-entry run entry)
+     entry)
+    entry)))
+
 (defun delib-flow--run-stage-locally (run stage-id)
   "Return RUN after executing STAGE-ID through the local stage contract."
   (let* ((descriptor (delib-flow--stage-descriptor stage-id))
@@ -1367,23 +2630,36 @@ PRIORITY controls display order."
                 (delib-flow--normalize-stage-output stage-id raw-output))
                (entry (delib-flow--make-stage-entry
                        stage-id package raw-output normalized-output)))
-          (delib-flow--seed-actions
-           (delib-flow--apply-stage-entry
-            (delib-flow--append-stage-entry run entry)
-            entry)))
+          (delib-flow--finalize-stage-run run entry))
       (error
        (let ((entry
               (delib-flow--make-stage-failure-entry
                stage-id package (error-message-string err))))
-         (delib-flow--seed-actions
-          (delib-flow--apply-stage-entry
-           (delib-flow--append-stage-entry run entry)
-           entry)))))))
+         (delib-flow--finalize-stage-run run entry))))))
+
+(defun delib-flow--run-stage-in-cloud (run stage-id)
+  "Return RUN after executing STAGE-ID through the cloud stage contract."
+  (let* ((descriptor (delib-flow--stage-descriptor stage-id))
+         (package (delib-flow--stage-input-package run stage-id)))
+    (condition-case err
+        (let* ((raw-output (funcall delib-flow-cloud-stage-adapter
+                                    descriptor package))
+               (normalized-output
+                (delib-flow--normalize-stage-output stage-id raw-output))
+               (entry (delib-flow--make-stage-entry
+                       stage-id package raw-output normalized-output)))
+          (delib-flow--finalize-stage-run run entry))
+      (error
+       (let ((entry
+              (delib-flow--make-stage-failure-entry
+               stage-id package (error-message-string err))))
+         (delib-flow--finalize-stage-run run entry))))))
 
 (defun delib-flow--initialize-run (source-snapshot)
   "Create a new run state from SOURCE-SNAPSHOT."
-  (delib-flow--seed-actions
-   (list :source source-snapshot
+  (let ((session (delib-flow--initial-session-state)))
+    (delib-flow--seed-actions
+     (list :source source-snapshot
          :working-context
          (list :source-snapshot source-snapshot
                :inspect-output nil
@@ -1392,6 +2668,7 @@ PRIORITY controls display order."
                :filtered-context nil
                :retained-context nil
                :cloud-sanitized-context nil
+               :cloud-returned-context nil
                :editable-block-ids '(context-main operator-notes))
          :stage-history
          (list :entries nil
@@ -1411,14 +2688,11 @@ PRIORITY controls display order."
                :preview-text nil
                :target-locations nil)
          :audit
-         (list :run-record nil
-               :stage-records nil
-               :pending-checkpoints nil
-               :last-appended-checkpoint nil)
+         (delib-flow--initial-audit-state source-snapshot session)
          :session
-         (delib-flow--initial-session-state)
+         session
          :ui
-         (delib-flow--initial-ui-state))))
+         (delib-flow--initial-ui-state)))))
 
 (defun delib-flow--section-content (section run)
   "Return Org text for SECTION using RUN state."
@@ -1521,6 +2795,28 @@ PRIORITY controls display order."
                                         'filter-reference-material)))
   (delib-flow-refresh-buffer))
 
+(defun delib-flow-action-manual-project-match ()
+  "Execute the manual-project-match stage for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--run-stage-locally delib-flow--active-run
+                                        'manual-project-match)))
+  (delib-flow-refresh-buffer))
+
+(defun delib-flow-action-propose-new-project ()
+  "Execute the propose-new-project stage for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--run-stage-locally delib-flow--active-run
+                                        'propose-new-project)))
+  (delib-flow-refresh-buffer))
+
 (defun delib-flow-action-extract-actions ()
   "Execute the extract-actions stage for the active run."
   (interactive)
@@ -1530,6 +2826,96 @@ PRIORITY controls display order."
         (delib-flow--seed-actions
          (delib-flow--run-stage-locally delib-flow--active-run
                                         'extract-actions)))
+  (delib-flow-refresh-buffer))
+
+(defun delib-flow-action-extract-waiting-for ()
+  "Execute the extract-waiting-for stage for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--run-stage-locally delib-flow--active-run
+                                        'extract-waiting-for)))
+  (delib-flow-refresh-buffer))
+
+(defun delib-flow-action-suggest-reference-notes ()
+  "Execute the suggest-reference-notes stage for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--run-stage-locally delib-flow--active-run
+                                        'suggest-reference-notes)))
+  (delib-flow-refresh-buffer))
+
+(defun delib-flow-action-decide-cloud-pass ()
+  "Execute the decide-cloud-pass stage for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--run-stage-locally delib-flow--active-run
+                                        'decide-cloud-pass)))
+  (delib-flow-refresh-buffer))
+
+(defun delib-flow-action-sanitize-for-cloud ()
+  "Execute the sanitize-for-cloud stage for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--run-stage-locally delib-flow--active-run
+                                        'sanitize-for-cloud)))
+  (delib-flow-refresh-buffer))
+
+(defun delib-flow-action-run-cloud-stage ()
+  "Execute the run-cloud-stage stage for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (setq delib-flow--active-run
+        (if (delib-flow--run-cloud-stage-p 'run-cloud-stage)
+            (delib-flow--run-stage-in-cloud delib-flow--active-run
+                                            'run-cloud-stage)
+          (delib-flow--run-stage-locally delib-flow--active-run
+                                         'run-cloud-stage)))
+  (delib-flow-refresh-buffer))
+
+(defun delib-flow-action-integrate-into-source ()
+  "Execute the integrate-into-source stage for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--run-stage-locally delib-flow--active-run
+                                        'integrate-into-source)))
+  (delib-flow-refresh-buffer))
+
+(defun delib-flow-action-select-approved-filing-actions ()
+  "Execute the select-approved-filing-actions stage for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--run-stage-locally delib-flow--active-run
+                                        'select-approved-filing-actions)))
+  (delib-flow-refresh-buffer))
+
+(defun delib-flow-action-file-approved-outputs ()
+  "Execute the file-approved-outputs stage for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--run-stage-locally delib-flow--active-run
+                                        'file-approved-outputs)))
   (delib-flow-refresh-buffer))
 
 (defun delib-flow-action-stage-placeholder ()
@@ -1564,7 +2950,9 @@ PRIORITY controls display order."
   (unless delib-flow--active-run
     (user-error "No active delib-flow run"))
   (setq delib-flow--active-run
-        (delib-flow--mark-run-aborted delib-flow--active-run))
+        (delib-flow--refresh-run-audit
+         (delib-flow--mark-run-aborted delib-flow--active-run)
+         'abort-run))
   (let ((buffer (delib-flow--control-buffer)))
     (when (buffer-live-p buffer)
       (kill-buffer buffer)))

@@ -7,6 +7,16 @@ dated entries.
 
 * 2026-04-26
 
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Select Approved Filing
+  Actions` stage so filing approval is explicit and one item at a time.
+- Refactored the filing review path so `Integrate into Source` preserves draft
+  artifacts for review instead of auto-approving them, and `File Approved
+  Outputs` now consumes only the current approved artifact before clearing the
+  approval slot.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the explicit filing-selection
+  stage and one-at-a-time filing behavior.
 - Replaced the stub `docs/design.org` with a repo-local copy of the canonical
   design note.
 - Added `docs/implementation-plan.org` to separate execution planning from the
@@ -85,3 +95,58 @@ dated entries.
 - Updated `README.org`, `docs/design.org`, and
   `docs/implementation-plan.org` to reflect the current action-extraction
   state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Extract Waiting-For` stage
+  backed by deterministic local drafting into filing preview.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current waiting-for extraction
+  state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Suggest Reference Notes`
+  stage backed by deterministic local drafting into filing preview.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current reference-note
+  suggestion state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Decide on Cloud Pass`
+  stage backed by deterministic local routing-state updates.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current cloud-routing decision
+  state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Sanitize for Cloud` stage
+  backed by deterministic local redaction into working context.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current cloud-sanitization
+  state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Run Cloud Stage` step
+  through the dedicated cloud adapter path and an end-to-end `Integrate into
+  Source` stage for local reintegration and approval-state promotion.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current cloud-execution and
+  reintegration state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `File Approved Outputs`
+  stage for deterministic project-child insertion and reference-note creation.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current deterministic filing
+  state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding incremental audit-log state updates,
+  configured audit-file persistence, and control-buffer audit status rendering.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current audit logging state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Propose New Project` stage
+  and deterministic filing support for approved project proposals.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current no-match project
+  creation state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Choose Project Manually`
+  stage and retryable manual-selection behavior on ambiguous or no-match
+  branches.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current manual project
+  selection state.
