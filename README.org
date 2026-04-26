@@ -1,0 +1,19 @@
+#+title: delib-flow
+
+`delib-flow` is an Emacs package for running guided AI-assisted workflows from
+an Org heading at point.
+
+This repository is being built incrementally from a design-first process.
+
+* Current status
+
+- Milestone 1 scaffold
+- One active run at a time
+- Control buffer rendering from a frozen source snapshot
+- No real stage execution yet
+
+* Development
+
+The initial design spec is in [[file:docs/design.org][docs/design.org]].
+
+Tests are intended to run with ERT from the repository root.

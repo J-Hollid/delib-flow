@@ -1,0 +1,6 @@
+*.elc
+*.eln
+auto-save-list
+tramp
+\#*\#
+.\#*

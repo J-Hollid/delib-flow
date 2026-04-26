@@ -1,0 +1,21 @@
+:PROPERTIES:
+:SOURCE:   /home/j-holliday/org/zk/wrk/20260425145925.org
+:END:
+#+title: delib-flow design snapshot
+
+This file is a copied design snapshot for implementation use.
+
+The current canonical working design note lives at:
+
+- [[file:/home/j-holliday/org/zk/wrk/20260425145925.org][20260425145925.org]]
+
+Before implementation begins in earnest, copy or refine the relevant sections
+from the working note into this repository-local document as needed.
+
+* Current implementation target
+
+- Milestone 1 package skeleton
+- One active run at a time
+- Org-mode control buffer
+- Frozen source snapshot from heading at point
+- No model execution or filing yet
