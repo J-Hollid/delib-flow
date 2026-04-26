@@ -37,3 +37,24 @@ dated entries.
   expectations.
 - Added an exact Slice A plan to `docs/implementation-plan.org` covering the
   first run-state refactor and baseline test expansion.
+- Implemented Slice A in `delib-flow.el` and `test/delib-flow-test.el`,
+  including the new run-state schema helpers and expanded baseline tests.
+- Added `Makefile`, `scripts/validate-coverage.el`, and
+  `scripts/validate-complexity.el`.
+- Refactored section rendering so the codebase passes the enforced cyclomatic
+  complexity gate.
+- Implemented Slice B in `delib-flow.el` and `test/delib-flow-test.el`,
+  including structured action objects, explicit refresh and abort commands,
+  action rendering from state, and one-active-run enforcement.
+- Implemented Slice C in `delib-flow.el` and `test/delib-flow-test.el`,
+  including removal of `view-mode`, direct-editable control-buffer rendering,
+  and explicit editable-block scaffolding in the planned sections.
+- Implemented Slice D in `delib-flow.el` and `test/delib-flow-test.el`,
+  including editable-block state syncing and refresh preservation.
+- Implemented Slice E in `delib-flow.el` and `test/delib-flow-test.el`,
+  including managed-region protection, conflict detection, and
+  section-by-section refresh behavior.
+- Updated `README.org` and `docs/implementation-plan.org` to reflect Milestone
+  1 outcomes, current status, and implementation learnings.
+- Updated `docs/design.org` with a Milestone 1 implementation-status note and
+  design-level learnings confirmed by the current control-buffer foundation.

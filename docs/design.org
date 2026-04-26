@@ -10,6 +10,31 @@ It was copied from the canonical working note at
 `/home/j-holliday/org/zk/wrk/20260425145925.org` on 2026-04-26 and lightly
 normalized for repository use. The substantive workflow design remains the same.
 
+* Implementation status note
+
+- Milestone 1 control-buffer foundation has now been implemented in the
+  repository.
+- The current implementation confirms the viability of:
+  - one active run at a time
+  - frozen source snapshots
+  - a structured Org-mode control buffer
+  - direct editable blocks inside the control workflow
+  - managed-region protection with editable-region preservation across refresh
+- The implementation does not yet cover real stage execution, audit-log append,
+  or deterministic filing, so those parts of this design remain forward-looking.
+
+* Design learnings from Milestone 1
+
+- The control buffer works better as a mixed managed/editable document than as a
+  globally read-only view.
+- Editable workflow surfaces need explicit ownership boundaries and refresh
+  rules to remain reliable.
+- Section-by-section refresh is a better fit for this design than whole-buffer
+  redraw once user-editable content exists.
+- A structured action layer is useful even before real stage execution exists,
+  because it provides a stable place for legality, conflict, and review-state
+  behavior.
+
 * Process scope
 - Using AI agents to handle clarifying information input into my [[id:47bbd1a8-9645-43d6-9a17-7b85f631114f][PARA]] / [[id:8e4d775a-744f-4688-8336-9a2a679bd17d][GTD]] system for keeping knowledge and actions.
 - Version 1 scope is limited to email and meeting notes.
