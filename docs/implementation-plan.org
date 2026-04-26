@@ -10,11 +10,94 @@ intend to implement.
 
 * Planning status
 
-- Implementation has not started in earnest.
-- The current codebase is a scaffold for one active run, a frozen source
-  snapshot, and a placeholder control buffer.
+- Implementation is in progress.
+- Slice A has been implemented: the run-state schema has been refactored to the
+  agreed top-level domains and covered by baseline tests.
+- Slice B has been implemented: structured action objects, explicit refresh and
+  abort commands, and one-active-run lifecycle enforcement are now present.
+- Slice C has been implemented: the control buffer no longer depends on
+  `view-mode`, and the first mixed managed/editable section rendering is in
+  place with explicit `#+begin_delib-edit` blocks.
+- Slice D has been implemented: editable-block contents now sync back into run
+  state and are preserved across buffer refresh.
+- Slice E has been implemented: managed regions are protected, conflicts are
+  detected and reflected in action state, and refresh now rerenders the control
+  buffer section-by-section.
+- The validation scaffold is implemented: `make test`, `make coverage`,
+  `make complexity`, and `make validate` are now the project gates.
+- The current codebase remains an early scaffold for one active run, a frozen
+  source snapshot, and a placeholder control buffer.
 - This plan should be kept in sync with changes in scope or implementation
   order.
+
+* Milestone 1 outcome
+
+Milestone 1 is complete enough to serve as the control-buffer foundation for
+later stage execution work.
+
+Delivered behavior:
+
+- `delib-flow-start` opens a dedicated Org-mode control buffer from the heading
+  at point.
+- The run captures and preserves a frozen source snapshot.
+- The control buffer renders the planned top-level workflow sections.
+- The buffer supports one active run at a time.
+- Structured valid-next-action objects are present and rendered from state.
+- Direct editable regions exist for the working-context slice and operator
+  notes.
+- Editable block contents sync back into run state and survive refresh.
+- Managed regions are protected from casual editing.
+- Managed-region damage is detected and reflected in action state.
+- Refresh now rerenders section-by-section instead of rebuilding blindly.
+- Validation gates are implemented and passing.
+
+Known Milestone 1 limits:
+
+- No real stage execution yet.
+- No prompt resolution yet.
+- No adapter-backed model execution yet.
+- No audit-log append yet.
+- No deterministic filing yet.
+- No rich editable-artifact validation beyond the current block lifecycle and
+  conflict checks.
+
+* Milestone 1 learnings
+
+These are the main implementation learnings that should shape Milestone 2 and
+later work.
+
+- The complexity gate materially affected architecture in a good way.
+  Large renderer and dispatcher functions had to be split into small helpers,
+  which made the control-buffer code easier to test and reason about.
+- Direct in-buffer editing is viable, but only with explicit ownership rules.
+  The buffer became much more stable once editable block bodies and
+  package-managed regions were treated as separate classes of content.
+- Refresh preservation must be treated as a state-sync problem first and a UI
+  redraw problem second.
+  Editable text only became reliable once it was synced into run state before
+  rerender.
+- Text-property protection is workable, but boundary behavior matters.
+  Empty editable blocks exposed read-only edge cases, which means future
+  editable surfaces should be added with explicit insertion-boundary tests.
+- Section-by-section rerender is a better default than whole-buffer redraw for
+  this package.
+  Even before anchors are used more aggressively, partial section refresh keeps
+  the buffer model aligned with the design intent.
+- Coverage gating was easiest to sustain once helper functions stayed small and
+  single-purpose.
+  This reinforces the current implementation style for future slices.
+- The action layer benefited from being introduced before real stage execution.
+  It now provides a stable place to attach legality, conflict handling, and
+  later dispatch semantics.
+
+Implications for Milestone 2:
+
+- Define the generic stage execution contract in the same small-helper style.
+- Keep stage input assembly separate from rendering and dispatch.
+- Treat prompt packages and normalized stage results as state objects first,
+  rendered views second.
+- Preserve the current gate discipline: no new stage machinery should land
+  without passing coverage and complexity validation.
 
 * Project constraints
 

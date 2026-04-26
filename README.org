@@ -7,9 +7,17 @@ This repository is being built incrementally from a design-first process.
 
 * Current status
 
-- Milestone 1 scaffold
+- Milestone 1 control-buffer foundation implemented
 - One active run at a time
-- Control buffer rendering from a frozen source snapshot
+- Frozen source snapshot captured from heading at point
+- Structured control buffer with managed and editable regions
+- Editable block contents persist across refresh
+- Managed-region conflicts are detected and reflected in action state
+- Validation gates implemented:
+  - `make test`
+  - `make coverage`
+  - `make complexity`
+  - `make validate`
 - No real stage execution yet
 
 * Development
@@ -21,4 +29,4 @@ The current implementation plan is tracked separately in
 
 Repository history is tracked in [[file:CHANGELOG.org][CHANGELOG.org]].
 
-Tests are intended to run with ERT from the repository root.
+Validation commands run from the repository root.
