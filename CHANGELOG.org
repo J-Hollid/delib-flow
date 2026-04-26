@@ -1,0 +1,39 @@
+#+title: delib-flow changelog
+
+All notable repository changes should be recorded in this file.
+
+The format is intentionally simple for now: reverse-chronological headings with
+dated entries.
+
+* 2026-04-26
+
+- Replaced the stub `docs/design.org` with a repo-local copy of the canonical
+  design note.
+- Added `docs/implementation-plan.org` to separate execution planning from the
+  design contract.
+- Added `CHANGELOG.org`.
+- Updated `README.org` to point to the design document, implementation plan,
+  and changelog.
+- Updated `docs/implementation-plan.org` with agreed planning decisions:
+  shared adapter recommendation, direct in-control-buffer editing, and
+  audit-before-filing milestone order.
+- Refined Milestone 1 in `docs/implementation-plan.org` into concrete
+  workstreams for run state, control-buffer regions, lifecycle, action
+  legality, rendering behavior, and test coverage.
+- Recorded the agreed Milestone 1 editing representation: package-managed
+  headings with explicit editable blocks inside the control buffer.
+- Added the accepted control-buffer contract recommendations and a concrete
+  section schema to `docs/implementation-plan.org`.
+- Added accepted literal internal schema recommendations for run state,
+  editable blocks, valid actions, and anchor lookup to
+  `docs/implementation-plan.org`.
+- Added a code-facing Milestone 1 breakdown mapping planned work onto
+  `delib-flow.el` and `test/delib-flow-test.el`.
+- Added enforced project constraints to `docs/implementation-plan.org`:
+  validated test coverage of at least 90 percent and validated cyclomatic
+  complexity of at most 5.
+- Added an operational validation design to `docs/implementation-plan.org`
+  covering `ERT`, coverage gating, complexity gating, and `make` command
+  expectations.
+- Added an exact Slice A plan to `docs/implementation-plan.org` covering the
+  first run-state refactor and baseline test expansion.

@@ -1,0 +1,1051 @@
+#+title: delib-flow implementation plan
+
+This document tracks the implementation plan for `delib-flow` separately from
+the product and workflow design in [[file:design.org][design.org]].
+
+It is intentionally execution-oriented. The design document defines what the
+package should do. This plan defines the current understanding of the work,
+open decisions that still require agreement, and the milestone sequence we
+intend to implement.
+
+* Planning status
+
+- Implementation has not started in earnest.
+- The current codebase is a scaffold for one active run, a frozen source
+  snapshot, and a placeholder control buffer.
+- This plan should be kept in sync with changes in scope or implementation
+  order.
+
+* Project constraints
+
+These constraints should be treated as enforcement gates for implementation
+work, not as optional quality goals.
+
+- Test coverage must remain at or above 90 percent, and this must be validated
+  as part of implementation work.
+- Cyclomatic complexity must remain at or below 5 per function or equivalent
+  unit under the chosen validator, and this must also be validated.
+- If a proposed implementation slice cannot meet these constraints cleanly, the
+  slice should be decomposed further before code is merged.
+
+Validation design:
+
+- `ERT` in batch mode should be the authoritative test runner.
+- Coverage validation should be implemented as a project-local command that
+  instruments Emacs Lisp test execution, computes repository coverage, and
+  fails when coverage is below 90 percent.
+- Cyclomatic complexity validation should be implemented as a project-local
+  Emacs batch command that analyzes Emacs Lisp function forms and fails when
+  any function exceeds complexity 5.
+- These validators should be runnable both locally and in CI with the same
+  command surface.
+
+Recommended command contract:
+
+- `make test`
+  Runs the authoritative batch `ERT` test suite.
+- `make coverage`
+  Runs coverage instrumentation and fails if total validated coverage is below
+  90 percent.
+- `make complexity`
+  Runs the Emacs Lisp cyclomatic complexity validator and fails if any function
+  exceeds 5.
+- `make validate`
+  Runs `test`, `coverage`, and `complexity` as the full project gate.
+
+Recommended repository layout for validators:
+
+- `Makefile`
+  Public command surface for local and CI validation.
+- `scripts/`
+  Small validation entry points or wrappers if the commands become too large
+  for inline Make recipes.
+- `test/`
+  Test definitions and any shared test helpers.
+
+Complexity policy:
+
+- Complexity should be measured per `defun` and other equivalent top-level
+  executable units we intentionally decide to validate.
+- The validator should count standard branch and path-increasing constructs in
+  Emacs Lisp, such as `if`, `cond`, `when`, `unless`, boolean branching forms,
+  `pcase` branch paths, and loop-like control structures.
+- The validator should ignore comments, docstrings, and data-only forms.
+- Generated code, if any appears later, should be excluded explicitly rather
+  than implicitly ignored.
+- If a helper is hard to understand but technically below complexity 5, we
+  should still refactor when appropriate; the validator is a floor, not a full
+  readability guarantee.
+
+Coverage policy:
+
+- Coverage should be evaluated for repository Emacs Lisp source under the main
+  package, not for external dependencies.
+- Test helper code may be excluded if needed, but exclusions should be explicit
+  and kept minimal.
+- New package logic should not be merged with untested branches on the theory
+  that aggregate coverage remains above the threshold.
+- If aggregate coverage remains above 90 percent but a new slice adds obvious
+  untested paths, the slice should still be extended with tests before merge.
+
+* Current understanding
+
+- `delib-flow` starts from the Org heading at point and captures a frozen source
+  snapshot for the duration of the run.
+- The package presents workflow state in a dedicated Org-mode control buffer.
+- The workflow is human-guided rather than autonomous.
+- Version 1 inputs are limited to imported email Org items and meeting notes in
+  daily notes.
+- Version 1 is local-first. Cloud use is optional, stage-specific, and only
+  allowed through a sanitization and explicit approval path.
+- Stage outputs are reviewable artifacts, not direct source mutations.
+- Filing must be deterministic and scoped to explicit approved actions.
+- The system must preserve an audit trail sufficient for trust, review, and
+  diagnostics.
+
+* Requirements summary
+
+** Core workflow requirements
+
+- Preserve the source item unchanged while deriving working context and filing
+  candidates from it.
+- Represent workflow progress as stage history plus a current decision and valid
+  next actions.
+- Allow the human to inspect, retry, edit, approve, skip, or abort at
+  stage-appropriate points.
+- Keep the control interface constrained to currently legal actions rather than
+  open-ended command entry.
+
+** Data and state requirements
+
+- Maintain a structured run state containing source snapshot, working context,
+  stage results, approvals, filing candidates, routing metadata, and audit
+  metadata.
+- Record enough per-stage input and output data to support regeneration,
+  diagnostics, and later audit-log append.
+- Keep sanitized cloud packages separate from local non-sanitized working
+  context.
+
+** Integration requirements
+
+- Match against the authoritative My Projects file.
+- Retrieve candidate context from Org-roam and or `rg`-based PKM search when
+  relevant.
+- Support one configurable local model adapter and one configurable cloud model
+  adapter shape.
+- File approved artifacts through deterministic Emacs and Org operations,
+  preferring capture templates where appropriate.
+
+** Reliability requirements
+
+- Keep runs alive across stage failures when possible.
+- Surface malformed output, timeout, dependency, and partial filing failures
+  clearly in workflow state.
+- Avoid silent fallback across local and cloud execution paths.
+
+* Open design decisions
+
+These are the main decisions that still look implementation-shaping rather than
+purely cosmetic.
+
+1. Prompt storage and versioning
+   The design depends on stable prompt IDs and prompt versions. We need to
+   decide how prompts are resolved from Org, how versions are encoded, and what
+   exact snapshot is persisted into audit state.
+2. Stage result normalization format
+   The design requires Org-native normalized outputs, but not the exact schema
+   for each stage result. We need a concrete internal format that is stable
+   enough for rendering, approval, filing, and audit.
+3. Project matching strategy
+   The matching criteria are described, but we still need to decide whether
+   version 1 uses simple heuristics first, model-assisted ranking, or a hybrid
+   pipeline.
+4. Reference retrieval pipeline
+   Weighted retrieval and filtering are specified conceptually. We need to fix
+   the concrete retrieval inputs, scoring scheme, and whether filtering is
+   heuristic, model-assisted, or both.
+5. Filing target abstraction
+   The filing contract is clear about deterministic actions, but not the
+   internal abstraction for addressing a project item, metadata drawer, support
+   note, or capture target.
+6. Audit-log write timing details
+   Audit logging should arrive before deterministic filing, and stage data
+   should be appended incrementally for diagnostics. We still need to decide
+   the exact append checkpoints and what minimum data should be written before
+   a stage is fully approved.
+
+* Agreed planning decisions
+
+These decisions are settled unless we explicitly revise them later.
+
+1. Adapter boundary
+   Recommendation: define one stage-execution adapter contract shared by local
+   and cloud paths, with provider-specific configuration behind it.
+   The adapter should accept a stage descriptor plus a prepared input package
+   and return a structured result object with provider metadata, raw output,
+   normalized output or normalization failure, and execution status.
+   Rationale: this keeps stage orchestration uniform and makes cloud routing a
+   policy decision rather than a separate execution architecture.
+2. Human editing model
+   Editable artifacts should be edited directly inside the control buffer
+   before selecting the next action.
+   Rationale: that matches the guided-workflow model and keeps operator context
+   visible while reducing buffer-hopping during review and retry flows.
+   Representation: use package-managed headings and section structure with
+   explicit editable blocks for artifact text, prompt text, and context slices.
+   This should give rerendering stable anchors while preserving direct editing.
+3. Audit-first sequencing
+   Audit logging should be implemented before deterministic filing.
+   Rationale: audit data is part of the trust model and provides diagnostics
+   while the more mutation-heavy filing work is being built.
+4. Control-buffer contract defaults
+   Use explicit `#+begin_delib-edit` blocks for editable content, stable
+   in-buffer structural anchors for managed-region lookup, read-only managed
+   regions plus conflict detection, section-by-section rerendering, snapshot
+   comparison for edit tracking, button-like valid actions in the action
+   section, and an edit lifecycle that starts with `clean` and `edited`.
+5. Internal contract defaults
+   Use a fixed-domain top-level run-state plist with separate business and UI
+   concerns, plist-backed editable-block objects keyed by stable IDs,
+   structured valid-action objects rather than plain strings, and persistent
+   in-buffer anchor IDs as the source of truth for section lookup.
+
+* Recommended working assumptions
+
+These are the assumptions I recommend unless you want to decide otherwise before
+implementation:
+
+- Use a structured plist-based run state first, since the scaffold already uses
+  that representation.
+- Treat the control buffer as a guided mixed-mode surface: stable workflow
+  structure remains controlled by the package, while editable stage artifacts,
+  prompts, and context slices are intentionally writable in their designated
+  regions before action selection.
+- Use a mixed representation for that surface: package-managed headings and
+  explicit editable blocks rather than making whole sections free-form.
+- Define the full top-level section and subsection contract now rather than
+  allowing section structure to emerge ad hoc during implementation.
+- Implement project matching and retrieval with deterministic heuristics before
+  introducing model-assisted ranking in those stages.
+- Treat audit logging as incremental and diagnostics-oriented, with append
+  points occurring no later than stage completion and preferably also at key
+  review checkpoints when useful.
+- Keep version 1 focused on the local-only path first, while designing the data
+  model so the cloud sanitization path can be added without restructuring run
+  state.
+
+* Milestone plan
+
+** Milestone 1: control-buffer foundation
+
+Goal: make the current scaffold a stable workflow shell.
+
+Scope:
+- No real model execution yet.
+- No deterministic filing yet.
+- No audit-log append yet.
+- The milestone is successful when the package can represent and guide a run
+  coherently even while later stages remain placeholders.
+
+Workstreams:
+
+1. Run-state contract
+- Replace placeholder-only session state with an explicit run-state contract for
+  lifecycle, decision state, valid actions, and buffer metadata.
+- Distinguish durable run data from derived render-only data.
+- Define stable keys for source snapshot, working-context slots, stage-history
+  placeholder state, approvals, routing, filing, audit, and session metadata.
+- Add explicit run status values for at least `active`, `aborted`, and
+  `completed-placeholder` or equivalent milestone-safe state.
+- Define how the active-run singleton is validated and cleared when the control
+  buffer is killed or a new run is attempted.
+
+Deliverables:
+- A documented internal run-state shape suitable for later stage execution.
+- Helper functions for reading and updating core run-state fields.
+
+Proposed literal run-state schema:
+
+`(:source
+  (:title "Example heading"
+   :file "/path/to/source.org"
+   :id "org-id-or-nil"
+   :outline-path ("Inbox" "Today")
+   :begin 123
+   :end 456
+   :content "* Example heading\nBody"
+   :source-type unknown)
+  :working-context
+  (:inspect-output nil
+   :retrieved-candidates nil
+   :filtered-context nil
+   :retained-context nil
+   :cloud-sanitized-context nil
+   :editable-block-ids (context-main operator-notes))
+  :stage-history
+  (:entries nil
+   :latest-stage nil
+   :latest-status nil)
+  :actions
+  (:items nil
+   :selected-action nil
+   :last-action nil)
+  :routing
+  (:default-local-model nil
+   :default-cloud-model nil
+   :stage-models nil
+   :cloud-switch-pending nil
+   :sanitization-status nil)
+  :filing
+  (:draft-items nil
+   :approved-items nil
+   :preview-text nil
+   :target-locations nil)
+  :audit
+  (:run-record nil
+   :stage-records nil
+   :pending-checkpoints nil
+   :last-appended-checkpoint nil)
+  :session
+  (:status active
+   :started-at <time-value>
+   :ended-at nil
+   :current-stage nil
+   :current-decision "Review working context and choose next action."
+   :run-buffer "*delib-flow*"
+   :active t
+   :aborted nil)
+  :ui
+  (:section-anchors nil
+   :editable-blocks nil
+   :managed-region-conflicts nil
+   :render-version 1
+   :last-rendered-at <time-value>))`
+
+Domain notes:
+- `:source`, `:working-context`, `:stage-history`, `:routing`, `:filing`, and
+  `:audit` are durable workflow state.
+- `:actions` is derived from run state but may retain selection metadata.
+- `:session` is runtime lifecycle state.
+- `:ui` is render and anchor state that should be reconstructible if needed.
+
+2. Control-buffer document contract
+- Lock down the top-level section order already present in the scaffold.
+- Define the required subsection layout for each top-level section in Milestone
+  1, even when the content is still placeholder or empty.
+- Decide which parts of each section are package-managed, which are
+  intentionally editable, and which are purely informational.
+- Introduce stable markers or text properties so the package can find and
+  re-render managed regions without treating the whole buffer as free text.
+- Ensure re-rendering can preserve user edits in designated editable regions.
+
+Deliverables:
+- A documented section and subsection contract for `Source`, `Working context`,
+  `Stage history`, `Current decision`, `Valid next actions`, `Filing preview`,
+  and `Audit status`.
+- A first pass at region ownership rules for the control buffer.
+
+Proposed section schema:
+
+`Source`
+- Managed heading and managed subsections only.
+- Required managed subsections:
+  - `Title`
+  - `Source metadata`
+  - `Snapshot`
+- `Source metadata` should include file, ID, outline path, source type, and
+  run start metadata as available.
+- `Snapshot` should render the frozen source text in a non-editable example or
+  equivalent managed block.
+- No editable blocks in this section during Milestone 1.
+
+`Working context`
+- Managed heading with both managed and editable subsections.
+- Required managed subsections:
+  - `Context status`
+  - `Retained context`
+  - `Editable working slice`
+- `Context status` is managed and summarizes whether inspect output, retrieved
+  context, filtered context, and cloud-sanitized context exist yet.
+- `Retained context` is managed display content reflecting the current accepted
+  context state.
+- `Editable working slice` contains one or more `#+begin_delib-edit` blocks for
+  operator-adjustable context text.
+- Editable blocks here are the primary Milestone 1 proof of the direct
+  in-buffer editing model.
+
+`Stage history`
+- Managed heading with managed per-stage subtrees.
+- Required managed subsections:
+  - `History status`
+  - stage entries, when present
+- Before stage execution exists, `History status` should state that no stages
+  have been run.
+- Later stage entries should use stable managed subheadings and may contain
+  editable blocks only where the workflow explicitly allows retry editing.
+- Milestone 1 does not need editable blocks in this section yet.
+
+`Current decision`
+- Managed heading with mixed managed and editable content.
+- Required managed subsections:
+  - `Decision status`
+  - `Operator notes`
+- `Decision status` is managed and states the current unresolved choice,
+  blockers, and expected next step.
+- `Operator notes` contains a `#+begin_delib-edit` block for human notes that
+  may influence the next action choice.
+
+`Valid next actions`
+- Managed heading with managed action entries only.
+- Actions should render as button-like entries with machine-readable identity,
+  label, status, and optional reason text.
+- Supported statuses should include at least `available`, `blocked`, and
+  `placeholder`.
+- Blocked actions must show why they are unavailable.
+- This section should not contain editable blocks.
+
+`Filing preview`
+- Managed heading with managed subsections only in Milestone 1.
+- Required managed subsections:
+  - `Preview status`
+  - `Approved artifacts`
+- Until filing exists, this section should explicitly state that no filing
+  preview is available.
+- Editable blocks are deferred here until filing workflow demands them.
+
+`Audit status`
+- Managed heading with managed subsections only in Milestone 1.
+- Required managed subsections:
+  - `Run audit state`
+  - `Stage audit readiness`
+- This section should report whether audit logging is unimplemented, pending,
+  or ready in later milestones.
+- No editable blocks in this section during Milestone 1.
+
+Region ownership rules:
+- Managed headings, managed subsection titles, action entries, and frozen source
+  snapshot content are package-owned and should be read-only.
+- `#+begin_delib-edit` blocks are user-editable and tracked against the latest
+  rendered snapshot.
+- If package-owned text is modified, the workflow should detect the conflict and
+  block the next action until the region is restored or rerendered.
+- Section rerendering should replace only managed regions for that section and
+  preserve editable block contents whenever anchors still match.
+
+3. In-buffer editing model
+- Define designated editable regions inside the control buffer for later prompt,
+  context, or artifact editing, even if Milestone 1 only uses a minimal subset.
+- Use package-managed headings with explicit editable blocks as the baseline
+  editing representation.
+- Define when an edit is considered pending, accepted, discarded, or invalid.
+- Define what the package should do if the user modifies package-managed
+  regions.
+- Keep action selection dependent on the current buffer state so edits happen
+  before the next action is chosen.
+
+Deliverables:
+- A concrete editable-region model that later stages can reuse.
+- Validation rules for edits to managed versus editable regions.
+
+Editable block contract:
+- Syntax should use `#+begin_delib-edit <kind>` and `#+end_delib-edit`.
+- `<kind>` should initially support at least `context` and `notes`, with room
+  to add `prompt`, `artifact`, and `sanitized-context` later.
+- Each editable block should map to a stable internal identifier in run state.
+- Edit lifecycle should start with `clean` and `edited`.
+- Edit state should be computed by comparing block contents against the last
+  rendered or last accepted snapshot for that block.
+- Selecting an action should validate editable blocks first and block progress
+  if managed-region conflicts exist.
+
+Proposed editable-block object schema:
+
+`(:id context-main
+  :kind context
+  :section "Working context"
+  :heading-path ("Working context" "Editable working slice")
+  :anchor-id "delib-edit-context-main"
+  :status clean
+  :original-text ""
+  :current-text ""
+  :accepted-text ""
+  :validation-status valid
+  :validation-message nil)`
+
+Field notes:
+- `:id` is the stable run-state identifier.
+- `:kind` identifies the workflow role of the block.
+- `:section` and `:heading-path` identify the intended render location.
+- `:anchor-id` ties the object to its in-buffer managed anchor.
+- `:original-text` is the last rendered baseline.
+- `:current-text` is the last known buffer content snapshot.
+- `:accepted-text` is reserved for later use when edit acceptance becomes more
+  explicit than the `clean`/`edited` lifecycle.
+- `:validation-status` should initially support at least `valid` and
+  `conflict`.
+
+Proposed initial editable blocks:
+- `context-main` with `:kind context` under `Working context`.
+- `operator-notes` with `:kind notes` under `Current decision`.
+
+4. Run lifecycle and operator flow
+- Replace “close the buffer to abort” as the only lifecycle path with explicit
+  run-state semantics for start, active review, abort, and teardown.
+- Define what happens if the user invokes `delib-flow-start` while another run
+  is already active.
+- Define how the control buffer should behave when reopened, buried, or killed.
+- Define a minimal command set for Milestone 1 lifecycle actions, even if most
+  workflow actions remain placeholders.
+- Keep the current source snapshot frozen even if the source buffer changes
+  later.
+
+Deliverables:
+- A clear lifecycle model for one active run at a time.
+- Minimal interactive commands or affordances for safe run teardown and review.
+
+5. Valid-next-actions framework
+- Replace hard-coded placeholder action text with computed valid-action state.
+- Model actions as structured objects or plists rather than plain strings.
+- Support at least Milestone 1 actions for `Inspect source` placeholder,
+  `Abort`, and any non-executing review actions we need for buffer editing.
+- Add blocked or unavailable action explanations so the UI can show why an
+  action is not currently legal.
+- Keep the action framework generic enough for later stage transition rules.
+
+Deliverables:
+- A legal-action computation function driven by run state.
+- A renderable action list format with labels, status, and reason text.
+
+Proposed valid-action object schema:
+
+`(:id inspect-source
+  :label "Inspect Source"
+  :status placeholder
+  :reason "Stage execution is not implemented in Milestone 1."
+  :section "Valid next actions"
+  :priority 10
+  :handler delib-flow-action-inspect-source
+  :requires-clean-managed-regions t
+  :requires-valid-edits t)`
+
+Field notes:
+- `:id` is the stable action identity used by dispatch and tests.
+- `:label` is the user-facing action name.
+- `:status` should initially support `available`, `blocked`, and
+  `placeholder`.
+- `:reason` explains blocked or placeholder states.
+- `:priority` controls render order if multiple actions are valid.
+- `:handler` names the command or dispatcher entry point.
+- `:requires-clean-managed-regions` blocks selection when package-owned content
+  has been modified.
+- `:requires-valid-edits` blocks selection when editable blocks fail
+  validation.
+
+Proposed initial action set:
+- `inspect-source`
+- `abort-run`
+- `refresh-buffer`
+
+Expected Milestone 1 statuses:
+- `inspect-source`: `placeholder`
+- `abort-run`: `available`
+- `refresh-buffer`: `available`
+
+6. Rendering and safety behavior
+- Refactor rendering so section generation is deterministic and testable.
+- Avoid whole-buffer `view-mode` if it conflicts with the agreed direct-editing
+  model; adopt a buffer behavior that allows editing only where intended.
+- Make re-render behavior explicit: identify when the whole buffer is rebuilt
+  versus when only managed regions are refreshed.
+- Ensure kill-buffer teardown does not leave stale singleton run state behind.
+- Add clear placeholder content that reflects Milestone 1 truth rather than
+  pretending later features exist.
+
+Deliverables:
+- A rendering approach compatible with mixed managed and editable regions.
+- Safety rules for redraw, teardown, and stale-run cleanup.
+
+Proposed anchor and lookup strategy:
+- Every top-level section should have a stable anchor ID such as
+  `delib-section-source`, `delib-section-working-context`, and so on.
+- Required managed subsections should also have stable anchor IDs.
+- Every editable block should have its own stable anchor ID derived from its
+  block object `:id`.
+- Anchor IDs should be persisted in `:ui :section-anchors` and mirrored in the
+  buffer through managed markers or sentinel strings, with text properties as a
+  convenience layer only.
+- Section rerender should locate the section by anchor ID, replace only the
+  package-managed portion of that section, and then restore editable-block
+  contents from run state where needed.
+
+Proposed `:ui` anchor shape:
+
+`(:section-anchors
+  ((source . "delib-section-source")
+   (working-context . "delib-section-working-context")
+   (stage-history . "delib-section-stage-history")
+   (current-decision . "delib-section-current-decision")
+   (valid-next-actions . "delib-section-valid-next-actions")
+   (filing-preview . "delib-section-filing-preview")
+   (audit-status . "delib-section-audit-status"))
+  :editable-blocks
+  ((context-main . "delib-edit-context-main")
+   (operator-notes . "delib-edit-operator-notes"))
+  :managed-region-conflicts nil
+  :render-version 1
+  :last-rendered-at <time-value>)`
+
+7. Test coverage for the foundation
+- Extend tests from snapshot and section presence into lifecycle and state
+  behavior.
+- Add tests for one-active-run enforcement.
+- Add tests for valid-next-action computation in baseline states.
+- Add tests for buffer teardown clearing active state.
+- Add tests for region-protection behavior once editable-region boundaries are
+  defined.
+- Add tests for preserving frozen source snapshots across source-buffer edits.
+
+Deliverables:
+- A Milestone 1 test set that locks down state shape, rendering contract, and
+  lifecycle semantics.
+
+Implementation notes:
+- This milestone should avoid prematurely solving prompt execution or audit
+  append details.
+- The most important architectural outcome is not visual polish; it is a stable
+  state and rendering model that later milestones can build on without
+  reworking the buffer contract.
+
+Exit criteria:
+- Starting a run from a valid Org heading produces a stable control buffer from
+  a frozen source snapshot.
+- The run state can represent current decision and valid next actions without
+  placeholder-only logic.
+- Editable artifacts have a defined in-buffer representation compatible with
+  review-before-action workflow.
+- One-active-run behavior is defined and enforced.
+- Control-buffer redraw does not destroy intended user edits in editable
+  regions.
+- Abort and teardown semantics are explicit and covered by tests.
+
+** Milestone 2: stage execution contract
+
+Goal: make stages executable in a generic, testable way without yet solving all
+domain stages.
+
+- Define stage descriptors and transition rules.
+- Define adapter interfaces for local and cloud execution.
+- Define prompt resolution, input package assembly, and result normalization
+  contract.
+- Add stage-history persistence in run state and rendering.
+- Add error-path handling for malformed output, retry, and timeout state.
+
+Exit criteria:
+- At least one stage can execute end to end through the generic execution
+  contract and appear in stage history with review state.
+
+** Milestone 3: inspect and match path
+
+Goal: deliver the first useful version of source understanding.
+
+- Implement source typing and inspect output normalization.
+- Implement project matching against the My Projects file.
+- Support retry and manual disagreement paths for project matching.
+- Record stage-level approvals and accepted outputs.
+
+Exit criteria:
+- A user can inspect a source item, review normalized analysis, and reach a
+  project-match decision path in the control workflow.
+
+** Milestone 4: context retrieval path
+
+Goal: provide grounded downstream context before action extraction.
+
+- Implement candidate retrieval from project-linked material and PKM search.
+- Implement filtering of retrieved candidates into retained working context.
+- Render retained and rejected context in a reviewable form as appropriate.
+
+Exit criteria:
+- The workflow can gather and retain project-relevant context for downstream
+  reasoning in a way the human can review.
+
+** Milestone 5: action and note proposal path
+
+Goal: produce reviewable artifacts that can later be filed deterministically.
+
+- Implement `Extract actions`, `Extract waiting-for`, and `Suggest reference
+  notes`.
+- Define approval semantics for artifact-level acceptance.
+- Add validation warnings for weak next actions and waiting-for items.
+
+Exit criteria:
+- The workflow can produce candidate actions, waiting-for items, and reference
+  notes and mark approved artifacts as filing-ready.
+
+** Milestone 6: audit log
+
+Goal: make runs inspectable after the fact.
+
+- Implement audit-log entry rendering and append behavior.
+- Record run metadata, stage metadata, inputs, raw outputs, normalized results,
+  and approval state.
+- Surface audit readiness and append status in the control buffer.
+- Ensure audit append behavior supports diagnostics before filing is implemented.
+
+Exit criteria:
+- Completed or partial runs can append a structured audit record matching the
+  design contract.
+
+** Milestone 7: deterministic filing
+
+Goal: turn approved artifacts into concrete Org changes.
+
+- Implement filing target resolution.
+- Implement filing previews.
+- Implement one-action-at-a-time execution for supported filing actions.
+- Surface target-change conflicts and partial filing failures.
+
+Exit criteria:
+- Approved artifacts can be filed through deterministic Org operations with
+  preview and failure surfacing.
+
+** Milestone 8: cloud sanitization path
+
+Goal: add optional cloud routing without weakening local-first guarantees.
+
+- Implement sanitization package generation and review.
+- Implement explicit approve-send and approve-reintegrate flow.
+- Add cloud failure and fallback decision handling.
+
+Exit criteria:
+- A valid stage can be rerouted through a reviewed sanitized cloud package and
+  reintegrated back into local context only after explicit approval.
+
+* Near-term next steps
+
+These are the most useful planning tasks before further implementation.
+
+1. Define the exact stage-execution adapter function contract and result shape.
+2. Define the exact editable-region model for control-buffer artifacts and how
+   action selection validates pending edits.
+3. Define audit append checkpoints and minimal persisted data per checkpoint.
+4. Refine Milestone 1 into concrete tracked tasks now that the major sequencing
+   decisions are settled.
+
+* Milestone 1 code breakdown
+
+This section translates the Milestone 1 plan into concrete implementation work
+against the current repository files. It is still a planning artifact, not an
+implementation record.
+
+** File responsibilities
+
+- [delib-flow.el](/home/j-holliday/.emacs.d/site-lisp/delib-flow/delib-flow.el:1)
+  should continue to hold the Milestone 1 runtime, state helpers, rendering,
+  lifecycle commands, and action dispatch.
+- [test/delib-flow-test.el](/home/j-holliday/.emacs.d/site-lisp/delib-flow/test/delib-flow-test.el:1)
+  should grow into the main Milestone 1 contract test file.
+- [docs/implementation-plan.org](/home/j-holliday/.emacs.d/site-lisp/delib-flow/docs/implementation-plan.org:1)
+  is the planning source of truth for task order and accepted contracts.
+
+** Task sequence
+
+1. Run-state refactor in `delib-flow.el`
+- Replace the current ad hoc top-level keys like `:working-context`,
+  `:stage-results`, `:approvals`, `:filing-plan`, `:audit-metadata`, and
+  `:session-metadata` with the agreed fixed domains:
+  `:source`, `:working-context`, `:stage-history`, `:actions`, `:routing`,
+  `:filing`, `:audit`, `:session`, and `:ui`.
+- Move the frozen source snapshot out of `:working-context` into `:source`.
+- Introduce helper accessors and updaters rather than scattered direct
+  `plist-get` chains for core state reads.
+- Seed initial editable-block objects in `:ui` and store their IDs in
+  `:working-context`.
+- Add initial section anchors and render metadata under `:ui`.
+
+Why first:
+- Every later rendering, lifecycle, and action task depends on stable state
+  shape.
+
+2. Lifecycle semantics in `delib-flow.el`
+- Replace implicit “buffer exists therefore run exists” behavior with explicit
+  run status in `:session`.
+- Define start behavior when a run is already active.
+- Add an explicit abort path and a refresh path as first-class Milestone 1
+  actions, even if they are simple at first.
+- Keep kill-buffer teardown, but make it operate through the new session state
+  and singleton validation rules.
+
+Why second:
+- Rendering and actions should target an explicit lifecycle model, not the
+  current implicit one.
+
+3. Action object layer in `delib-flow.el`
+- Replace string-only “Valid next actions” content with structured action
+  objects in `:actions`.
+- Add a computation function that derives the initial Milestone 1 action set:
+  `inspect-source`, `abort-run`, and `refresh-buffer`.
+- Add action status computation for `available`, `blocked`, and `placeholder`.
+- Keep `inspect-source` as a placeholder action for now, with explicit reason
+  text.
+
+Why third:
+- The control buffer should render from computed workflow state rather than
+  placeholders before the buffer contract is finalized in code.
+
+4. Rendering split in `delib-flow.el`
+- Break `delib-flow--section-content` into section-specific renderer functions.
+- Introduce a section registry or dispatch table keyed by stable section IDs
+  rather than plain display strings only.
+- Stop relying on `view-mode`, since Milestone 1 needs mixed editable and
+  managed regions.
+- Add top-level section anchors and subsection anchors to rendered content.
+
+Why fourth:
+- The current whole-buffer string builder is too coarse for editable blocks and
+  section-by-section rerender.
+
+5. Editable-block layer in `delib-flow.el`
+- Add data constructors and lookup helpers for editable-block objects.
+- Render `#+begin_delib-edit context` and `#+begin_delib-edit notes` blocks in
+  the `Working context` and `Current decision` sections.
+- Track per-block snapshots so the package can compare original versus current
+  text.
+- Define the initial edit lifecycle states `clean` and `edited`.
+
+Why fifth:
+- This is the first point where the direct in-buffer editing model becomes
+  real, and it depends on the new render structure.
+
+6. Managed-region protection and conflict detection in `delib-flow.el`
+- Mark package-owned regions as read-only or equivalently protected.
+- Detect package-managed edits if they occur anyway.
+- Store conflict state under `:ui :managed-region-conflicts`.
+- Make next-action validation fail when managed-region conflicts exist.
+
+Why sixth:
+- The mixed editable/managed contract is unsafe without explicit conflict
+  handling.
+
+7. Section-by-section rerender behavior in `delib-flow.el`
+- Add lookup helpers that find sections by anchor ID.
+- Implement rerender for individual sections using managed anchors and stored
+  editable-block snapshots.
+- Preserve editable block contents when the surrounding managed section is
+  refreshed.
+- Keep a full-buffer render path for initial creation, but make refresh use the
+  section-aware machinery.
+
+Why seventh:
+- Editable blocks are not viable unless rerender preserves them.
+
+8. Baseline interactive commands in `delib-flow.el`
+- Keep `delib-flow-start` as the entry point, updated for the new state model.
+- Add at least one explicit refresh command and one explicit abort command for
+  Milestone 1.
+- Add action dispatch plumbing so button-like action entries can call handlers
+  deterministically.
+
+Why eighth:
+- This connects the data model and buffer UI into an operable shell.
+
+9. Contract tests in `test/delib-flow-test.el`
+- Update run-initialization tests for the new top-level schema.
+- Add tests for seeded editable blocks and section anchors.
+- Add tests for computed action objects and their baseline statuses.
+- Add tests that the control buffer renders the required sections and editable
+  blocks.
+- Add tests for one-active-run enforcement.
+- Add tests for teardown clearing active run state.
+- Add tests for frozen source snapshots surviving source-buffer edits after run
+  start.
+- Add tests for refresh preserving editable block contents.
+
+Why ninth:
+- The code is expected to move quickly once the scaffolding starts changing; the
+  tests need to lock the new contracts down immediately.
+
+** Suggested implementation slices
+
+These are the slices I recommend using when we actually begin coding.
+
+Slice A: state and tests
+- Refactor run initialization.
+- Update state-shape tests.
+- Add accessor helper tests if needed.
+
+Slice B: actions and lifecycle
+- Add action objects.
+- Add abort and refresh commands.
+- Add one-active-run tests.
+
+Slice C: renderer restructuring
+- Split renderers by section.
+- Remove `view-mode`.
+- Add anchor-bearing section output.
+
+Slice D: editable blocks
+- Add block objects and render them.
+- Add snapshot comparison.
+- Add tests for editable-block presence and preservation.
+
+Slice E: protection and rerender
+- Add managed-region protection.
+- Add conflict detection.
+- Add section-by-section rerender and refresh tests.
+
+** Slice A: exact breakdown
+
+Slice A is the first implementation slice. Its purpose is to replace the
+current scaffold state model with the agreed run-state contract and lock that
+contract down with tests before UI behavior becomes more complex.
+
+Scope limits:
+- No action buttons yet.
+- No editable block rendering yet.
+- No section-by-section rerender yet.
+- No explicit lifecycle commands beyond what is necessary to keep
+  `delib-flow-start` coherent under the new state shape.
+
+Target files:
+- [delib-flow.el](/home/j-holliday/.emacs.d/site-lisp/delib-flow/delib-flow.el:1)
+- [test/delib-flow-test.el](/home/j-holliday/.emacs.d/site-lisp/delib-flow/test/delib-flow-test.el:1)
+
+Planned changes in `delib-flow.el`:
+
+1. Replace the current `delib-flow--initialize-run` shape
+- Remove the current top-level domains:
+  - `:stage-results`
+  - `:approvals`
+  - `:filing-plan`
+  - `:audit-metadata`
+  - `:session-metadata`
+- Introduce the agreed top-level domains:
+  - `:source`
+  - `:working-context`
+  - `:stage-history`
+  - `:actions`
+  - `:routing`
+  - `:filing`
+  - `:audit`
+  - `:session`
+  - `:ui`
+- Move source snapshot storage from `:working-context` to `:source`.
+
+2. Add small state-construction helpers
+- Add `delib-flow--make-editable-block`
+- Add `delib-flow--initial-editable-blocks`
+- Add `delib-flow--initial-section-anchors`
+- Add `delib-flow--initial-actions-state`
+- Add `delib-flow--initial-session-state`
+- Add `delib-flow--initial-ui-state`
+
+Rationale:
+- These helpers keep `delib-flow--initialize-run` below the complexity ceiling
+  and make the state contract testable in pieces.
+
+3. Add small state-access helpers
+- Add `delib-flow--run-source`
+- Add `delib-flow--run-working-context`
+- Add `delib-flow--run-session`
+- Add `delib-flow--run-ui`
+- Add `delib-flow--run-actions`
+
+Rationale:
+- Slice A should begin moving away from deep repeated `plist-get` chains even
+  before the rendering refactor.
+
+4. Update code that currently assumes the old shape
+- Update `delib-flow--section-content` so the `Source` and `Current decision`
+  sections read from `:source` and `:session`.
+- Keep placeholder content elsewhere if needed, but make it read from the new
+  state shape where applicable.
+- Keep `delib-flow-start` behavior intact while ensuring the active run uses the
+  new schema.
+
+5. Keep lifecycle changes minimal in Slice A
+- Preserve the current active-run singleton variable.
+- Preserve the current kill-buffer teardown hook.
+- Only make the minimum adjustments needed so teardown clears the new run state
+  cleanly.
+
+Functions expected to exist after Slice A:
+- `delib-flow--snapshot-heading`
+- `delib-flow--make-editable-block`
+- `delib-flow--initial-editable-blocks`
+- `delib-flow--initial-section-anchors`
+- `delib-flow--initial-actions-state`
+- `delib-flow--initial-session-state`
+- `delib-flow--initial-ui-state`
+- `delib-flow--initialize-run`
+- `delib-flow--run-source`
+- `delib-flow--run-working-context`
+- `delib-flow--run-session`
+- `delib-flow--run-ui`
+- `delib-flow--run-actions`
+
+Planned test changes in `test/delib-flow-test.el`:
+
+1. Keep and update existing tests
+- Keep `delib-flow-snapshot-heading-captures-title-and-content`.
+- Replace `delib-flow-initialize-run-contains-source-snapshot` with a stronger
+  schema test that asserts the new top-level domains and source placement.
+- Keep `delib-flow-start-requires-heading-at-point`.
+- Keep `delib-flow-render-control-buffer-contains-required-sections`, but update
+  any fixture shape needed for the new run contract.
+
+2. Add new state-shape tests
+- `delib-flow-initialize-run-contains-required-top-level-keys`
+- `delib-flow-initialize-run-stores-source-in-source-domain`
+- `delib-flow-initialize-run-seeds-editable-blocks`
+- `delib-flow-initialize-run-seeds-section-anchors`
+- `delib-flow-initialize-run-seeds-session-state`
+
+3. Add helper-focused tests where useful
+- `delib-flow-make-editable-block-returns-expected-shape`
+- `delib-flow-initial-section-anchors-contains-required-sections`
+
+4. Add a minimal active-run lifecycle assertion
+- `delib-flow-control-buffer-killed-clears-active-run`
+
+Expected test assertions:
+- Top-level run keys match the agreed domains.
+- `:source` contains the frozen source snapshot.
+- `:working-context :editable-block-ids` includes `context-main` and
+  `operator-notes`.
+- `:ui :editable-blocks` contains block objects keyed by those IDs.
+- `:ui :section-anchors` contains all seven top-level sections.
+- `:session :status` starts as `active`.
+- `:session :current-decision` is seeded from the new session domain.
+
+Acceptance criteria for Slice A:
+- `delib-flow--initialize-run` conforms to the new schema.
+- Existing rendering still works against the new schema without introducing new
+  UI behavior yet.
+- Tests cover the new schema and initial helper outputs strongly enough to keep
+  aggregate coverage on track for the 90 percent gate.
+- No function introduced in Slice A should exceed cyclomatic complexity 5.
+
+Recommended implementation order inside Slice A:
+
+1. Add helper constructors first.
+2. Rewrite `delib-flow--initialize-run`.
+3. Add access helpers.
+4. Update `delib-flow--section-content` to read the new state shape.
+5. Update and expand tests.
+6. Run validation before moving to Slice B.
+
+** Known implementation risks
+
+- Removing `view-mode` too late will complicate every later step; it should be
+  treated as an early change.
+- If anchor IDs are not introduced before rerender work, later buffer-preserve
+  logic will be brittle.
+- If action computation stays string-based too long, the control buffer will
+  need to be rewritten again before stage execution.
+- Tests that only assert visible text will be too weak; Milestone 1 also needs
+  state-shape and lifecycle assertions.
+- Coverage and complexity validation may force smaller implementation slices
+  than the architectural sequence alone would suggest.
+- If validation commands are not introduced early, later work may accumulate in
+  ways that are expensive to split back down under the complexity ceiling.

@@ -1,21 +1,364 @@
 :PROPERTIES:
-:SOURCE:   /home/j-holliday/org/zk/wrk/20260425145925.org
+:ID:       11c98343-ffea-4771-baff-4578fe1e3b8e
 :END:
-#+title: delib-flow design snapshot
+#+title: delib-flow design
+#+subtitle: Repository-local copy of the canonical workflow design note
 
-This file is a copied design snapshot for implementation use.
+This file is the repository-local design contract for `delib-flow`.
 
-The current canonical working design note lives at:
+It was copied from the canonical working note at
+`/home/j-holliday/org/zk/wrk/20260425145925.org` on 2026-04-26 and lightly
+normalized for repository use. The substantive workflow design remains the same.
 
-- [[file:/home/j-holliday/org/zk/wrk/20260425145925.org][20260425145925.org]]
+* Process scope
+- Using AI agents to handle clarifying information input into my [[id:47bbd1a8-9645-43d6-9a17-7b85f631114f][PARA]] / [[id:8e4d775a-744f-4688-8336-9a2a679bd17d][GTD]] system for keeping knowledge and actions.
+- Version 1 scope is limited to email and meeting notes.
+- Email enters the system through manual import from Outlook into an Emacs inbox as an org item.
+- Meeting notes already exist in Org-roam daily journal files.
+- Version 1 is an MVP. Broader input sources can be considered later.
+- Processing is initiated by the human from Emacs while the cursor is on the source org item.
+- The workflow is human-guided rather than fully autonomous.
+- Outlook import is outside the package boundary for version 1, which begins once point is on an org item that should be processed.
+- Local models are used first. Cloud models may only receive sanitized summaries or redacted entries, and only after human review and explicit decision to send.
+- Approved outputs should be inserted deterministically through Org capture templates or equivalent structured insertion methods rather than free-form AI writes.
+- The workflow should preserve an audit trail for trust and diagnostics.
+- The system should be implemented as an Emacs package rather than living entirely in personal config.
 
-Before implementation begins in earnest, copy or refine the relevant sections
-from the working note into this repository-local document as needed.
+* Process swimlanes
+- Local LLM (llama3)
+- OpenAI LLM (To be determined)
+- Human
+- Outside world (email and meeting notes for version 1)
+  
+* Process activities
+- Identify or propose associated project
+- Extract actions, waiting-for items, and reference-worthy knowledge
+- Prepare reviewable derivative outputs without modifying source material
+- Collaborate with the human when project definition or interpretation is unclear
+- Support tagging and metadata improvement to make future matching stronger
+- Present workflow state in a single control buffer with review actions
+- Enrich source understanding incrementally across multiple workflow passes
+- Retrieve and filter PKM context before downstream reasoning when useful
+- Guide the human through only valid next actions while still showing workflow state and context
 
-* Current implementation target
+* Process actions
+- Inspect source
+- Check for an associated project
+- Discover relevant reference material
+- Filter useful reference material
+- Propose a new project collaboratively if no associated project is found
+- Define actions from the source item
+- Extract waiting-for tasks
+- Suggest reference notes for PKM or project support
+- Include advice for carrying out user actions
+- Keep suggested actions as atomic as possible
+- Prompt the human through a project start checklist when a new project is needed
+- Allow the human to choose optional checklist items before project creation
+- Decide whether a stage should stay local or be passed to cloud after review
+- Sanitize content for cloud processing
+- Reintegrate cloud outputs back into local non-anonymized context
+- Integrate approved outputs into the source context without modifying the source item
+- Insert approved results into target files through deterministic capture patterns
+- Preserve intermediate outputs for review, regeneration, and diagnostics
+- Present one best-guess project match while allowing rejection, retry, or manual correction
+- Suggest metadata improvements for existing projects when they are being processed
+- Allow the human to mark an item as non-actionable, archive-worthy, or reference-only
 
-- Milestone 1 package skeleton
-- One active run at a time
-- Org-mode control buffer
-- Frozen source snapshot from heading at point
-- No model execution or filing yet
+* Process objects
+- GTD notes
+- Emacs inbox org items
+- Org-roam daily journal meeting notes
+- Derived notes and tasks
+- Temporary review buffers
+- My Projects roam file
+- Active, Complete, and Waiting project sections
+- Project-linked reference files for larger projects
+- Audit trail records
+- Time-sorted workflow log file
+- Incrementally enriched source analysis package
+- Project metadata drawers
+- Prompt library org file with stable IDs
+- Example structures org file
+
+* Preconditions
+- The human has placed point on the org item to be processed.
+- The source item is either an imported email item or a meeting note entry.
+- The My Projects roam file is the authoritative project registry for matching and filing.
+- Prompt templates are maintained in a prompt library org file and referenced by stable IDs.
+
+* New project checklist
+- Mandatory
+  - Project title
+  - Project state as Active or Waiting
+  - One next action or one waiting-for item
+  - Relevant tags
+  - Linked contacts where matching Org-roam person notes exist
+- Optional
+  - Project summary
+  - Linked reference file
+  - Deadline
+  - Priority
+  - Success criteria
+  - Links to related notes
+
+* Inspection schema
+- Source type
+- Summary
+- Entities
+- Contacts
+- Terms
+- Commitments
+- Dates
+- Blockers
+- Decisions
+- Questions
+- Links
+- Notable statements
+
+* Workflow stages
+- Inspect source
+- Match project
+- Discover relevant reference material
+- Filter useful reference material
+- Propose new project
+- Extract actions
+- Extract waiting-for
+- Suggest reference notes
+- Decide on cloud pass
+- Sanitize for cloud
+- Integrate into source
+- File approved outputs
+
+* Reference material discovery
+- Inspect source should identify search terms to search the PKM.
+- Discovery should include directly attached project reference material when a project is known.
+- Directly linked project material is the highest-priority retrieval source.
+- The broader PKM scan should use notes under `/zk` as the searchable zettelkasten corpus for version 1.
+- Discovery should use a simple weighted relevance pass first to gather candidate notes.
+- Candidate sources may include PKM notes whose titles, tags, contacts, links, or terms overlap with the source analysis.
+- The first pass is expected to over-retrieve rather than be precise.
+- Retrieved material should be added to the temporary working context for later filtering.
+- Weighted relevance should prioritize tag matches and title matches first.
+- Link tracing should carry the next strongest weight.
+- General term matching across the PKM should be used as a broader, lower-precision retrieval layer.
+
+* Reference material filtering
+- A second pass should remove irrelevant or low-value context filler from retrieved candidates.
+- Filtering should optimize for relevance to actions, follow-up, prior decisions, constraints, and context needed to interpret the source item correctly.
+- The filter should preserve unusual implementation details, contact-specific preferences, and project-specific constraints when they materially affect what should happen next.
+
+* Review and retry controls
+- The human should be able to edit the source slice sent to the model before a retry.
+- The human should be able to add or change prompt instructions before a retry.
+- The human should be able to choose whether to continue locally or switch to a cloud stage after review.
+- Any edited source, context, or prompt should require approval before being sent to an LLM.
+- Actions should be represented more as selection from valid paths than unconstrained free text generation.
+- Source text, context packages, and prompts should remain editable free text in the control workflow.
+- The control buffer should behave like a guided workflow, showing stages already run and only currently valid next actions.
+- The interface should preserve visibility into what has happened and what context is being used.
+
+* Cloud sanitization rules
+- Replace names with roles
+- Remove email addresses
+- Remove URLs
+- Anonymize client companies and contacts
+- Rewrite identifying business context into generalized descriptions
+- Keep non-identifying technical terms
+- Remove internal project names
+- Any cloud pass must happen only after human review and explicit approval
+- After a cloud action, the local LLM should reintegrate returned output into the original non-anonymized local context
+- Any reasoning stage may switch to cloud processing if the sanitization path is followed first
+
+* Cloud-pass mechanics
+- Any reasoning stage may be routed through cloud processing as long as it can pass through the sanitization path first.
+- A cloud pass should follow this sequence: prepare sanitized package, allow manual edits to the package, show the package for review, approve send, run the cloud stage, show the returned result, and approve candidate reintegration.
+- The sanitized package should contain the same kinds of material that would have been included in the non-sanitized stage input, with names and client-sensitive data obscured according to the active sanitization rules.
+- The sanitized package should remain editable before send, just like local stage context and prompt material.
+- Cloud output should be shown first as a candidate merge back into the main local working context rather than being reintegrated automatically.
+- If a cloud pass fails, times out, or returns poor output, the workflow should not assume a fallback path automatically.
+- After a cloud pass problem, the human should decide whether to retry, edit and retry, fall back to local processing, skip, or abort.
+- The audit log should record both the sanitized package that was actually sent and the reintegrated local result that was ultimately accepted.
+- Redaction policy may be controlled through prompt design, and cloud use for a given stage may also be disabled through configuration variables.
+
+* Stage transition rules
+- After `Inspect source`, valid next actions should include `Match project`, `Discover relevant reference material`, `Decide on cloud pass`, `Retry inspect`, and `Abort`.
+- After `Match project`, a matched or ambiguous result should still allow the human to disagree and choose a manual match or propose a new project.
+- After `Match project`, a matched project should unlock `Discover relevant reference material`, `Extract actions`, `Extract waiting-for`, and `Suggest reference notes`.
+- After `Match project`, an ambiguous result should allow manual project choice, retry, disagreement with the match result, and new-project creation.
+- After `Match project`, a no-match result should allow manual match, retry, and new-project creation.
+- `Discover relevant reference material` should require `Inspect source` to have run first.
+- `Filter useful reference material` should require `Discover relevant reference material` to have run first.
+- `Extract actions`, `Extract waiting-for`, and `Suggest reference notes` should be runnable independently and in any order once sufficient context exists.
+- `Suggest reference notes` may be used to suggest a general PKM note before project context exists if the human chooses that path.
+- `File approved outputs` should become available only when there is at least one approved artifact or change candidate ready to file.
+- `Integrate into source` should be available after any major stage output, not only after cloud-returned results.
+
+* Prompt execution contract
+- Every stage execution should follow the same base contract: resolve prompt ID, assemble the context package, optionally sanitize, allow human edits, submit to the selected model, capture raw output, normalize into a stage result, and present the result for review.
+- Stage outputs should be normalized into Org-native forms so they are easier to inspect, edit, and reuse inside Org workflows.
+- If a model returns malformed output, `delib-flow` should attempt one automatic local repair pass before surfacing raw output for human review.
+- If repair does not succeed, the raw output should be shown and the human should decide how to proceed.
+- Prompt execution should always record prompt ID, prompt version, selected model or provider, exact input package, and raw output.
+- When the human manually edits a context package before execution, that edited package should become the canonical input snapshot for that attempt.
+- The package architecture should make stage-specific postprocessors feasible even if version 1 keeps normalization simple.
+- The package architecture should also make future additional stages feasible without redesigning the execution contract.
+
+* Deterministic insertion contract
+- Version 1 should support first-class filing actions for creating a project item, inserting a next-action child, inserting a waiting-for child, updating a project metadata drawer, creating a project support note, creating a general PKM note, and inserting or updating a project link to a support note.
+- Version 1 metadata updates should remain limited to tags, contacts, reference file links, and optional checklist fields.
+- Each filing action should target exactly one artifact or location at a time.
+- Coupled changes should remain separate filing actions rather than a single composite action.
+- Filing actions should rely on normal Emacs buffer or capture operations so standard undo behavior is sufficient.
+- Filing previews should show only final rendered Org blocks, without a low-level diff or patch view.
+- If a filing target has changed since preview preparation, `delib-flow` should warn the human and let the human decide how to proceed.
+- General PKM note creation should always go through the configured capture template.
+- Project support note creation should also follow the configured capture-template path when capture is used for that artifact.
+
+* Validation policy matrix
+- Validation behavior should be configurable per rule through variables, with defaults enabled in warning mode.
+- Project item creation validations for title safety or length, state presence, presence of a next action or waiting-for item, required tags, and contacts should all default to warnings.
+- Project item warnings should allow the human to manually resolve the issue, retry, or ignore the warning.
+- Next-action validations for pomodoro-sized scope, direct executability, and clear context should default to warnings.
+- Weak next-action outputs should warrant one automatic retry before being surfaced for human review.
+- Waiting-for validations for explicit blocker or dependency, linked or plain-text contact when applicable, and current blocked-state phrasing should default to warnings.
+- For reference-note creation, required Org-roam fields should be treated as blocking validations.
+- Other note validations such as title presence, tags, and broader reuse justification for PKM notes should default to warnings.
+- When a blocking validation prevents filing, the control workflow should allow the human to edit and retry.
+
+* Audit-log entry format
+- The audit log should use one top-level Org heading per workflow run.
+- Run headings should be timestamp-first in their title.
+- Each executed stage should appear as a nested heading under the run heading.
+- The run heading should include compact machine-usable properties such as source link, started-at timestamp, and run status.
+- Run status should support at least `completed`, `aborted`, and `partial`.
+- Stage headings should include compact machine-usable properties such as stage name, prompt ID, prompt version, model provider, model name, started-at timestamp, ended-at timestamp, approval state, and input snapshot reference.
+- Stage subtrees should contain foldable content sections for the exact input package, raw output, normalized result, and human edits when present.
+- A separate approval-note subtree is not required for version 1; the approval property is sufficient.
+
+* Control-buffer content contract
+- The control buffer should use a stable top-level heading layout in this order: `Source`, `Working context`, `Stage history`, `Current decision`, `Valid next actions`, `Filing preview`, and `Audit status`.
+- The `Source` section should contain the frozen source snapshot captured when the workflow started, along with source type.
+- The `Working context` section should contain the current merged context model, including the latest inspect output, retained snippets, and accepted manual edits.
+- The `Working context` section should also contain a visible subsection for the sanitized cloud package whenever one is being prepared or reviewed.
+- The `Stage history` section should contain one subtree per executed stage.
+- Stage-history subtrees should default to collapsed except for the latest stage.
+- Each stage subtree should show the normalized result prominently, with prompt text, input package, raw output, and related artifacts under foldable subheadings.
+- The `Current decision` section should represent the current unresolved operator choice.
+- The `Valid next actions` section should contain only actions that are currently legal from the present run state.
+- The `Filing preview` section should show rendered Org blocks for approved filing actions when such actions exist.
+- The `Audit status` section should show current run status, audit-path readiness, and whether stage data is ready to append.
+
+* Error and interruption semantics
+- If the human explicitly aborts a run, the control buffer should close immediately.
+- If a local or cloud model call times out, the timeout should be surfaced in the `Current decision` section.
+- After a timeout, the workflow should offer retry, edit and retry, switch between local and cloud where valid, skip, or abort.
+- If a stage output is malformed and the one automatic repair pass also fails, the raw output should be shown in stage history.
+- If malformed output cannot be repaired, no normalized result needs to be forced; the workflow should present the raw output and let the human decide what to do next.
+- If a filing action partially changes a target before failing, `delib-flow` should surface the resulting buffer state and warn the human.
+- In version 1, `delib-flow` should not attempt rollback for partial filing failures.
+- Because saving remains a manual human action, the human remains responsible for resolving partially changed buffers.
+- Partial filing failures should still be surfaced clearly for diagnostics.
+- If a required external dependency goes missing mid-run, the workflow should keep the run alive and block only the dependent actions.
+- Blocked actions should show the reason they are currently unavailable.
+- The workflow does not need to warn before the control buffer is closed.
+- A run should still count as a success when filing actions were handled appropriately or when the workflow determined that no filing actions were needed.
+
+* External dependency contract
+- Org-roam should be treated as optional but strongly preferred for version 1.
+- Org-roam should create stage-level dependencies rather than a hard package dependency.
+- `delib-flow` may assume that the Org-roam database is already available and up to date.
+- Search should prefer `rg`, and version 1 may treat `rg` as a required dependency if that materially hardens retrieval behavior.
+- Capture templates for project support notes and general PKM notes should have package-provided defaults when no user configuration is supplied.
+- Local model access should use one configurable adapter interface in version 1 rather than multiple built-in provider backends.
+- Cloud model access should also use one configurable adapter shape in version 1.
+- Missing cloud adapter configuration should block only cloud-dependent features.
+- `delib-flow` should remain fully usable as a local-only workflow when no cloud support is configured.
+
+* Minimal version-1 scope cut
+- Version 1 inputs should be limited to imported email Org items and meeting notes in daily notes.
+- Version 1 model paths should include a fully local workflow and an optional cloud path that operates only through sanitization.
+- Version 1 stage coverage should include `Inspect source`, `Match project`, `Discover relevant reference material`, `Filter useful reference material`, `Propose new project`, `Extract actions`, `Extract waiting-for`, `Suggest reference notes`, `Decide on cloud pass`, `Sanitize for cloud`, `Integrate into source`, and `File approved outputs`.
+- Version 1 filing actions should include creating a project item, inserting a next-action child, inserting a waiting-for child, updating a project metadata drawer, creating a project support note, creating a general PKM note, and inserting or updating a project support-note link.
+- Explicitly deferred beyond version 1 should be automated inbox ingestion from Outlook, multiple simultaneous runs, richer UI customization, richer metadata editing, anti-example support, multiple provider-specific built-in backends, and post-project review or archive automation.
+
+* Process flow
+#+BEGIN_SRC plantuml :file /tmp/delib-flow-my-ai-secretary-process.svg :results file 
+@startuml
+!include /home/j-holliday/.emacs.d/plantuml-templates/activity_modern.puml
+|Human|
+start
+:Place point on source org item in Emacs;
+:Run `delib-flow` main command;
+|Local LLM|
+:Inspect source and build working context;
+|Human|
+:Review source analysis in control buffer;
+:Choose next valid action;
+|Local LLM|
+:Match project against My Projects and linked project artifacts;
+|Human|
+:Approve match, retry, or choose manual match/new project path;
+|Local LLM|
+:Discover candidate reference material;
+:Filter useful snippets into working context;
+|Human|
+:Review context and choose next valid action;
+if (Send next reasoning stage to cloud?) then (yes)
+	|Human|
+	:Approve sanitized cloud pass;
+	|Local LLM|
+	:Build sanitized cloud context;
+	|OpenAI LLM (To be determined)|
+	:Run selected reasoning stage;
+	|Local LLM|
+	:Reintegrate returned output into local context;
+	|Human|
+	:Review reintegrated result;
+else (no)
+endif
+|Local LLM|
+:Draft actions as Org headings;
+:Draft waiting-for items;
+:Draft project support and or PKM reference notes;
+|Human|
+:Review, edit, retry, skip, or approve stage outputs;
+:Select approved filing actions;
+|Local LLM|
+:Render deterministic filing previews;
+|Human|
+:Execute approved filing actions one at a time;
+:Review opened change buffers before saving;
+stop
+@enduml
+#+END_SRC
+
+#+RESULTS:
+[[file:/tmp/delib-flow-my-ai-secretary-process.svg]]
+
+* Steps
+- Human places point on an email org item or meeting note in Emacs.
+- Workflow analyzes the source item without modifying it.
+- Inspect source should extract summary, entities, contacts, terms, commitments, dates, blockers, decisions, questions, links, and notable statements.
+- Source inspection may run multiple times, with each pass enriching the working context for the next action.
+- Workflow checks for an associated project in the My Projects roam file.
+- Project matching should use project names, tags, links, contacts, and related metadata.
+- The workflow should present one best-guess project match with reasons.
+- The human can reject the match, ask for another attempt, or provide the correct project directly.
+- Human guidance can refine tags or metadata to improve future matching.
+- The workflow can discover relevant reference material by generating search terms and running a weighted candidate retrieval pass across the PKM.
+- Directly attached project reference material should also be checked when available.
+- Retrieved candidates should be filtered in a second pass to remove low-value context filler before being used downstream.
+- If no project is found, workflow collaborates with the human to define a new project through a project start checklist.
+- Mandatory and optional checklist items should be distinguished, and optional items should be selectable by the human.
+- Workflow proposes atomic actions, one next action, possible follow-up actions, waiting-for items, and candidate reference notes.
+- Atomic actions should be directly executable in a specific context and fit within one 25-minute pomodoro.
+- Each step is reviewable, regeneratable, and manually adjustable before moving to the next step.
+- At each stage, the human can choose to continue locally or prepare a sanitized cloud pass.
+- Any reasoning stage may be routed through cloud processing after sanitization and explicit approval.
+- Waiting-for includes delegated tasks and any dependency that blocks further project progress.
+- The workflow may determine that an item is non-actionable and should be archived or kept only as reference.
+- For non-actionable items, the system may propose a general PKM reference note, project support material, or archive handling, with the final choice left to the human.
+- Existing project next actions should be filed as direct TODO children under the project item and tagged `next_action`.
+- Existing project waiting-for items should be filed as direct WAITING children under the project item.
+- Projects should stay under Active if there is any action available to move them forward.
+- Projects should move under Waiting only when no further action can currently move them forward.
