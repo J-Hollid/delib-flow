@@ -1,10 +1,14 @@
 :PROPERTIES:
 :ID:       11c98343-ffea-4771-baff-4578fe1e3b8e
 :END:
-#+title: My AI secretary
-#+filetags: :working_file:
+#+title: delib-flow design
+#+subtitle: Repository-local copy of the canonical workflow design note
 
-Belongs to: [[id:752af2d9-d66f-4007-8616-4d7f34baab0c][my process library]]
+This file is the repository-local design contract for `delib-flow`.
+
+It was copied from the canonical working note at
+`/home/j-holliday/org/zk/wrk/20260425145925.org` on 2026-04-26 and lightly
+normalized for repository use. The substantive workflow design remains the same.
 
 * Process scope
 - Using AI agents to handle clarifying information input into my [[id:47bbd1a8-9645-43d6-9a17-7b85f631114f][PARA]] / [[id:8e4d775a-744f-4688-8336-9a2a679bd17d][GTD]] system for keeping knowledge and actions.

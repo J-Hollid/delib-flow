@@ -1,0 +1,19 @@
+#+title: delib-flow changelog
+
+All notable repository changes should be recorded in this file.
+
+The format is intentionally simple for now: reverse-chronological headings with
+dated entries.
+
+* 2026-04-26
+
+- Replaced the stub `docs/design.org` with a repo-local copy of the canonical
+  design note.
+- Added `docs/implementation-plan.org` to separate execution planning from the
+  design contract.
+- Added `CHANGELOG.org`.
+- Updated `README.org` to point to the design document, implementation plan,
+  and changelog.
+- Updated `docs/implementation-plan.org` with agreed planning decisions:
+  shared adapter recommendation, direct in-control-buffer editing, and
+  audit-before-filing milestone order.

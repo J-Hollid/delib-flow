@@ -1,0 +1,270 @@
+#+title: delib-flow implementation plan
+
+This document tracks the implementation plan for `delib-flow` separately from
+the product and workflow design in [[file:design.org][design.org]].
+
+It is intentionally execution-oriented. The design document defines what the
+package should do. This plan defines the current understanding of the work,
+open decisions that still require agreement, and the milestone sequence we
+intend to implement.
+
+* Planning status
+
+- Implementation has not started in earnest.
+- The current codebase is a scaffold for one active run, a frozen source
+  snapshot, and a placeholder control buffer.
+- This plan should be kept in sync with changes in scope or implementation
+  order.
+
+* Current understanding
+
+- `delib-flow` starts from the Org heading at point and captures a frozen source
+  snapshot for the duration of the run.
+- The package presents workflow state in a dedicated Org-mode control buffer.
+- The workflow is human-guided rather than autonomous.
+- Version 1 inputs are limited to imported email Org items and meeting notes in
+  daily notes.
+- Version 1 is local-first. Cloud use is optional, stage-specific, and only
+  allowed through a sanitization and explicit approval path.
+- Stage outputs are reviewable artifacts, not direct source mutations.
+- Filing must be deterministic and scoped to explicit approved actions.
+- The system must preserve an audit trail sufficient for trust, review, and
+  diagnostics.
+
+* Requirements summary
+
+** Core workflow requirements
+
+- Preserve the source item unchanged while deriving working context and filing
+  candidates from it.
+- Represent workflow progress as stage history plus a current decision and valid
+  next actions.
+- Allow the human to inspect, retry, edit, approve, skip, or abort at
+  stage-appropriate points.
+- Keep the control interface constrained to currently legal actions rather than
+  open-ended command entry.
+
+** Data and state requirements
+
+- Maintain a structured run state containing source snapshot, working context,
+  stage results, approvals, filing candidates, routing metadata, and audit
+  metadata.
+- Record enough per-stage input and output data to support regeneration,
+  diagnostics, and later audit-log append.
+- Keep sanitized cloud packages separate from local non-sanitized working
+  context.
+
+** Integration requirements
+
+- Match against the authoritative My Projects file.
+- Retrieve candidate context from Org-roam and or `rg`-based PKM search when
+  relevant.
+- Support one configurable local model adapter and one configurable cloud model
+  adapter shape.
+- File approved artifacts through deterministic Emacs and Org operations,
+  preferring capture templates where appropriate.
+
+** Reliability requirements
+
+- Keep runs alive across stage failures when possible.
+- Surface malformed output, timeout, dependency, and partial filing failures
+  clearly in workflow state.
+- Avoid silent fallback across local and cloud execution paths.
+
+* Open design decisions
+
+These are the main decisions that still look implementation-shaping rather than
+purely cosmetic.
+
+1. Prompt storage and versioning
+   The design depends on stable prompt IDs and prompt versions. We need to
+   decide how prompts are resolved from Org, how versions are encoded, and what
+   exact snapshot is persisted into audit state.
+2. Stage result normalization format
+   The design requires Org-native normalized outputs, but not the exact schema
+   for each stage result. We need a concrete internal format that is stable
+   enough for rendering, approval, filing, and audit.
+3. Project matching strategy
+   The matching criteria are described, but we still need to decide whether
+   version 1 uses simple heuristics first, model-assisted ranking, or a hybrid
+   pipeline.
+4. Reference retrieval pipeline
+   Weighted retrieval and filtering are specified conceptually. We need to fix
+   the concrete retrieval inputs, scoring scheme, and whether filtering is
+   heuristic, model-assisted, or both.
+5. Filing target abstraction
+   The filing contract is clear about deterministic actions, but not the
+   internal abstraction for addressing a project item, metadata drawer, support
+   note, or capture target.
+6. Audit-log write timing details
+   Audit logging should arrive before deterministic filing, and stage data
+   should be appended incrementally for diagnostics. We still need to decide
+   the exact append checkpoints and what minimum data should be written before
+   a stage is fully approved.
+
+* Agreed planning decisions
+
+These decisions are settled unless we explicitly revise them later.
+
+1. Adapter boundary
+   Recommendation: define one stage-execution adapter contract shared by local
+   and cloud paths, with provider-specific configuration behind it.
+   The adapter should accept a stage descriptor plus a prepared input package
+   and return a structured result object with provider metadata, raw output,
+   normalized output or normalization failure, and execution status.
+   Rationale: this keeps stage orchestration uniform and makes cloud routing a
+   policy decision rather than a separate execution architecture.
+2. Human editing model
+   Editable artifacts should be edited directly inside the control buffer
+   before selecting the next action.
+   Rationale: that matches the guided-workflow model and keeps operator context
+   visible while reducing buffer-hopping during review and retry flows.
+3. Audit-first sequencing
+   Audit logging should be implemented before deterministic filing.
+   Rationale: audit data is part of the trust model and provides diagnostics
+   while the more mutation-heavy filing work is being built.
+
+* Recommended working assumptions
+
+These are the assumptions I recommend unless you want to decide otherwise before
+implementation:
+
+- Use a structured plist-based run state first, since the scaffold already uses
+  that representation.
+- Treat the control buffer as a guided mixed-mode surface: stable workflow
+  structure remains controlled by the package, while editable stage artifacts,
+  prompts, and context slices are intentionally writable in their designated
+  regions before action selection.
+- Implement project matching and retrieval with deterministic heuristics before
+  introducing model-assisted ranking in those stages.
+- Treat audit logging as incremental and diagnostics-oriented, with append
+  points occurring no later than stage completion and preferably also at key
+  review checkpoints when useful.
+- Keep version 1 focused on the local-only path first, while designing the data
+  model so the cloud sanitization path can be added without restructuring run
+  state.
+
+* Milestone plan
+
+** Milestone 1: control-buffer foundation
+
+Goal: make the current scaffold a stable workflow shell.
+
+- Finalize run-state structure.
+- Finalize control-buffer section contract.
+- Add explicit run lifecycle handling.
+- Add action legality computation instead of placeholder text.
+- Define writable versus package-managed regions inside the control buffer.
+- Add rendering tests for stable workflow sections and basic run transitions.
+
+Exit criteria:
+- Starting a run from a valid Org heading produces a stable control buffer from
+  a frozen source snapshot.
+- The run state can represent current decision and valid next actions without
+  placeholder-only logic.
+- Editable artifacts have a defined in-buffer representation compatible with
+  review-before-action workflow.
+
+** Milestone 2: stage execution contract
+
+Goal: make stages executable in a generic, testable way without yet solving all
+domain stages.
+
+- Define stage descriptors and transition rules.
+- Define adapter interfaces for local and cloud execution.
+- Define prompt resolution, input package assembly, and result normalization
+  contract.
+- Add stage-history persistence in run state and rendering.
+- Add error-path handling for malformed output, retry, and timeout state.
+
+Exit criteria:
+- At least one stage can execute end to end through the generic execution
+  contract and appear in stage history with review state.
+
+** Milestone 3: inspect and match path
+
+Goal: deliver the first useful version of source understanding.
+
+- Implement source typing and inspect output normalization.
+- Implement project matching against the My Projects file.
+- Support retry and manual disagreement paths for project matching.
+- Record stage-level approvals and accepted outputs.
+
+Exit criteria:
+- A user can inspect a source item, review normalized analysis, and reach a
+  project-match decision path in the control workflow.
+
+** Milestone 4: context retrieval path
+
+Goal: provide grounded downstream context before action extraction.
+
+- Implement candidate retrieval from project-linked material and PKM search.
+- Implement filtering of retrieved candidates into retained working context.
+- Render retained and rejected context in a reviewable form as appropriate.
+
+Exit criteria:
+- The workflow can gather and retain project-relevant context for downstream
+  reasoning in a way the human can review.
+
+** Milestone 5: action and note proposal path
+
+Goal: produce reviewable artifacts that can later be filed deterministically.
+
+- Implement `Extract actions`, `Extract waiting-for`, and `Suggest reference
+  notes`.
+- Define approval semantics for artifact-level acceptance.
+- Add validation warnings for weak next actions and waiting-for items.
+
+Exit criteria:
+- The workflow can produce candidate actions, waiting-for items, and reference
+  notes and mark approved artifacts as filing-ready.
+
+** Milestone 6: audit log
+
+Goal: make runs inspectable after the fact.
+
+- Implement audit-log entry rendering and append behavior.
+- Record run metadata, stage metadata, inputs, raw outputs, normalized results,
+  and approval state.
+- Surface audit readiness and append status in the control buffer.
+- Ensure audit append behavior supports diagnostics before filing is implemented.
+
+Exit criteria:
+- Completed or partial runs can append a structured audit record matching the
+  design contract.
+
+** Milestone 7: deterministic filing
+
+Goal: turn approved artifacts into concrete Org changes.
+
+- Implement filing target resolution.
+- Implement filing previews.
+- Implement one-action-at-a-time execution for supported filing actions.
+- Surface target-change conflicts and partial filing failures.
+
+Exit criteria:
+- Approved artifacts can be filed through deterministic Org operations with
+  preview and failure surfacing.
+
+** Milestone 8: cloud sanitization path
+
+Goal: add optional cloud routing without weakening local-first guarantees.
+
+- Implement sanitization package generation and review.
+- Implement explicit approve-send and approve-reintegrate flow.
+- Add cloud failure and fallback decision handling.
+
+Exit criteria:
+- A valid stage can be rerouted through a reviewed sanitized cloud package and
+  reintegrated back into local context only after explicit approval.
+
+* Near-term next steps
+
+These are the most useful planning tasks before further implementation.
+
+1. Define the exact stage-execution adapter function contract and result shape.
+2. Define the exact editable-region model for control-buffer artifacts and how
+   action selection validates pending edits.
+3. Define audit append checkpoints and minimal persisted data per checkpoint.
+4. Refine Milestone 1 into concrete tracked tasks now that the major sequencing
+   decisions are settled.
