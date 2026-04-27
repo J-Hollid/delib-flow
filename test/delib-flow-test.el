@@ -130,24 +130,23 @@ FILES is an alist of relative path to file content."
   (let ((block (delib-flow--make-editable-block
                 'context-main
                 'context
-                "Working context"
-                '("Working context" "Editable working slice")
+                "Current context"
+                '("Current context" "Editable working slice")
                 "delib-edit-context-main")))
     (should (equal 'context-main (plist-get block :id)))
     (should (equal 'context (plist-get block :kind)))
-    (should (equal "Working context" (plist-get block :section)))
+    (should (equal "Current context" (plist-get block :section)))
     (should (equal 'clean (plist-get block :status)))
     (should (equal 'valid (plist-get block :validation-status)))))
 
 (ert-deftest delib-flow-initial-section-anchors-contains-required-sections ()
   (let ((anchors (delib-flow--initial-section-anchors)))
-    (dolist (section '(source
-                       working-context
-                       stage-history
-                       current-decision
-                       valid-next-actions
+    (dolist (section '(now
+                       next-actions
+                       current-result
+                       current-context
                        filing-preview
-                       audit-status))
+                       details))
       (should (assoc section anchors)))))
 
 (ert-deftest delib-flow-initialize-run-contains-required-top-level-keys ()
@@ -178,10 +177,11 @@ FILES is an alist of relative path to file content."
          (ui (delib-flow--run-ui run))
          (block-ids (plist-get working :editable-block-ids))
          (blocks (plist-get ui :editable-blocks)))
-    (should (equal '(context-main operator-notes manual-project-selection cloud-package-review) block-ids))
+    (should (equal '(context-main operator-notes manual-project-selection inspect-source-review cloud-package-review) block-ids))
     (should (assoc 'context-main blocks))
     (should (assoc 'operator-notes blocks))
     (should (assoc 'manual-project-selection blocks))
+    (should (assoc 'inspect-source-review blocks))
     (should (assoc 'cloud-package-review blocks))))
 
 (ert-deftest delib-flow-initialize-run-seeds-review-results ()
@@ -201,13 +201,12 @@ FILES is an alist of relative path to file content."
 (ert-deftest delib-flow-initialize-run-seeds-section-anchors ()
   (let* ((run (delib-flow--initialize-run (list :title "Example")))
          (anchors (plist-get (delib-flow--run-ui run) :section-anchors)))
-    (dolist (section '(source
-                       working-context
-                       stage-history
-                       current-decision
-                       valid-next-actions
+    (dolist (section '(now
+                       next-actions
+                       current-result
+                       current-context
                        filing-preview
-                       audit-status))
+                       details))
       (should (assoc section anchors)))))
 
 (ert-deftest delib-flow-initialize-run-seeds-session-state ()
@@ -259,16 +258,17 @@ FILES is an alist of relative path to file content."
          (buffer (delib-flow--render-control-buffer run)))
     (unwind-protect
         (with-current-buffer buffer
+          (should (derived-mode-p 'delib-flow-control-mode))
           (should (derived-mode-p 'org-mode))
           (should-not view-mode)
           (should-not buffer-read-only)
-          (dolist (heading '("** Source"
-                             "** Working context"
-                             "** Stage history"
-                             "** Current decision"
-                             "** Valid next actions"
+          (should (search-forward "* DeliberateFlow -- Example" nil t))
+          (dolist (heading '("** Now"
+                             "** Next actions"
+                             "** Current result"
+                             "** Current context"
                              "** Filing preview"
-                             "** Audit status"))
+                             "** Details"))
             (goto-char (point-min))
             (should (search-forward heading nil t))))
       (when (buffer-live-p buffer)
@@ -281,10 +281,37 @@ FILES is an alist of relative path to file content."
         (with-current-buffer buffer
           (goto-char (point-min))
           (should (search-forward "- Inspect Source [available]" nil t))
+          (should (search-forward "Review the source snapshot and propose structured context." nil t))
+          (goto-char (line-beginning-position))
+          (should (eq 'inspect-source
+                      (plist-get (get-text-property (point) 'delib-flow-action)
+                                 :id)))
+          (goto-char (point-min))
           (should (search-forward "- Refresh Buffer [available]" nil t))
-          (should (search-forward "- Abort Run [available]" nil t)))
+          (goto-char (point-min))
+          (should (search-forward "- Abort Run [available]" nil t))
+          (goto-char (point-min))
+          (should-not (search-forward "{id:" nil t))
+          (goto-char (point-min))
+          (should-not (search-forward "cmd:" nil t)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
+
+(ert-deftest delib-flow-control-mode-keybindings-include-public-commands ()
+  (should (eq #'delib-flow-refresh
+              (lookup-key delib-flow-control-mode-map (kbd "g"))))
+  (should (eq #'delib-flow-dispatch-action
+              (lookup-key delib-flow-control-mode-map (kbd "RET"))))
+  (should (eq #'delib-flow-dispatch-action
+              (lookup-key delib-flow-control-mode-map (kbd "a"))))
+  (should (eq #'delib-flow-approve-current
+              (lookup-key delib-flow-control-mode-map (kbd "A"))))
+  (should (eq #'delib-flow-retry-current
+              (lookup-key delib-flow-control-mode-map (kbd "r"))))
+  (should (eq #'delib-flow-abort-run
+              (lookup-key delib-flow-control-mode-map (kbd "q"))))
+  (should (eq #'delib-flow-control-help
+              (lookup-key delib-flow-control-mode-map (kbd "?")))))
 
 (ert-deftest delib-flow-render-control-buffer-renders-detected-source-type ()
   (let* ((run (delib-flow--initialize-run
@@ -295,10 +322,19 @@ FILES is an alist of relative path to file content."
     (unwind-protect
         (with-current-buffer buffer
           (goto-char (point-min))
-          (should (search-forward "** Source type" nil t))
+          (should (search-forward "*** Source snapshot" nil t))
+          (should (search-forward "Source type: email" nil t))
           (should (search-forward "email" nil t)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
+
+(ert-deftest delib-flow-snapshot-heading-strips-text-properties ()
+  (delib-flow-test--with-temp-org
+   (insert (propertize "* Example heading\nBody line.\n" 'face 'bold))
+   (goto-char (point-min))
+   (let ((snapshot (delib-flow--snapshot-heading)))
+     (should-not (text-properties-at 1 (plist-get snapshot :title)))
+     (should-not (text-properties-at 1 (plist-get snapshot :content))))))
 
 (ert-deftest delib-flow-render-control-buffer-renders-editable-blocks ()
   (let* ((run (delib-flow--initialize-run (list :title "Example")))
@@ -308,10 +344,11 @@ FILES is an alist of relative path to file content."
           (goto-char (point-min))
           (should (search-forward "** Editable working slice" nil t))
           (should (search-forward "#+begin_delib-edit context" nil t))
+          (goto-char (point-min))
           (should (search-forward "** Operator notes" nil t))
           (should (search-forward "#+begin_delib-edit notes" nil t))
           (goto-char (point-min))
-          (should (search-forward "** Reviewed cloud package" nil t))
+          (should (search-forward "**** Reviewed cloud package" nil t))
           (should (search-forward "#+begin_delib-edit cloud-review" nil t)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
@@ -322,8 +359,20 @@ FILES is an alist of relative path to file content."
     (unwind-protect
         (with-current-buffer buffer
           (goto-char (point-min))
-          (search-forward "** Source")
+          (search-forward "** Now")
           (should-error (insert "forbidden")))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest delib-flow-render-active-run-buffer-applies-cockpit-visibility ()
+  (let* ((run (delib-flow--initialize-run (list :title "Example")))
+         (buffer (delib-flow--render-active-run-buffer run "Now")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (should (looking-at-p "\\*\\* Now"))
+          (goto-char (point-min))
+          (search-forward "*** Source snapshot")
+          (should (outline-invisible-p (point))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
@@ -379,6 +428,66 @@ FILES is an alist of relative path to file content."
                           (delib-flow--editable-block delib-flow--active-run
                                                       'context-main)
                           :current-text))))
+      (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+        (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
+
+(ert-deftest delib-flow-refresh-buffer-preserves-current-section-anchor ()
+  (let* ((run (delib-flow--initialize-run (list :title "Example")))
+         (delib-flow--active-run run)
+         (buffer (delib-flow--render-active-run-buffer run "Filing preview")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local delib-flow--active-run-buffer t))
+          (delib-flow-refresh-buffer)
+          (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+            (should (equal "Filing preview"
+                           (delib-flow--current-section-at-point)))))
+      (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+        (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
+
+(ert-deftest delib-flow-refresh-buffer-does-not-duplicate-top-level-sections ()
+  (let* ((run (delib-flow--initialize-run
+               (list :title "Example"
+                     :content "* Example\nBody line\n")))
+         (delib-flow--active-run run)
+         (buffer (delib-flow--render-control-buffer run)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local delib-flow--active-run-buffer t))
+          (dotimes (_ 5)
+            (delib-flow-refresh-buffer))
+          (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+            (dolist (heading delib-flow--control-sections)
+              (goto-char (point-min))
+              (should (= 1
+                         (how-many (format "^\\*\\* %s$" (regexp-quote heading))
+                                   (point-min)
+                                   (point-max)))))))
+      (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+        (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
+
+(ert-deftest delib-flow-action-refresh-cycle-does-not-duplicate-top-level-sections ()
+  (let* ((run (delib-flow--initialize-run
+               (list :title "Example"
+                     :content "* Example\nBody line\n")))
+         (delib-flow--active-run run)
+         (buffer (delib-flow--render-control-buffer run)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local delib-flow--active-run-buffer t))
+          (delib-flow-action-inspect-source)
+          (dotimes (_ 3)
+            (delib-flow-refresh-buffer))
+          (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+            (dolist (heading delib-flow--control-sections)
+              (goto-char (point-min))
+              (should (= 1
+                         (how-many (format "^\\*\\* %s$" (regexp-quote heading))
+                                   (point-min)
+                                   (point-max)))))))
       (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
         (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
 
@@ -492,7 +601,7 @@ FILES is an alist of relative path to file content."
           (with-current-buffer buffer
             (let ((inhibit-read-only t))
               (goto-char (point-min))
-              (search-forward "** Audit status")
+              (search-forward "** Details")
               (delete-region (line-beginning-position)
                              (line-end-position))))
           (delib-flow-refresh-buffer)
@@ -563,7 +672,8 @@ FILES is an alist of relative path to file content."
           (delib-flow-action-inspect-source)
           (with-current-buffer (get-buffer delib-flow-control-buffer-name)
             (goto-char (point-min))
-            (should (search-forward "** Inspect Source" nil t))
+            (should (search-forward "**** Inspect Source" nil t))
+            (should (search-forward "***** Attempt 1" nil t))
             (should (search-forward "Body lines: 1" nil t))
             (goto-char (point-min))
             (should (search-forward "- Retry Inspect Source [available]" nil t))
@@ -575,6 +685,95 @@ FILES is an alist of relative path to file content."
             (should (search-forward "- Decide on Cloud Pass [available]" nil t))))
       (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
         (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
+
+(ert-deftest delib-flow-stage-history-groups-attempts-by-stage ()
+  (delib-flow-test--with-temp-project-file
+      "* Alpha Project\n"
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Alpha Project kickoff"
+                       :content "* Alpha Project kickoff\nAgenda\n")))
+           (first-inspect (delib-flow--run-stage-locally run 'inspect-source))
+           (accepted-inspect (delib-flow-test--accept-inspect first-inspect))
+           (second-inspect (delib-flow--run-stage-locally accepted-inspect 'inspect-source))
+           (accepted-second-inspect (delib-flow-test--accept-inspect second-inspect))
+           (matched (delib-flow--run-stage-locally accepted-second-inspect 'match-project))
+           (buffer (delib-flow--render-control-buffer matched)))
+      (unwind-protect
+          (with-current-buffer buffer
+            (goto-char (point-min))
+            (should (search-forward "*** Stage history" nil t))
+            (should (search-forward "**** Inspect Source" nil t))
+            (should (search-forward "- Attempts: 2" nil t))
+            (should (search-forward "***** Attempt 1" nil t))
+            (should (search-forward "- Review state: superseded" nil t))
+            (should (search-forward "***** Attempt 2" nil t))
+            (should (search-forward "- Review state: accepted" nil t))
+            (should (search-forward "**** Match Project" nil t))
+            (should (search-forward "- Attempts: 1" nil t)))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest delib-flow-inspect-source-command-anchors-current-result ()
+  (let* ((run (delib-flow--initialize-run
+               (list :title "Example"
+                     :content "* Example\nBody line\n")))
+         (delib-flow--active-run run)
+         (buffer (delib-flow--render-active-run-buffer run "Now")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local delib-flow--active-run-buffer t))
+          (delib-flow-action-inspect-source)
+          (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+            (should (equal "Current result"
+                           (delib-flow--current-section-at-point)))))
+      (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+        (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
+
+(ert-deftest delib-flow-dispatch-action-executes-rendered-next-action ()
+  (let* ((run (delib-flow--initialize-run
+               (list :title "Example"
+                     :content "* Example\nBody line\n")))
+         (delib-flow--active-run run)
+         (buffer (delib-flow--render-active-run-buffer run "Next actions")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (goto-char (point-min))
+            (search-forward "- Inspect Source")
+            (goto-char (line-beginning-position)))
+          (with-current-buffer buffer
+            (delib-flow-dispatch-action))
+          (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+            (should (equal "Current result"
+                           (delib-flow--current-section-at-point)))
+            (goto-char (point-min))
+            (should (search-forward "- Stage: Inspect Source" nil t))
+            (should (search-forward "- Review state: pending-review" nil t))))
+      (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+        (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
+
+(ert-deftest delib-flow-inspect-source-current-result-and-context-are-readable ()
+  (let* ((run (delib-flow--initialize-run
+               (list :title "Example"
+                     :file "/tmp/inbox/example.org"
+                     :content "* Example\nBody line\n")))
+         (delib-flow--active-run (delib-flow--run-stage-locally run 'inspect-source))
+         (buffer (delib-flow--render-control-buffer delib-flow--active-run)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (let ((current-result
+                 (delib-flow--section-content "Current result"
+                                              delib-flow--active-run)))
+            (should (string-match-p "- Source type: " current-result))
+            (should (string-match-p "- Body preview: " current-result))
+            (should-not (string-match-p "\\\\n" current-result)))
+          (goto-char (point-min))
+          (should (search-forward "** Relevant source context" nil t))
+          (should (search-forward "** Source type correction" nil t))
+          (should-not (search-forward "#(" nil t)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
 
 (ert-deftest delib-flow-accept-inspect-source-updates-review-state-and-actions ()
   (let* ((run (delib-flow--initialize-run
@@ -653,13 +852,52 @@ FILES is an alist of relative path to file content."
           (delib-flow-action-accept-inspect-source)
           (with-current-buffer (get-buffer delib-flow-control-buffer-name)
             (goto-char (point-min))
-            (should (search-forward "Inspect Source: candidate=accepted. accepted=available." nil t))
+            (should (search-forward "- Accepted inspect result: available" nil t))
             (goto-char (point-min))
             (should (search-forward "- Match Project [available]" nil t))
             (goto-char (point-min))
             (should-not (search-forward "- Discover Relevant Reference Material [available]" nil t))
             (goto-char (point-min))
             (should-not (search-forward "- Accept Inspect Result [available]" nil t))))
+      (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+        (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
+
+(ert-deftest delib-flow-approve-current-accepts-pending-inspect-result ()
+  (let* ((run (delib-flow--initialize-run
+               (list :title "Example"
+                     :content "* Example\nBody line one\n")))
+         (delib-flow--active-run (delib-flow--run-stage-locally run 'inspect-source))
+         (buffer (delib-flow--render-active-run-buffer delib-flow--active-run
+                                                       "Current result")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (delib-flow-approve-current))
+          (let ((review (delib-flow--review-record
+                         (delib-flow--run-working-context delib-flow--active-run)
+                         'inspect-source)))
+            (should (eq 'accepted (plist-get review :candidate-review-state))))
+          (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+            (should (equal "Next actions"
+                           (delib-flow--current-section-at-point)))))
+      (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+        (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
+
+(ert-deftest delib-flow-accept-inspect-source-command-anchors-next-actions ()
+  (let* ((run (delib-flow--initialize-run
+               (list :title "Example"
+                     :content "* Example\nBody line one\n")))
+         (delib-flow--active-run (delib-flow--run-stage-locally run 'inspect-source))
+         (buffer (delib-flow--render-active-run-buffer delib-flow--active-run
+                                                       "Current result")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local delib-flow--active-run-buffer t))
+          (delib-flow-action-accept-inspect-source)
+          (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+            (should (equal "Next actions"
+                           (delib-flow--current-section-at-point)))))
       (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
         (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
 
@@ -682,6 +920,25 @@ FILES is an alist of relative path to file content."
     (should (eq 'pending-review
                 (plist-get review :candidate-review-state)))
     (should-not (plist-get review :accepted-output))))
+
+(ert-deftest delib-flow-retry-current-reruns-pending-inspect-stage ()
+  (let* ((run (delib-flow--initialize-run
+               (list :title "Example"
+                     :content "* Example\nBody line one\n")))
+         (delib-flow--active-run (delib-flow--run-stage-locally run 'inspect-source))
+         (buffer (delib-flow--render-active-run-buffer delib-flow--active-run
+                                                       "Current result")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (delib-flow-retry-current))
+          (should (= 2 (length (plist-get (delib-flow--run-stage-history delib-flow--active-run)
+                                          :entries))))
+          (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+            (should (equal "Current result"
+                           (delib-flow--current-section-at-point)))))
+      (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+        (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
 
 (ert-deftest delib-flow-match-project-command-requires-accepted-inspect-result ()
   (delib-flow-test--with-temp-project-file
@@ -749,11 +1006,9 @@ FILES is an alist of relative path to file content."
     (unwind-protect
         (with-current-buffer buffer
           (goto-char (point-min))
-          (should (search-forward "** Accepted-result review state" nil t))
-          (should (search-forward "Inspect Source: candidate=pending-review. accepted=not available." nil t))
-          (should (search-forward "Match Project: candidate=not-available. accepted=not available." nil t))
-          (should (search-forward "** Accepted project decision" nil t))
-          (should (search-forward "No accepted project decision is available yet." nil t)))
+          (should (search-forward "** Relevant source context" nil t))
+          (should (search-forward "- Proposed source type: " nil t))
+          (should (search-forward "** Source type correction" nil t)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
@@ -998,10 +1253,8 @@ FILES is an alist of relative path to file content."
       (unwind-protect
           (with-current-buffer buffer
             (goto-char (point-min))
-            (should (search-forward "Match Project: candidate=superseded. accepted=not available." nil t))
-            (should (search-forward "** Accepted project decision" nil t))
-            (should (search-forward "Matched: Alpha Project" nil t))
-            (should (search-forward "** Latest project candidate" nil t)))
+            (should (search-forward "- Accepted project decision: Matched: Alpha Project" nil t))
+            (should-not (search-forward "** Manual project selection" nil t)))
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
@@ -1076,10 +1329,10 @@ FILES is an alist of relative path to file content."
             (delib-flow-action-match-project)
             (with-current-buffer (get-buffer delib-flow-control-buffer-name)
               (goto-char (point-min))
-              (should (search-forward "Project match: matched." nil t))
+              (should (search-forward "- Match status: matched" nil t))
               (goto-char (point-min))
-              (should (search-forward "** Match Project" nil t))
-              (should (search-forward "Best project: Alpha Project" nil t))
+              (should (search-forward "- Stage: Match Project" nil t))
+              (should (search-forward "- Best project: Alpha Project" nil t))
               (goto-char (point-min))
               (should (search-forward "- Accept Project Match [available]" nil t))
               (goto-char (point-min))
@@ -1186,7 +1439,7 @@ FILES is an alist of relative path to file content."
             (delib-flow-action-accept-match-project)
             (with-current-buffer (get-buffer delib-flow-control-buffer-name)
               (goto-char (point-min))
-              (should (search-forward "Match Project: candidate=accepted. accepted=available." nil t))
+              (should (search-forward "- Accepted project decision: Matched: Alpha Project" nil t))
               (goto-char (point-min))
               (should (search-forward "- Discover Relevant Reference Material [available]" nil t))
               (goto-char (point-min))
@@ -1327,10 +1580,10 @@ FILES is an alist of relative path to file content."
               (delib-flow-action-discover-reference-material)
               (with-current-buffer (get-buffer delib-flow-control-buffer-name)
                 (goto-char (point-min))
-                (should (search-forward "Retrieved context: available." nil t))
+                (should (search-forward "Retrieved context: available" nil t))
                 (should (search-forward "Alpha Project Notes" nil t))
                 (goto-char (point-min))
-                (should (search-forward "** Discover Relevant Reference Material" nil t))
+                (should (search-forward "- Stage: Discover Relevant Reference Material" nil t))
                 (should (search-forward "- Candidate count: 1" nil t))
                 (goto-char (point-min))
                 (should (search-forward "- Filter Useful Reference Material [available]" nil t))))
@@ -1394,11 +1647,11 @@ FILES is an alist of relative path to file content."
             (delib-flow-action-filter-reference-material)
             (with-current-buffer (get-buffer delib-flow-control-buffer-name)
               (goto-char (point-min))
-              (should (search-forward "Filtered context: available." nil t))
+              (should (search-forward "Filtered context: available" nil t))
               (should (search-forward "Retained: 2. Rejected: 0." nil t))
               (should (search-forward "Alpha Project Notes" nil t))
               (goto-char (point-min))
-              (should (search-forward "** Filter Useful Reference Material" nil t))
+              (should (search-forward "- Stage: Filter Useful Reference Material" nil t))
               (should (search-forward "- Retained count: 2" nil t))
               (goto-char (point-min))
               (should (search-forward "- Retry Filter Useful Reference Material [available]" nil t))))
@@ -1706,11 +1959,11 @@ FILES is an alist of relative path to file content."
           (delib-flow-action-decide-cloud-pass)
           (with-current-buffer (get-buffer delib-flow-control-buffer-name)
             (goto-char (point-min))
-            (should (search-forward "** Decide on Cloud Pass" nil t))
+            (should (search-forward "- Stage: Decide on Cloud Pass" nil t))
             (should (search-forward "Selected model:" nil t))
             (goto-char (point-min))
-            (should (search-forward "Cloud-sanitized context: pending preparation." nil t))
-            (should (search-forward "Cloud pass selected. Model:" nil t))
+            (should (search-forward "Cloud-sanitized context: pending preparation" nil t))
+            (should (search-forward "- Cloud context: Cloud pass selected. Model:" nil t))
             (goto-char (point-min))
             (should (search-forward "- Sanitize for Cloud [available]" nil t))
             (goto-char (point-min))
@@ -1801,12 +2054,13 @@ FILES is an alist of relative path to file content."
           (delib-flow-action-sanitize-for-cloud)
           (with-current-buffer (get-buffer delib-flow-control-buffer-name)
             (goto-char (point-min))
-            (should (search-forward "** Sanitize for Cloud" nil t))
+            (should (search-forward "- Stage: Sanitize for Cloud" nil t))
             (should (search-forward "Sanitization status: prepared" nil t))
             (goto-char (point-min))
-            (should (search-forward "Cloud-sanitized context: available." nil t))
+            (should (search-forward "Cloud-sanitized context: available" nil t))
             (goto-char (point-min))
-            (should (search-forward "Reviewed cloud package: available." nil t))
+            (should (search-forward "- Cloud context: " nil t))
+            (goto-char (point-min))
             (should (search-forward "Sanitized source title:" nil t))
             (should (search-forward "[redacted-email]" nil t))
             (goto-char (point-min))
@@ -1935,11 +2189,12 @@ FILES is an alist of relative path to file content."
           (delib-flow-action-run-cloud-stage)
           (with-current-buffer (get-buffer delib-flow-control-buffer-name)
             (goto-char (point-min))
-            (should (search-forward "** Run Cloud Stage" nil t))
+            (should (search-forward "- Stage: Run Cloud Stage" nil t))
             (should (search-forward "Cloud output for reviewed package" nil t))
             (goto-char (point-min))
-            (should (search-forward "Cloud-returned context: available." nil t))
-            (should (search-forward "** Cloud-returned context" nil t))
+            (should (search-forward "Cloud-returned context: available" nil t))
+            (goto-char (point-min))
+            (should (search-forward "- Cloud-returned summary: Cloud output for reviewed package" nil t))
             (goto-char (point-min))
             (should (search-forward "- Retry Run Cloud Stage [available]" nil t))
             (goto-char (point-min))
@@ -2501,7 +2756,7 @@ FILES is an alist of relative path to file content."
             (delib-flow-action-inspect-source)
             (with-current-buffer (get-buffer delib-flow-control-buffer-name)
               (goto-char (point-min))
-              (should (search-forward "** Run audit state" nil t))
+              (should (search-forward "*** Audit status" nil t))
               (should (search-forward "Audit log file: configured" nil t))
               (should (search-forward "Recorded stages: 1" nil t))
               (should (search-forward "Last appended checkpoint: inspect-source"
