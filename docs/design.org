@@ -14,18 +14,19 @@ normalized for repository use. The substantive workflow design remains the same.
 
 - Milestone 1 control-buffer foundation has now been implemented in the
   repository.
-- Milestone 2 now has fifteen executable stage implementations in the
+- Milestone 2 now has seventeen executable stage implementations in the
   repository:
   `Inspect Source`, `Match Project`, `Discover Relevant Reference Material`,
   `Filter Useful Reference Material`, `Choose Project Manually`, `Propose New
   Project`, `Extract Actions`, `Extract Waiting-For`, `Suggest Reference
-  Notes`, `Decide on Cloud Pass`, `Sanitize for Cloud`, `Run Cloud Stage`,
-  `Integrate into Source`, `Select Approved Filing Actions`, and `File
-  Approved Outputs`.
-- `Run Cloud Stage`, `Integrate into Source`, `Select Approved Filing
-  Actions`, and `File Approved Outputs` remain implementation-level execution
-  stages in the current repo, while `Propose New Project` is now also
-  executable instead of remaining a planned canonical stage only.
+  Notes`, `Decide on Cloud Pass`, `Sanitize for Cloud`, `Approve Cloud Send`,
+  `Run Cloud Stage`, `Approve Candidate Reintegration`, `Integrate into
+  Source`, `Select Approved Filing Actions`, and `File Approved Outputs`.
+- `Approve Cloud Send`, `Run Cloud Stage`, `Integrate into Source`, `Select
+  Approved Filing Actions`, and `File Approved Outputs` remain
+  implementation-level execution stages in the current repo, while `Approve
+  Candidate Reintegration` is now also executable instead of remaining a
+  planned review boundary only.
 - The current implementation confirms the viability of:
   - one active run at a time
   - frozen source snapshots
@@ -49,12 +50,30 @@ normalized for repository use. The substantive workflow design remains the same.
     path
   - deterministic cloud-routing decisions with visible pending sanitization
     state
+  - provider-aware cloud-routing policy checks with per-provider enable/disable
+    control and recorded policy profile state
   - deterministic sanitized cloud-package preparation with visible review state
+  - policy-profile-aware sanitization, including strict redaction of file links
+    and project-identifying terms
+  - direct in-buffer editing of the reviewed cloud package before send
+  - explicit cloud-send approval before cloud execution
   - cloud execution through a dedicated cloud adapter path with visible
     returned-context state
+  - explicit reintegration approval after cloud-returned output is shown
   - local reintegration of returned cloud output before filing review
   - deterministic one-at-a-time filing approval from the current draft queue
   - deterministic filing into project-child targets and reference-note files
+  - deterministic project-support note filing that also updates matched
+    project metadata with a reference-file link to the new support note
+  - deterministic filing conflict detection with visible retryable conflict
+    state
+  - metadata-aware deterministic project matching over titles, heading tags,
+    subtree terms, and contact addresses
+  - metadata-aware reference discovery that prioritizes directly linked project
+    notes before broader PKM term overlap
+  - template-backed deterministic note creation for both general PKM notes and
+    project-support notes, with package defaults when user templates are not
+    configured
   - incremental audit-log append of run and stage records into the configured
     audit log
 

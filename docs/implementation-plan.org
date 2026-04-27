@@ -39,8 +39,12 @@ intend to implement.
   same contract and produces draft filing artifacts. `Decide on Cloud Pass`
   now also executes through that same contract and records pending routing
   state. `Sanitize for Cloud` now also executes through that same contract and
-  prepares a sanitized review package. `Run Cloud Stage` now executes through
-  the dedicated cloud adapter path and records returned cloud output.
+  prepares a sanitized review package. `Approve Cloud Send` now also executes
+  through that same contract and commits the reviewed cloud package before
+  send. `Run Cloud Stage` now executes through the dedicated cloud adapter
+  path and records returned cloud output. `Approve Candidate Reintegration`
+  now also executes through that same contract and gates local reintegration
+  of returned cloud output.
   `Integrate into Source` now executes locally and prepares draft filing
   artifacts for explicit review. `Select Approved Filing Actions` now executes
   locally and approves one filing artifact at a time. `File Approved Outputs`
@@ -50,7 +54,7 @@ intend to implement.
 - The validation scaffold is implemented: `make test`, `make coverage`,
   `make complexity`, and `make validate` are now the project gates.
 - The current codebase now includes a stable control-buffer foundation plus
-  fifteen executable stage implementations with stage-history persistence and
+  seventeen executable stage implementations with stage-history persistence and
   stage-dependent next actions.
 - This plan should be kept in sync with changes in scope or implementation
   order.
@@ -153,13 +157,16 @@ Delivered behavior:
 - `Decide on Cloud Pass` is the tenth stage implemented through that
   contract.
 - `Sanitize for Cloud` is the eleventh stage implemented through that contract.
-- `Run Cloud Stage` is the twelfth stage implemented through the cloud adapter
-  path.
-- `Integrate into Source` is the thirteenth stage implemented through that
+- `Approve Cloud Send` is the twelfth stage implemented through that contract.
+- `Run Cloud Stage` is the thirteenth stage implemented through the cloud
+  adapter path.
+- `Approve Candidate Reintegration` is the fourteenth stage implemented
+  through that contract.
+- `Integrate into Source` is the fifteenth stage implemented through that
   contract.
-- `Select Approved Filing Actions` is the fourteenth stage implemented through
+- `Select Approved Filing Actions` is the sixteenth stage implemented through
   that contract.
-- `File Approved Outputs` is the fifteenth stage implemented through that
+- `File Approved Outputs` is the seventeenth stage implemented through that
   contract.
 - `Match Project` uses deterministic local heuristics over the configured My
   Projects file and records matched, ambiguous, or no-match outcomes.
@@ -182,9 +189,14 @@ Delivered behavior:
   run state and records pending cloud-routing metadata.
 - `Sanitize for Cloud` uses deterministic local redaction over source and
   working-context material and records a prepared sanitized package.
+- `Approve Cloud Send` uses the reviewed editable cloud package and records an
+  explicit approval boundary before cloud execution.
 - `Run Cloud Stage` uses the configured cloud adapter and records returned
   cloud output for local review.
+- `Approve Candidate Reintegration` uses deterministic local approval over the
+  current cloud-returned result before reintegration.
 - `Integrate into Source` uses deterministic local reintegration of current
+  returned cloud output into reviewable local state.
 - `Select Approved Filing Actions` uses deterministic local review over the
   current draft queue and approves one filing artifact at a time.
 - `File Approved Outputs` uses deterministic local target resolution and writes
@@ -214,8 +226,12 @@ Delivered behavior:
   placeholder.
 - The `Sanitize for Cloud` action now executes instead of acting as a
   placeholder.
+- The `Approve Cloud Send` action now executes instead of acting as a
+  placeholder.
 - The `Run Cloud Stage` action now executes instead of acting as a
   placeholder.
+- The `Approve Candidate Reintegration` action now executes instead of acting
+  as a placeholder.
 - The `Integrate into Source` action now executes instead of acting as a
   placeholder.
 - The `Select Approved Filing Actions` action now executes instead of acting
@@ -243,10 +259,14 @@ Delivered behavior:
   sanitization state in working context.
 - Cloud sanitization results now update `:working-context
   :cloud-sanitized-context` and mark routing sanitization status as prepared.
+- Cloud approval results now preserve reviewed package edits from the control
+  buffer and mark routing sanitization status as approved.
 - Cloud execution results now update `:working-context :cloud-returned-context`
   and mark routing sanitization status as returned.
+- Reintegration-approval results now mark routing reintegration status as
+  approved before local integration becomes legal.
 - Integration results now update `:working-context :retained-context` and
-- preserve `:filing :draft-items` for downstream filing review.
+  preserve `:filing :draft-items` for downstream filing review.
 - Filing-selection results now move one artifact at a time from
   `:filing :draft-items` into `:filing :approved-items` for deterministic
   filing.
@@ -264,17 +284,18 @@ Known Milestone 2 limits:
 - Stage normalization is implemented for `Inspect Source`, `Match Project`,
   `Discover Relevant Reference Material`, and `Filter Useful Reference
   Material`, `Extract Actions`, `Extract Waiting-For`, `Suggest Reference
-  Notes`, `Decide on Cloud Pass`, `Sanitize for Cloud`, `Run Cloud Stage`,
-  `Integrate into Source`, `Select Approved Filing Actions`, and `File
-  Approved Outputs`.
+  Notes`, `Decide on Cloud Pass`, `Sanitize for Cloud`, `Approve Cloud Send`,
+  `Run Cloud Stage`, `Approve Candidate Reintegration`, `Integrate into
+  Source`, `Select Approved Filing Actions`, and `File Approved Outputs`.
 - Rich retry editing, repair passes, and timeout-specific behavior are not yet
   implemented beyond the current generic failure path.
-- Project matching is currently title-term heuristic matching only; it does not
-  yet use project metadata, linked artifacts, or human disagreement flows
-  beyond placeholder follow-up actions.
-- Reference-material discovery is currently simple weighted term matching over
-  Org files in the configured ZK root; it does not yet prioritize linked
-  project support files, contacts, tags, or deeper link-tracing heuristics.
+- Project matching is currently metadata-aware over project titles, heading
+  tags, subtree terms, and contact addresses, but it does not yet use linked
+  artifacts or richer human disagreement flows beyond the current manual
+  fallback path.
+- Reference-material discovery now prioritizes directly linked project notes
+  and uses project tags and contacts during scoring, but it does not yet
+  perform deeper link tracing or broader support-file relationship inference.
 - Reference-material filtering is currently score-threshold based with a simple
   fallback retain-one rule; it does not yet reason about action relevance,
   prior decisions, or constraint salience in the richer way the design allows.
@@ -294,24 +315,47 @@ Known Milestone 2 limits:
   yet validate note title quality, capture-template fit, or Org-roam metadata
   readiness beyond producing deterministic candidate items.
 - Cloud-routing decision is currently a simple deterministic state transition;
-  it does not yet support reviewed sanitization packages, provider-specific
-  policy checks, or reviewed send approval.
-- Cloud sanitization is currently simple deterministic redaction; it does not
-  yet support editable review packages or policy profiles.
+  it now supports provider-specific enable/disable checks and records the
+  selected provider plus policy profile in routing state, but it does not yet
+  support richer routing policy review.
+- Cloud sanitization is currently deterministic redaction with policy-profile
+  branching.
+  It now supports a strict profile that additionally redacts file links and
+  project-identifying terms, but it does not yet support richer redaction
+  strategies beyond the current standard/strict split.
 - Cloud execution is currently a deterministic adapter handoff; it does not yet
   support provider-specific error handling, approval snapshots, or
   model-specific result shaping.
 - Integration into source is currently simple deterministic reintegration; it
-  does not yet support selective approval, merge editing, or a dedicated
-  approve-send/reintegrate review split.
+  does not yet support merge editing or richer reconciliation behavior beyond
+  the current explicit approval boundaries.
 - Deterministic filing is currently narrow and heuristic.
-  It does not yet support capture-template-backed note creation, target-change
-  conflict detection, one-approved-action-at-a-time filing review, or richer
-  filing target types such as project metadata updates.
+  It now supports template-backed note creation with package defaults and a
+  limited project metadata update path for project-support notes through the
+  matched project's `REFERENCE_FILES` property, but it does not yet support
+  broader metadata targets such as contacts, tags, or checklist-field review.
 - Audit logging is currently rewrite-based per run subtree rather than append
   only.
   It does not yet support checkpoint-specific approval annotations, prompt
   version metadata, or separate human-edit audit snapshots.
+
+Locked-in Milestone 2 refinement sequence:
+
+1. Refine reference-material discovery so retrieval prioritizes project tags,
+   contacts, links, and likely support-note relationships rather than only
+   weighted term overlap.
+2. Add capture-template-backed note creation for deterministic filing of
+   reference notes while preserving the current conflict and approval model.
+3. Refine the cloud path with policy-profile-aware sanitization and/or
+   provider-specific routing checks before Milestone 2 is considered closed.
+   Status: implemented.
+4. Finish with one hardening pass for the remaining narrow workflow gaps,
+   especially richer filing target types such as project metadata updates and
+   any design-to-implementation mismatches that the prior three passes expose.
+   Status: implemented.
+
+These four passes are the default Milestone 2 exit path unless implementation
+work reveals new information that materially changes the ordering or scope.
 
 * Milestone 2 learnings
 
@@ -353,6 +397,10 @@ Known Milestone 2 limits:
 - Keeping cloud execution separate from reintegration was the right boundary.
   It makes the cloud adapter easier to test and keeps local acceptance logic
   out of the provider handoff path.
+- Editable cloud review needed a dedicated post-stage rerender path.
+  Reusing the interactive refresh logic after stage execution clobbered freshly
+  produced review text, so stage commands now rerender without first resyncing
+  stale buffer state.
 - Approved artifacts need an explicit state transition rather than being
   inferred from draft existence alone.
   Making filing selection its own stage produced a cleaner review loop than

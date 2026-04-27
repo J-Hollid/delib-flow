@@ -16,8 +16,11 @@ This repository is being built incrementally from a design-first process.
 - Generic local stage execution contract implemented
 - `Inspect Source` executes end-to-end and is recorded in stage history
 - `Match Project` executes end-to-end against the configured My Projects file
+- `Match Project` now uses project-title, heading-tag, subtree-term, and contact metadata when scoring candidates
 - `Discover Relevant Reference Material` executes end-to-end against the
   configured `delib-flow-zk-root`
+- `Discover Relevant Reference Material` now prioritizes directly linked
+  project notes and uses project tags and contacts during scoring
 - `Filter Useful Reference Material` executes end-to-end over retrieved
   candidates
 - `Choose Project Manually` executes end-to-end on ambiguous or no-match project branches
@@ -27,22 +30,37 @@ This repository is being built incrementally from a design-first process.
 - `Suggest Reference Notes` executes end-to-end and populates draft filing artifacts
 - `Decide on Cloud Pass` executes end-to-end and records pending cloud-routing state
 - `Sanitize for Cloud` executes end-to-end and prepares a reviewable sanitized package
+- Cloud-routing decisions now apply provider-specific enable/disable policy
+  checks and record the selected provider plus policy profile in run state
+- `Approve Cloud Send` executes end-to-end and commits the reviewed cloud package before send
 - `Run Cloud Stage` executes end-to-end through the cloud adapter path and records returned cloud output
+- `Approve Candidate Reintegration` executes end-to-end and gates local reintegration of cloud output
 - `Integrate into Source` executes end-to-end and prepares draft filing artifacts for explicit review
 - `Select Approved Filing Actions` executes end-to-end and approves one filing artifact at a time
 - `File Approved Outputs` executes end-to-end and writes the current approved artifact to deterministic targets
 - Project-match outcomes update working context and valid next actions
+- Project matching now succeeds on source-contact overlap even when title overlap is weak
 - Retrieved reference candidates update working context and unlock filtering
+- Retrieved reference candidates now reflect project-link, tag, and contact
+  signals rather than plain term overlap alone
 - Filtered retained context now updates the downstream working-context artifact
 - No-match project decisions now can produce a draft project plus first next action
 - Ambiguous or rejected project matches now can take a deterministic manual-selection path
 - Cloud-routing decisions now update working context and routing state
 - Cloud sanitization now updates working context with a prepared sanitized package
+- Strict cloud sanitization now redacts Org file links and matched
+  project-identifying terms in addition to the baseline email/URL/name pass
+- Reviewed cloud packages are now editable in the control buffer and must be explicitly approved before cloud execution
 - Cloud execution now updates working context with returned cloud output
+- Cloud-returned output now requires explicit reintegration approval before local integration runs
 - Integration now updates retained context while preserving draft artifacts for filing review
 - Filing review now promotes one approved artifact at a time out of the current draft queue
 - Deterministic filing now inserts project child items into the My Projects file and creates reference-note files in the configured ZK root
+- Deterministic reference-note creation now runs through configurable package templates with package-provided defaults for general and project-support notes
+- Deterministic project-support note filing now also updates the matched
+  project metadata drawer with a `REFERENCE_FILES` link to the filed note
 - Deterministic filing now also creates new project headings with a first child action from approved project proposals
+- Deterministic filing now detects target conflicts and preserves the current approved artifact for retry instead of writing blindly
 - Audit logging now records run and stage snapshots in the configured audit log file and surfaces append status in `Audit status`
 - Draft next actions, waiting-for items, and reference-note suggestions now
   render in `Filing preview`
@@ -51,7 +69,8 @@ This repository is being built incrementally from a design-first process.
   - `make coverage`
   - `make complexity`
   - `make validate`
-- Broader stage coverage not implemented yet
+- Milestone 2 core workflow is implemented; remaining work is refinement and
+  heuristic improvement rather than missing control-flow stages
 
 * Development
 

@@ -111,9 +111,10 @@ FILES is an alist of relative path to file content."
          (ui (delib-flow--run-ui run))
          (block-ids (plist-get working :editable-block-ids))
          (blocks (plist-get ui :editable-blocks)))
-    (should (equal '(context-main operator-notes) block-ids))
+    (should (equal '(context-main operator-notes cloud-package-review) block-ids))
     (should (assoc 'context-main blocks))
-    (should (assoc 'operator-notes blocks))))
+    (should (assoc 'operator-notes blocks))
+    (should (assoc 'cloud-package-review blocks))))
 
 (ert-deftest delib-flow-initialize-run-seeds-section-anchors ()
   (let* ((run (delib-flow--initialize-run (list :title "Example")))
@@ -212,7 +213,10 @@ FILES is an alist of relative path to file content."
           (should (search-forward "** Editable working slice" nil t))
           (should (search-forward "#+begin_delib-edit context" nil t))
           (should (search-forward "** Operator notes" nil t))
-          (should (search-forward "#+begin_delib-edit notes" nil t)))
+          (should (search-forward "#+begin_delib-edit notes" nil t))
+          (goto-char (point-min))
+          (should (search-forward "** Reviewed cloud package" nil t))
+          (should (search-forward "#+begin_delib-edit cloud-review" nil t)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
@@ -298,6 +302,90 @@ FILES is an alist of relative path to file content."
             (should (equal 'edited (plist-get block :status)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
+
+(ert-deftest delib-flow-full-local-matched-project-workflow-completes ()
+  (delib-flow-test--with-temp-project-file
+      "* Alpha Project\n"
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Alpha Project kickoff"
+                       :content "* Alpha Project kickoff\nBody line\n")))
+           (inspected (delib-flow--run-stage-locally run 'inspect-source))
+           (matched (delib-flow--run-stage-locally inspected 'match-project))
+           (drafted (delib-flow--run-stage-locally matched 'extract-actions))
+           (integrated
+            (delib-flow--run-stage-locally drafted 'integrate-into-source))
+           (selected
+            (delib-flow--run-stage-locally integrated
+                                           'select-approved-filing-actions))
+           (filed-run
+            (delib-flow--run-stage-locally selected 'file-approved-outputs))
+           (history (delib-flow--run-stage-history filed-run))
+           (stage-ids (mapcar (lambda (entry) (plist-get entry :stage-id))
+                              (plist-get history :entries)))
+           (locations (plist-get (plist-get filed-run :filing)
+                                 :target-locations)))
+      (should (equal '(inspect-source
+                       match-project
+                       extract-actions
+                       integrate-into-source
+                       select-approved-filing-actions
+                       file-approved-outputs)
+                     stage-ids))
+      (should (equal 'file-approved-outputs
+                     (plist-get history :latest-stage)))
+      (should locations)
+      (should (string-match-p "Review filed outputs"
+                              (plist-get (delib-flow--run-session filed-run)
+                                         :current-decision))))))
+
+(ert-deftest delib-flow-full-cloud-assisted-workflow-completes ()
+  (delib-flow-test--with-temp-project-file
+      "* Alpha Project\n"
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Alpha Project kickoff"
+                       :content "* Alpha Project kickoff\nContact alice@example.com\nVisit https://example.com\n")))
+           (inspected (delib-flow--run-stage-locally run 'inspect-source))
+           (matched (delib-flow--run-stage-locally inspected 'match-project))
+           (drafted (delib-flow--run-stage-locally matched 'extract-actions))
+           (cloud-decided
+            (delib-flow--run-stage-locally drafted 'decide-cloud-pass))
+           (sanitized
+            (delib-flow--run-stage-locally cloud-decided 'sanitize-for-cloud))
+           (approved-send
+            (delib-flow--run-stage-locally sanitized 'approve-cloud-send))
+           (cloud-run
+            (delib-flow--run-stage-in-cloud approved-send 'run-cloud-stage))
+           (approved-reintegration
+            (delib-flow--run-stage-locally cloud-run
+                                           'approve-candidate-reintegration))
+           (integrated
+            (delib-flow--run-stage-locally approved-reintegration
+                                           'integrate-into-source))
+           (selected
+            (delib-flow--run-stage-locally integrated
+                                           'select-approved-filing-actions))
+           (filed-run
+            (delib-flow--run-stage-locally selected 'file-approved-outputs))
+           (history (delib-flow--run-stage-history filed-run))
+           (stage-ids (mapcar (lambda (entry) (plist-get entry :stage-id))
+                              (plist-get history :entries)))
+           (working (delib-flow--run-working-context filed-run))
+           (routing (plist-get filed-run :routing)))
+      (should (equal '(inspect-source
+                       match-project
+                       extract-actions
+                       decide-cloud-pass
+                       sanitize-for-cloud
+                       approve-cloud-send
+                       run-cloud-stage
+                       approve-candidate-reintegration
+                       integrate-into-source
+                       select-approved-filing-actions
+                       file-approved-outputs)
+                     stage-ids))
+      (should (string-match-p "Cloud-reviewed context"
+                              (plist-get working :retained-context)))
+      (should (eq 'approved (plist-get routing :reintegration-status))))))
 
 (ert-deftest delib-flow-refresh-buffer-detects-managed-region-conflicts ()
   (let* ((run (delib-flow--initialize-run (list :title "Example")))
@@ -438,6 +526,39 @@ FILES is an alist of relative path to file content."
                                (plist-get action :id))
                              (plist-get (delib-flow--run-actions updated-run)
                                         :items)))))))
+
+(ert-deftest delib-flow-match-project-uses-contact-metadata ()
+  (delib-flow-test--with-temp-project-file
+      "* Alpha Project\nContact alice@example.com\n* Beta Project\nContact bob@example.com\n"
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Kickoff sync"
+                       :content "* Kickoff sync\nPlease follow up with alice@example.com\n")))
+           (inspected (delib-flow--run-stage-locally run 'inspect-source))
+           (updated-run (delib-flow--run-stage-locally inspected 'match-project))
+           (project-match
+            (plist-get (delib-flow--run-working-context updated-run)
+                       :project-match)))
+      (should (equal 'matched (plist-get project-match :match-status)))
+      (should (equal "Alpha Project"
+                     (plist-get (plist-get project-match :best-project) :title)))
+      (should (string-match-p "metadata-aware match"
+                              (plist-get project-match :reason))))))
+
+(ert-deftest delib-flow-match-project-metadata-can-create-ambiguity ()
+  (delib-flow-test--with-temp-project-file
+      "* Alpha Project :shared:\nContact team@example.com\n* Beta Project :shared:\nContact team@example.com\n"
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Shared planning"
+                       :content "* Shared planning\nteam@example.com needs a reply\n")))
+           (inspected (delib-flow--run-stage-locally run 'inspect-source))
+           (updated-run (delib-flow--run-stage-locally inspected 'match-project))
+           (project-match
+            (plist-get (delib-flow--run-working-context updated-run)
+                       :project-match)))
+      (should (equal 'ambiguous (plist-get project-match :match-status)))
+      (should (= 2 (length (plist-get project-match :candidates))))
+      (should (string-match-p "metadata-aware match"
+                              (plist-get project-match :reason))))))
 
 (ert-deftest delib-flow-manual-project-match-updates-project-context ()
   (delib-flow-test--with-temp-project-file
@@ -603,6 +724,52 @@ FILES is an alist of relative path to file content."
                                 (plist-get action :id))
                               (plist-get (delib-flow--run-actions updated-run)
                                          :items)))))))
+
+(ert-deftest delib-flow-discover-reference-material-prioritizes-project-linked-notes ()
+  (delib-flow-test--with-temp-zk-root
+      '(("linked-note.org" . "#+title: Support Material\nA note linked from the project.\n")
+        ("term-heavy.org" . "#+title: Alpha Project Kickoff Notes\nAlpha project kickoff agenda and blockers.\n"))
+    (let* ((linked-file (expand-file-name "linked-note.org" delib-flow-zk-root))
+           (project-content
+            (format "* Alpha Project\nSee [[file:%s][Support]]\n"
+                    linked-file)))
+      (delib-flow-test--with-temp-project-file
+          project-content
+        (let* ((run (delib-flow--initialize-run
+                     (list :title "Alpha Project kickoff"
+                           :content "* Alpha Project kickoff\nAgenda\n")))
+               (inspected (delib-flow--run-stage-locally run 'inspect-source))
+               (matched (delib-flow--run-stage-locally inspected 'match-project))
+               (updated-run
+                (delib-flow--run-stage-locally matched
+                                               'discover-reference-material))
+               (retrieved
+                (plist-get (delib-flow--run-working-context updated-run)
+                           :retrieved-candidates)))
+          (should retrieved)
+          (should (equal "Support Material"
+                         (plist-get (car retrieved) :title))))))))
+
+(ert-deftest delib-flow-discover-reference-material-uses-project-tags-and-contacts ()
+  (delib-flow-test--with-temp-zk-root
+      '(("contact-note.org" . "#+title: Follow-up material\n#+filetags: :alpha:\nReach alice@example.com about next steps.\n")
+        ("plain-note.org" . "#+title: General Notes\nMiscellaneous text.\n"))
+    (delib-flow-test--with-temp-project-file
+        "* Alpha Project :alpha:\nContact alice@example.com\n"
+      (let* ((run (delib-flow--initialize-run
+                   (list :title "Kickoff sync"
+                         :content "* Kickoff sync\nContact alice@example.com\n")))
+             (inspected (delib-flow--run-stage-locally run 'inspect-source))
+             (matched (delib-flow--run-stage-locally inspected 'match-project))
+             (updated-run
+              (delib-flow--run-stage-locally matched
+                                             'discover-reference-material))
+             (retrieved
+              (plist-get (delib-flow--run-working-context updated-run)
+                         :retrieved-candidates)))
+        (should retrieved)
+        (should (equal "Follow-up material"
+                       (plist-get (car retrieved) :title)))))))
 
 (ert-deftest delib-flow-discover-reference-material-command-rerenders-history ()
   (delib-flow-test--with-temp-zk-root
@@ -938,12 +1105,40 @@ FILES is an alist of relative path to file content."
     (should (equal 'decide-cloud-pass (plist-get entry :stage-id)))
     (should (plist-get routing :cloud-switch-pending))
     (should (eq 'required (plist-get routing :sanitization-status)))
+    (should (equal "cloud-model-unconfigured"
+                   (plist-get routing :selected-cloud-model)))
+    (should (equal "cloud-model-unconfigured"
+                   (plist-get routing :selected-cloud-provider)))
+    (should (eq 'standard
+                (plist-get routing :cloud-policy-profile)))
     (should (member 'sanitize-for-cloud
                     (mapcar (lambda (action)
                               (plist-get action :id))
                             (plist-get (delib-flow--run-actions updated-run)
                                        :items))))
     (should (string-match-p "Review cloud-routing decision"
+                            (plist-get (delib-flow--run-session updated-run)
+                                       :current-decision)))))
+
+(ert-deftest delib-flow-decide-cloud-pass-fails-when-provider-policy-disables-routing ()
+  (let* ((delib-flow-default-cloud-model "blocked:model")
+         (delib-flow-cloud-provider-policy-alist
+          '(("blocked" :enabled nil :policy-profile strict)
+            (default :enabled t :policy-profile standard)))
+         (run (delib-flow--initialize-run
+               (list :title "Example"
+                     :content "* Example\nBody line\n")))
+         (inspected (delib-flow--run-stage-locally run 'inspect-source))
+         (updated-run (delib-flow--run-stage-locally inspected
+                                                     'decide-cloud-pass))
+         (history (delib-flow--run-stage-history updated-run))
+         (entry (car (last (plist-get history :entries)))))
+    (should (equal 'failed (plist-get history :latest-status)))
+    (should (equal 'decide-cloud-pass (plist-get history :latest-stage)))
+    (should (equal 'failed (plist-get entry :status)))
+    (should (string-match-p "Cloud routing is disabled for provider blocked"
+                            (plist-get entry :normalized-output)))
+    (should (string-match-p "Review stage failure"
                             (plist-get (delib-flow--run-session updated-run)
                                        :current-decision)))))
 
@@ -994,14 +1189,52 @@ FILES is an alist of relative path to file content."
     (should (string-match-p "\\[redacted-email\\]" cloud-context))
     (should (string-match-p "\\[redacted-url\\]" cloud-context))
     (should (eq 'prepared (plist-get routing :sanitization-status)))
-    (should (member 'run-cloud-stage
+    (should (member 'approve-cloud-send
                     (mapcar (lambda (action)
                               (plist-get action :id))
                             (plist-get (delib-flow--run-actions updated-run)
                                        :items))))
+    (should-not (member 'run-cloud-stage
+                        (mapcar (lambda (action)
+                                  (plist-get action :id))
+                                (plist-get (delib-flow--run-actions updated-run)
+                                           :items))))
     (should (string-match-p "Review sanitized cloud package"
                             (plist-get (delib-flow--run-session updated-run)
                                        :current-decision)))))
+
+(ert-deftest delib-flow-sanitize-for-cloud-strict-policy-redacts-links-and-project-terms ()
+  (let* ((delib-flow-default-cloud-model "strict:model")
+         (delib-flow-cloud-provider-policy-alist
+         '(("strict" :enabled t :policy-profile strict)
+            (default :enabled t :policy-profile standard)))
+         (run (delib-flow--initialize-run
+               (list :title "Alpha Project"
+                     :content "* Alpha Project\nDiscuss alpha project timeline\nSee [[file:secret.org][secret]]\nContact alice@example.com\nVisit https://example.com\n")))
+         (inspected (delib-flow--run-stage-locally run 'inspect-source))
+         (matched (plist-put
+                   inspected
+                   :working-context
+                   (plist-put
+                    (delib-flow--run-working-context inspected)
+                    :project-match
+                    (list :best-project (list :title "Alpha Project")))))
+         (cloud-decided
+          (delib-flow--run-stage-locally matched 'decide-cloud-pass))
+         (updated-run
+          (delib-flow--run-stage-locally cloud-decided 'sanitize-for-cloud))
+         (working (delib-flow--run-working-context updated-run))
+         (routing (plist-get updated-run :routing))
+         (cloud-context (plist-get working :cloud-sanitized-context)))
+    (should (eq 'strict (plist-get routing :cloud-policy-profile)))
+    (should (string-match-p "\\[redacted-email\\]" cloud-context))
+    (should (string-match-p "\\[redacted-url\\]" cloud-context))
+    (should (string-match-p "\\[redacted-link\\]" cloud-context))
+    (should (string-match-p "\\[redacted-project\\]" cloud-context))
+    (should-not (string-match-p "Alpha" cloud-context))
+    (should-not (string-match-p "alpha project timeline" cloud-context))
+    (should-not (string-match-p "\\[\\[file:secret\\.org\\]\\[secret\\]\\]"
+                                cloud-context))))
 
 (ert-deftest delib-flow-sanitize-for-cloud-command-rerenders-working-context ()
   (let* ((run (delib-flow--initialize-run
@@ -1022,12 +1255,84 @@ FILES is an alist of relative path to file content."
             (should (search-forward "Sanitization status: prepared" nil t))
             (goto-char (point-min))
             (should (search-forward "Cloud-sanitized context: available." nil t))
+            (goto-char (point-min))
+            (should (search-forward "Reviewed cloud package: available." nil t))
             (should (search-forward "Sanitized source title:" nil t))
             (should (search-forward "[redacted-email]" nil t))
             (goto-char (point-min))
-            (should (search-forward "- Run Cloud Stage [available]" nil t))
+            (should (search-forward "- Approve Cloud Send [available]" nil t))
+            (should-not (search-forward "- Run Cloud Stage [available]" nil t))
             (goto-char (point-min))
             (should (search-forward "- Retry Sanitize for Cloud [available]" nil t))))
+      (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+        (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
+
+(ert-deftest delib-flow-approve-cloud-send-updates-routing-and-reviewed-package ()
+  (let* ((run (delib-flow--initialize-run
+               (list :title "Alice Example"
+                     :content "* Alice Example\nContact alice@example.com\nVisit https://example.com\n")))
+         (inspected (delib-flow--run-stage-locally run 'inspect-source))
+         (cloud-decided
+          (delib-flow--run-stage-locally inspected 'decide-cloud-pass))
+         (sanitized
+          (delib-flow--run-stage-locally cloud-decided 'sanitize-for-cloud))
+         (edited-run
+          (delib-flow--set-editable-block
+           sanitized
+           'cloud-package-review
+           (delib-flow--set-editable-block-text
+            (delib-flow--editable-block sanitized 'cloud-package-review)
+            "Reviewed package for cloud send.")))
+         (updated-run
+          (delib-flow--run-stage-locally edited-run 'approve-cloud-send))
+         (history (delib-flow--run-stage-history updated-run))
+         (entry (car (last (plist-get history :entries))))
+         (working (delib-flow--run-working-context updated-run))
+         (routing (plist-get updated-run :routing)))
+    (should (equal 'approve-cloud-send (plist-get history :latest-stage)))
+    (should (equal 'completed (plist-get history :latest-status)))
+    (should (equal 'approve-cloud-send (plist-get entry :stage-id)))
+    (should (equal "Reviewed package for cloud send."
+                   (plist-get working :cloud-sanitized-context)))
+    (should (eq 'approved (plist-get routing :sanitization-status)))
+    (should (member 'run-cloud-stage
+                    (mapcar (lambda (action)
+                              (plist-get action :id))
+                            (plist-get (delib-flow--run-actions updated-run)
+                                       :items))))
+    (should (string-match-p "Review approved cloud package"
+                            (plist-get (delib-flow--run-session updated-run)
+                                       :current-decision)))))
+
+(ert-deftest delib-flow-approve-cloud-send-command-syncs-reviewed-package-edit ()
+  (let* ((run (delib-flow--initialize-run
+               (list :title "Alice Example"
+                     :content "* Alice Example\nContact alice@example.com\nVisit https://example.com\n")))
+         (inspected (delib-flow--run-stage-locally run 'inspect-source))
+         (cloud-decided
+          (delib-flow--run-stage-locally inspected 'decide-cloud-pass))
+         (delib-flow--active-run
+          (delib-flow--run-stage-locally cloud-decided 'sanitize-for-cloud))
+         (buffer (delib-flow--render-control-buffer delib-flow--active-run)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local delib-flow--active-run-buffer t)
+            (goto-char (point-min))
+            (search-forward "#+begin_delib-edit cloud-review" nil t)
+            (forward-line 1)
+            (insert "Approved reviewed cloud package.\n"))
+          (delib-flow-action-approve-cloud-send)
+          (should (string-match-p
+                   "Approved reviewed cloud package."
+                   (plist-get (delib-flow--run-working-context delib-flow--active-run)
+                              :cloud-sanitized-context)))
+          (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+            (goto-char (point-min))
+            (should (search-forward "** Approve Cloud Send" nil t))
+            (should (search-forward "Sanitization status: approved" nil t))
+            (goto-char (point-min))
+            (should (search-forward "- Run Cloud Stage [available]" nil t))))
       (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
         (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
 
@@ -1040,7 +1345,9 @@ FILES is an alist of relative path to file content."
           (delib-flow--run-stage-locally inspected 'decide-cloud-pass))
          (sanitized
           (delib-flow--run-stage-locally cloud-decided 'sanitize-for-cloud))
-         (updated-run (delib-flow--run-stage-in-cloud sanitized
+         (approved
+          (delib-flow--run-stage-locally sanitized 'approve-cloud-send))
+         (updated-run (delib-flow--run-stage-in-cloud approved
                                                       'run-cloud-stage))
          (history (delib-flow--run-stage-history updated-run))
          (entry (car (last (plist-get history :entries))))
@@ -1053,6 +1360,7 @@ FILES is an alist of relative path to file content."
     (should cloud-output)
     (should (string-match-p "Cloud output for reviewed package" cloud-output))
     (should (eq 'returned (plist-get routing :sanitization-status)))
+    (should (eq 'pending-review (plist-get routing :reintegration-status)))
     (should-not (plist-get routing :cloud-switch-pending))
     (should (string-match-p "Review cloud-returned result"
                             (plist-get (delib-flow--run-session updated-run)
@@ -1066,7 +1374,9 @@ FILES is an alist of relative path to file content."
          (cloud-decided
           (delib-flow--run-stage-locally inspected 'decide-cloud-pass))
          (delib-flow--active-run
-          (delib-flow--run-stage-locally cloud-decided 'sanitize-for-cloud))
+          (delib-flow--run-stage-locally
+           (delib-flow--run-stage-locally cloud-decided 'sanitize-for-cloud)
+           'approve-cloud-send))
          (buffer (delib-flow--render-control-buffer delib-flow--active-run)))
     (unwind-protect
         (progn
@@ -1081,7 +1391,73 @@ FILES is an alist of relative path to file content."
             (should (search-forward "Cloud-returned context: available." nil t))
             (should (search-forward "** Cloud-returned context" nil t))
             (goto-char (point-min))
-            (should (search-forward "- Retry Run Cloud Stage [available]" nil t))))
+            (should (search-forward "- Retry Run Cloud Stage [available]" nil t))
+            (goto-char (point-min))
+            (should (search-forward "- Approve Candidate Reintegration [available]" nil t))
+            (goto-char (point-min))
+            (should-not (search-forward "- Integrate into Source [available]" nil t))))
+      (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+        (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
+
+(ert-deftest delib-flow-approve-candidate-reintegration-updates-routing ()
+  (let* ((run (delib-flow--initialize-run
+               (list :title "Alice Example"
+                     :content "* Alice Example\nContact alice@example.com\nVisit https://example.com\n")))
+         (inspected (delib-flow--run-stage-locally run 'inspect-source))
+         (cloud-decided
+          (delib-flow--run-stage-locally inspected 'decide-cloud-pass))
+         (sanitized
+          (delib-flow--run-stage-locally cloud-decided 'sanitize-for-cloud))
+         (approved-send
+          (delib-flow--run-stage-locally sanitized 'approve-cloud-send))
+         (cloud-run
+          (delib-flow--run-stage-in-cloud approved-send 'run-cloud-stage))
+         (updated-run
+          (delib-flow--run-stage-locally cloud-run
+                                         'approve-candidate-reintegration))
+         (history (delib-flow--run-stage-history updated-run))
+         (entry (car (last (plist-get history :entries))))
+         (routing (plist-get updated-run :routing)))
+    (should (equal 'approve-candidate-reintegration
+                   (plist-get history :latest-stage)))
+    (should (equal 'completed (plist-get history :latest-status)))
+    (should (equal 'approve-candidate-reintegration
+                   (plist-get entry :stage-id)))
+    (should (eq 'approved (plist-get routing :reintegration-status)))
+    (should (member 'integrate-into-source
+                    (mapcar (lambda (action)
+                              (plist-get action :id))
+                            (plist-get (delib-flow--run-actions updated-run)
+                                       :items))))
+    (should (string-match-p "Review approved reintegration candidate"
+                            (plist-get (delib-flow--run-session updated-run)
+                                       :current-decision)))))
+
+(ert-deftest delib-flow-approve-candidate-reintegration-command-rerenders-actions ()
+  (let* ((run (delib-flow--initialize-run
+               (list :title "Alice Example"
+                     :content "* Alice Example\nContact alice@example.com\nVisit https://example.com\n")))
+         (inspected (delib-flow--run-stage-locally run 'inspect-source))
+         (cloud-decided
+          (delib-flow--run-stage-locally inspected 'decide-cloud-pass))
+         (sanitized
+          (delib-flow--run-stage-locally cloud-decided 'sanitize-for-cloud))
+         (approved-send
+          (delib-flow--run-stage-locally sanitized 'approve-cloud-send))
+         (delib-flow--active-run
+          (delib-flow--run-stage-in-cloud approved-send 'run-cloud-stage))
+         (buffer (delib-flow--render-control-buffer delib-flow--active-run)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local delib-flow--active-run-buffer t))
+          (delib-flow-action-approve-candidate-reintegration)
+          (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+            (goto-char (point-min))
+            (should (search-forward "** Approve Candidate Reintegration" nil t))
+            (should (search-forward "Reintegration status: approved" nil t))
+            (goto-char (point-min))
+            (should (search-forward "- Integrate into Source [available]" nil t))))
       (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
         (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
 
@@ -1100,10 +1476,16 @@ FILES is an alist of relative path to file content."
               (delib-flow--run-stage-locally drafted 'decide-cloud-pass))
              (sanitized
               (delib-flow--run-stage-locally cloud-decided 'sanitize-for-cloud))
+             (approved-send
+              (delib-flow--run-stage-locally sanitized 'approve-cloud-send))
              (cloud-run
-              (delib-flow--run-stage-in-cloud sanitized 'run-cloud-stage))
+              (delib-flow--run-stage-in-cloud approved-send 'run-cloud-stage))
+             (approved-reintegration
+              (delib-flow--run-stage-locally cloud-run
+                                             'approve-candidate-reintegration))
              (updated-run
-              (delib-flow--run-stage-locally cloud-run 'integrate-into-source))
+              (delib-flow--run-stage-locally approved-reintegration
+                                             'integrate-into-source))
              (history (delib-flow--run-stage-history updated-run))
              (entry (car (last (plist-get history :entries))))
              (working (delib-flow--run-working-context updated-run))
@@ -1137,8 +1519,12 @@ FILES is an alist of relative path to file content."
               (delib-flow--run-stage-locally drafted 'decide-cloud-pass))
              (sanitized
               (delib-flow--run-stage-locally cloud-decided 'sanitize-for-cloud))
+             (approved-send
+              (delib-flow--run-stage-locally sanitized 'approve-cloud-send))
              (delib-flow--active-run
-              (delib-flow--run-stage-in-cloud sanitized 'run-cloud-stage))
+              (delib-flow--run-stage-locally
+               (delib-flow--run-stage-in-cloud approved-send 'run-cloud-stage)
+               'approve-candidate-reintegration))
              (buffer (delib-flow--render-control-buffer delib-flow--active-run)))
         (unwind-protect
             (progn
@@ -1281,6 +1667,131 @@ FILES is an alist of relative path to file content."
           (should (search-forward "#+title: Alpha Project kickoff" nil t))
           (should (search-forward "Create general PKM note for Alpha Project kickoff"
                                   nil t)))))))
+
+(ert-deftest delib-flow-reference-note-content-uses-project-support-template ()
+  (let ((content
+         (delib-flow--reference-note-content
+          (list :kind 'reference-note
+                :text "Create project support note from Alpha Constraints"
+                :note-type 'project-support))))
+    (should (string-match-p "#\\+title: Alpha Constraints" content))
+    (should (string-match-p "#\\+filetags: :project:support:" content))
+    (should (string-match-p "Create project support note from Alpha Constraints"
+                            content))))
+
+(ert-deftest delib-flow-file-approved-outputs-uses-configured-general-note-template ()
+  (let ((delib-flow-general-note-template
+         "#+title: ${title}\n#+filetags: :custom:general:\n\nSource: ${source-artifact}\nType: ${note-type}\n"))
+    (delib-flow-test--with-temp-zk-root ()
+      (delib-flow-test--with-temp-project-file
+          "* Alpha Project\n"
+        (let* ((run (delib-flow--initialize-run
+                     (list :title "Alpha Project kickoff"
+                           :content "* Alpha Project kickoff\nBody line\n")))
+               (inspected (delib-flow--run-stage-locally run 'inspect-source))
+               (matched (delib-flow--run-stage-locally inspected 'match-project))
+               (drafted
+                (delib-flow--run-stage-locally matched 'suggest-reference-notes))
+               (integrated
+                (delib-flow--run-stage-locally drafted 'integrate-into-source))
+               (selected
+                (delib-flow--run-stage-locally integrated
+                                               'select-approved-filing-actions))
+               (updated-run
+                (delib-flow--run-stage-locally selected 'file-approved-outputs))
+               (location (car (plist-get (plist-get updated-run :filing)
+                                         :target-locations))))
+          (with-temp-buffer
+            (insert-file-contents (plist-get location :target))
+            (should (search-forward "#+filetags: :custom:general:" nil t))
+            (should (search-forward "Source: Create general PKM note for Alpha Project kickoff"
+                                    nil t))
+            (should (search-forward "Type: general-pkm" nil t))))))))
+
+(ert-deftest delib-flow-file-approved-outputs-updates-project-reference-files-for-support-notes ()
+  (delib-flow-test--with-temp-zk-root ()
+    (delib-flow-test--with-temp-project-file
+        "* Alpha Project\n"
+      (let* ((package
+              (list :working-context
+                    (list :project-match
+                          (list :best-project
+                                (list :title "Alpha Project")))
+                    :filing
+                    (list :approved-items
+                          (list (list :kind 'reference-note
+                                      :text "Create project support note from Alpha Constraints"
+                                      :note-type 'project-support)))))
+             (result (delib-flow--file-approved-outputs-result package))
+             (locations (plist-get result :target-locations))
+             (note-location (car locations))
+             (metadata-location (cadr locations)))
+        (should (equal 2 (length locations)))
+        (should (file-exists-p (plist-get note-location :target)))
+        (should (string-match-p "REFERENCE_FILES"
+                                (plist-get metadata-location :target)))
+        (with-temp-buffer
+          (insert-file-contents delib-flow-my-projects-file)
+          (should (search-forward ":REFERENCE_FILES:" nil t))
+          (should (re-search-forward
+                   "\\[\\[file:[^]]*alpha-constraints\\.org\\]\\[Alpha Constraints\\]\\]"
+                   nil t)))))))
+
+(ert-deftest delib-flow-file-approved-outputs-detects-project-child-conflict ()
+  (delib-flow-test--with-temp-project-file
+      "* Alpha Project\n** TODO Clarify the next step for Alpha Project kickoff\n"
+    (let* ((package
+            (list :working-context
+                  (list :project-match
+                        (list :best-project
+                              (list :title "Alpha Project")))
+                  :filing
+                  (list :approved-items
+                        (list (list :kind 'next-action
+                                    :text "Clarify the next step for Alpha Project kickoff")))))
+           (result (delib-flow--file-approved-outputs-result package))
+           (conflicts (plist-get result :conflicts)))
+      (should (equal 1 (plist-get result :conflict-count)))
+      (should conflicts)
+      (should-not (plist-get result :target-locations))
+      (should (string-match-p "identical project child heading already exists"
+                              (plist-get (car conflicts) :reason))))))
+
+(ert-deftest delib-flow-file-approved-outputs-rerenders-filing-conflict-state ()
+  (delib-flow-test--with-temp-zk-root
+      '(("alpha-project-kickoff.org"
+          . "#+title: Alpha Project kickoff\n\nExisting note\n"))
+    (delib-flow-test--with-temp-project-file
+        "* Alpha Project\n"
+      (let* ((run (delib-flow--initialize-run
+                   (list :title "Alpha Project kickoff"
+                         :content "* Alpha Project kickoff\nBody line\n")))
+             (inspected (delib-flow--run-stage-locally run 'inspect-source))
+             (matched (delib-flow--run-stage-locally inspected 'match-project))
+             (drafted
+              (delib-flow--run-stage-locally matched 'suggest-reference-notes))
+             (delib-flow--active-run
+              (delib-flow--run-stage-locally drafted 'integrate-into-source))
+             (buffer (delib-flow--render-control-buffer delib-flow--active-run)))
+        (unwind-protect
+            (progn
+              (with-current-buffer buffer
+                (setq-local delib-flow--active-run-buffer t))
+              (delib-flow-action-select-approved-filing-actions)
+              (delib-flow-action-file-approved-outputs)
+              (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+                (goto-char (point-min))
+                (should (search-forward "** Filing conflicts" nil t))
+                (should (search-forward "deterministic note target already exists"
+                                        nil t))
+                (goto-char (point-min))
+                (should (search-forward "- File Approved Outputs [available]" nil t))
+                (goto-char (point-min))
+                (should (search-forward "** Approved artifacts" nil t))
+                (should (search-forward "Create general PKM note for Alpha Project kickoff"
+                                        nil t))))
+          (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+            (kill-buffer (get-buffer delib-flow-control-buffer-name))))))))
 
 (ert-deftest delib-flow-file-approved-outputs-command-rerenders-filing-preview ()
   (delib-flow-test--with-temp-project-file
