@@ -5,8 +5,99 @@ All notable repository changes should be recorded in this file.
 The format is intentionally simple for now: reverse-chronological headings with
 dated entries.
 
+* 2026-04-27
+
+- Implemented the locked-in Milestone 2 hardening pass in `delib-flow.el` and
+  `test/delib-flow-test.el`, so deterministic project-support note filing now
+  also updates the matched project's `REFERENCE_FILES` metadata with a link to
+  the newly created support note.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the narrowed but real project
+  metadata update path and to mark the fourth locked-in Milestone 2
+  refinement pass as implemented.
+- Implemented the locked-in Milestone 2 cloud-policy pass in `delib-flow.el`
+  and `test/delib-flow-test.el`, adding provider-aware cloud-routing policy
+  checks, recorded provider/policy-profile state, and strict-profile
+  sanitization that redacts Org file links and project-identifying terms.
+- Fixed the new cloud-policy routing update path in
+  `delib-flow--apply-decide-cloud-pass-entry` and tightened strict
+  sanitization so project-term redaction does not match inside its own
+  placeholder markers.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect provider-aware cloud policy and
+  policy-profile-aware sanitization.
+- Added `scripts/load-delib-flow-tests.el` so an interactive Emacs session can
+  load both `delib-flow.el` and `test/delib-flow-test.el` before running
+  `ert-run-tests-interactively`.
+- Implemented the locked-in Milestone 2 capture-template pass in
+  `delib-flow.el` and `test/delib-flow-test.el`, routing deterministic
+  reference-note creation through configurable package templates with
+  package-provided defaults for general and project-support notes.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect template-backed note creation.
+- Implemented the locked-in Milestone 2 discovery-refinement pass in
+  `delib-flow.el` and `test/delib-flow-test.el`, so reference discovery now
+  prioritizes directly linked project notes and uses project tags and contact
+  addresses as first-class retrieval signals.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect that discovery is no longer a
+  plain weighted-term pass.
+- Recorded the locked-in Milestone 2 refinement sequence in
+  `docs/implementation-plan.org`: discovery heuristics, capture-template-backed
+  note filing, cloud policy refinement, and a final hardening pass, with scope
+  allowed to change only if new implementation information justifies it.
+- Implemented metadata-aware project matching in `delib-flow.el` and
+  `test/delib-flow-test.el`, expanding candidate parsing and scoring to use
+  project heading tags, subtree terms, and contact addresses in addition to
+  title overlap.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect that project matching is no longer
+  title-only.
+- Implemented deterministic filing conflict detection in `delib-flow.el` and
+  `test/delib-flow-test.el`, so filing now preflights duplicate project-child,
+  project-heading, and reference-note targets, preserves the approved artifact
+  for retry, and surfaces conflict state in `Filing preview`.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect that filing conflict detection is
+  now part of the implemented Milestone 2 workflow.
+- Added end-to-end Milestone 2 workflow coverage in
+  `test/delib-flow-test.el` for both the local matched-project path and the
+  cloud-assisted approval path.
+- Updated `README.org` and `docs/implementation-plan.org` to treat Milestone 2
+  as a complete core workflow with remaining refinement work called out as
+  heuristic and integration limits rather than missing stage coverage.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Approve Candidate
+  Reintegration` stage so cloud-returned output must be explicitly approved
+  before local reintegration.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the reintegration-approval stage
+  and the current Milestone 2 stage count.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Approve Cloud Send` stage
+  and an editable reviewed cloud-package surface in the control buffer.
+- Refactored stage-command rerendering so completed stages refresh the control
+  buffer without first resyncing stale pre-stage editable text back into run
+  state.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect explicit cloud-send approval and
+  reviewed-package editing before cloud execution.
+
 * 2026-04-26
 
+- Synchronized `CHANGELOG.org` with the current Milestone 2 implementation
+  state before the next planning pass, including the explicit
+  one-artifact-at-a-time filing review loop.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Select Approved Filing
+  Actions` stage so filing approval is explicit and one item at a time.
+- Refactored the filing review path so `Integrate into Source` preserves draft
+  artifacts for review instead of auto-approving them, and `File Approved
+  Outputs` now consumes only the current approved artifact before clearing the
+  approval slot.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the explicit filing-selection
+  stage and one-at-a-time filing behavior.
 - Replaced the stub `docs/design.org` with a repo-local copy of the canonical
   design note.
 - Added `docs/implementation-plan.org` to separate execution planning from the
@@ -58,3 +149,85 @@ dated entries.
   1 outcomes, current status, and implementation learnings.
 - Updated `docs/design.org` with a Milestone 1 implementation-status note and
   design-level learnings confirmed by the current control-buffer foundation.
+- Implemented the first Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding a generic local stage execution contract
+  and an end-to-end `Inspect Source` stage.
+- Updated `README.org` and `docs/implementation-plan.org` to reflect Milestone
+  2 execution-contract progress and learnings.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Match Project` stage backed
+  by deterministic My Projects matching and stage-dependent follow-up actions.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current Milestone 2 state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Discover Relevant Reference
+  Material` stage backed by deterministic local retrieval from the configured
+  ZK root and discovery-dependent follow-up actions.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current discovery-stage state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Filter Useful Reference
+  Material` stage backed by deterministic filtering over retrieved candidates.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current filtering-stage state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Extract Actions` stage
+  backed by deterministic local drafting into filing preview.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current action-extraction
+  state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Extract Waiting-For` stage
+  backed by deterministic local drafting into filing preview.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current waiting-for extraction
+  state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Suggest Reference Notes`
+  stage backed by deterministic local drafting into filing preview.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current reference-note
+  suggestion state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Decide on Cloud Pass`
+  stage backed by deterministic local routing-state updates.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current cloud-routing decision
+  state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Sanitize for Cloud` stage
+  backed by deterministic local redaction into working context.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current cloud-sanitization
+  state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Run Cloud Stage` step
+  through the dedicated cloud adapter path and an end-to-end `Integrate into
+  Source` stage for local reintegration and approval-state promotion.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current cloud-execution and
+  reintegration state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `File Approved Outputs`
+  stage for deterministic project-child insertion and reference-note creation.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current deterministic filing
+  state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding incremental audit-log state updates,
+  configured audit-file persistence, and control-buffer audit status rendering.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current audit logging state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Propose New Project` stage
+  and deterministic filing support for approved project proposals.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current no-match project
+  creation state.
+- Implemented the next Milestone 2 slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding an end-to-end `Choose Project Manually`
+  stage and retryable manual-selection behavior on ambiguous or no-match
+  branches.
+- Updated `README.org`, `docs/design.org`, and
+  `docs/implementation-plan.org` to reflect the current manual project
+  selection state.
