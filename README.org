@@ -13,6 +13,8 @@ This repository is being built incrementally from a design-first process.
 - Structured control buffer with managed and editable regions
 - Editable block contents persist across refresh
 - Managed-region conflicts are detected and reflected in action state
+- Control buffer now behaves as an idempotent workflow cockpit with stable
+  layout, predictable folding, point anchoring, and in-buffer action dispatch
 - Generic local stage execution contract implemented
 - `Inspect Source` executes end-to-end and is recorded in stage history
 - `Inspect Source` now classifies version 1 source types and records structured
@@ -96,6 +98,21 @@ At a high level, the package does this:
 - require explicit review at key inspect and project-decision boundaries
 - support deterministic local filing into your projects file and ZK
 
+The control buffer is organized around these top-level sections:
+
+- `Now`
+- `Next actions`
+- `Current result`
+- `Current context`
+- `Filing preview`
+- `Details`
+
+The first four sections stay expanded after refresh and action execution.
+`Filing preview` expands when there is something to review or file. `Details`
+stays folded by default and holds verbose material such as the source snapshot,
+accepted working context, latest prompt/input, latest raw output, grouped stage
+history, and audit status.
+
 Typical workflow:
 
 1. Put point on an Org heading you want to process.
@@ -110,6 +127,23 @@ Typical workflow:
    filing stages as needed.
 8. Review filing artifacts and use `File Approved Outputs` when ready.
 
+Control-buffer usage:
+
+- Move point to an action in `Next actions` and press `RET` or `a` to run it.
+- Press `A` to approve the current pending inspect or project-match result.
+- Press `r` to retry the current pending inspect or project-match stage.
+- Press `g` to refresh the control buffer.
+- Press `q` to abort the run.
+- Press `?` to view the control-buffer key help.
+
+Point behavior after rerender:
+
+- If inspect or project match is pending review, point moves to
+  `Current result`.
+- Otherwise point moves to `Next actions`.
+- A manual refresh preserves the current top-level cockpit section when no
+  stronger workflow anchor applies.
+
 Important current behavior:
 
 - Only one active `delib-flow` run is supported at a time.
@@ -119,6 +153,8 @@ Important current behavior:
   pending review, accepted, rejected, and superseded by retry.
 - Retrying inspect or project match supersedes the prior reviewed result before
   the new candidate result lands.
+- Old and superseded attempts appear only under `Details > Stage history`,
+  grouped by stage with nested attempts.
 - The control buffer is the primary UI. Some workflow branches rely on editing
   structured in-buffer blocks, especially manual project selection and reviewed
   cloud packages.
@@ -127,14 +163,25 @@ Current interactive entry points:
 
 - `M-x delib-flow-start`
   Start a run from the Org heading at point.
+- `M-x delib-flow-refresh`
+  Public refresh command for the active control buffer.
 - `M-x delib-flow-refresh-buffer`
   Rerender the active control buffer while preserving editable block state.
+- `M-x delib-flow-dispatch-action`
+  Execute the action at point in the control buffer.
+- `M-x delib-flow-approve-current`
+  Approve the current pending inspect or project-match result.
+- `M-x delib-flow-retry-current`
+  Retry the current pending inspect or project-match stage.
 - `M-x delib-flow-abort-run`
   Abort the active run and finalize audit state.
+- `M-x delib-flow-control-help`
+  Show the control-buffer keybindings.
 
-Most stage actions are normally triggered from the `Valid next actions` section
-of the control buffer. They also exist as interactive commands, but the
-expected usage is to work from the buffer that `delib-flow-start` opens.
+Most stage actions are normally triggered from the `Next actions` section of
+the control buffer. Stage-specific commands still exist as interactive
+commands, but the expected usage is to work from the buffer that
+`delib-flow-start` opens.
 
 * Configuration
 
@@ -246,6 +293,7 @@ What you can use today:
   branches.
 - Explicit project-decision review with accept, reject, retry, and manual
   override behavior.
+- A control-buffer UI with public keybindings and point-based action dispatch.
 - Reference-material discovery and filtering against your ZK.
 - Draft artifact generation for actions, waiting-for items, and reference
   notes.
@@ -266,6 +314,8 @@ Current limits to keep in mind:
   prompt-system-heavy.
 - Adapter-backed model behavior depends entirely on the functions you assign to
   `delib-flow-local-stage-adapter` and `delib-flow-cloud-stage-adapter`.
+- Later-stage ergonomics are improved, but retrieval/extraction heuristics are
+  still where most refinement work remains.
 
 * Development
 

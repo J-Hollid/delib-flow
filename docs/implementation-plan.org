@@ -1153,6 +1153,10 @@ Milestone 3 handoff state:
   audit log.
 - The next milestone should not reopen review-state storage unless a later
   feature proves the current dual representation insufficient.
+- The control buffer has also gone through a dedicated UI refactor pass:
+  idempotent full redraw, cockpit layout, predictable folding, point anchors,
+  public in-buffer action dispatch, and grouped stage-history rendering are now
+  baseline behavior rather than open UI design questions.
 
 ** Milestone 4: context retrieval path
 
@@ -1172,6 +1176,9 @@ Milestone 4 starting point:
   term overlap, and contact overlap.
 - The main remaining work is heuristic quality, review ergonomics, and clearer
   retained-versus-rejected context presentation.
+- Milestone 4 should build on the existing cockpit UI rather than reopening the
+  control-buffer shell unless a retrieval-specific review need clearly demands
+  it.
 
 Recommended first Milestone 4 slice:
 1. Make retrieved-candidate and filtered-context rendering more diagnostic.
