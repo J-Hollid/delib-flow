@@ -978,10 +978,30 @@ PRIORITY controls display order."
   "Return normalized contact addresses found in FILE."
   (delib-flow--text-emails (delib-flow--zk-note-text file)))
 
+(defun delib-flow--zk-note-links (file)
+  "Return normalized Org file links found in FILE."
+  (delib-flow--text-org-file-links
+   (delib-flow--zk-note-text file)
+   (file-name-directory file)))
+
 (defun delib-flow--matched-project-metadata (package)
   "Return matched project metadata from PACKAGE."
   (plist-get (plist-get (plist-get package :working-context) :project-match)
              :best-project))
+
+(defun delib-flow--discovery-inspect-output (package)
+  "Return inspect output used for discovery from PACKAGE."
+  (plist-get (plist-get package :working-context) :inspect-output))
+
+(defun delib-flow--discovery-source-contacts (package)
+  "Return source contact addresses for discovery from PACKAGE."
+  (plist-get (delib-flow--discovery-inspect-output package)
+             :contact-emails))
+
+(defun delib-flow--discovery-source-links (package)
+  "Return source Org file links for discovery from PACKAGE."
+  (plist-get (delib-flow--discovery-inspect-output package)
+             :org-file-links))
 
 (defun delib-flow--discovery-title-score (terms title)
   "Return title-based discovery score for TERMS against TITLE."
@@ -1003,43 +1023,110 @@ PRIORITY controls display order."
                             note-contacts
                             #'string=)))
 
+(defun delib-flow--discovery-source-contact-score (package note-contacts)
+  "Return source-contact discovery score for PACKAGE and NOTE-CONTACTS."
+  (length (seq-intersection (delib-flow--discovery-source-contacts package)
+                            note-contacts
+                            #'string=)))
+
 (defun delib-flow--discovery-linked-file-p (project file)
   "Return non-nil when FILE is directly linked from PROJECT."
   (member file (plist-get project :links)))
 
-(defun delib-flow--discovery-candidate-score (package file)
-  "Return retrieval score for PACKAGE against FILE."
+(defun delib-flow--discovery-source-linked-file-p (package file)
+  "Return non-nil when FILE is directly linked from source PACKAGE."
+  (member file (delib-flow--discovery-source-links package)))
+
+(defun delib-flow--discovery-shared-link-score (package note-links)
+  "Return shared-link discovery score for PACKAGE and NOTE-LINKS."
+  (length
+   (seq-intersection
+    (append (delib-flow--discovery-source-links package)
+            (plist-get (delib-flow--matched-project-metadata package) :links))
+    note-links
+    #'string=)))
+
+(defun delib-flow--discovery-signal (key value weight)
+  "Return weighted discovery signal for KEY with VALUE and WEIGHT."
+  (list :key key
+        :value value
+        :weight weight
+        :contribution (* value weight)))
+
+(defun delib-flow--discovery-signals (package file)
+  "Return weighted discovery signals for PACKAGE against FILE."
   (let* ((terms (delib-flow--discovery-search-terms package))
          (project (delib-flow--matched-project-metadata package))
          (title (delib-flow--zk-note-title file))
          (text (delib-flow--zk-note-text file))
+         (note-contacts (delib-flow--zk-note-contacts file))
+         (note-links (delib-flow--zk-note-links file))
+         (linked-file-p (if (delib-flow--discovery-linked-file-p project file) 1 0))
+         (source-linked-file-p (if (delib-flow--discovery-source-linked-file-p package file) 1 0))
          (title-score (delib-flow--discovery-title-score terms title))
          (text-score (delib-flow--discovery-text-score terms text))
          (tag-score (delib-flow--discovery-tag-score project
                                                      (delib-flow--zk-note-tags file)))
          (contact-score (delib-flow--discovery-contact-score
                          project
-                         (delib-flow--zk-note-contacts file))))
-    (+ (* 5 (if (delib-flow--discovery-linked-file-p project file) 1 0))
-       (* 7 (if (delib-flow--discovery-linked-file-p project file) 1 0))
-       (* 3 title-score)
-       (* 2 tag-score)
-       (* 2 contact-score)
-       text-score)))
+                         note-contacts))
+         (source-contact-score (delib-flow--discovery-source-contact-score
+                                package
+                                note-contacts))
+         (shared-link-score (delib-flow--discovery-shared-link-score
+                             package
+                             note-links)))
+    (list (delib-flow--discovery-signal 'linked-project-file linked-file-p 12)
+          (delib-flow--discovery-signal 'linked-source-file source-linked-file-p 15)
+          (delib-flow--discovery-signal 'title-overlap title-score 3)
+          (delib-flow--discovery-signal 'project-tag-overlap tag-score 2)
+          (delib-flow--discovery-signal 'project-contact-overlap contact-score 2)
+          (delib-flow--discovery-signal 'source-contact-overlap source-contact-score 3)
+          (delib-flow--discovery-signal 'shared-project-or-source-link shared-link-score 4)
+          (delib-flow--discovery-signal 'text-overlap text-score 1))))
 
-(defun delib-flow--make-discovery-candidate (file score)
-  "Return discovery candidate for FILE with SCORE."
+(defun delib-flow--discovery-candidate-score (signals)
+  "Return retrieval score from discovery SIGNALS."
+  (apply #'+ (mapcar (lambda (signal)
+                       (plist-get signal :contribution))
+                     signals)))
+
+(defun delib-flow--positive-discovery-signals (signals)
+  "Return positively contributing discovery SIGNALS."
+  (seq-filter (lambda (signal)
+                (> (plist-get signal :contribution) 0))
+              signals))
+
+(defun delib-flow--signal-description (signal)
+  "Return human-readable description for discovery SIGNAL."
+  (format "%s=%s (+%s)"
+          (plist-get signal :key)
+          (plist-get signal :value)
+          (plist-get signal :contribution)))
+
+(defun delib-flow--discovery-reasons (signals)
+  "Return human-readable discovery reasons from SIGNALS."
+  (let ((positive-signals (delib-flow--positive-discovery-signals signals)))
+    (if positive-signals
+        (mapcar #'delib-flow--signal-description positive-signals)
+      '("no-positive-signals"))))
+
+(defun delib-flow--make-discovery-candidate (file signals)
+  "Return discovery candidate for FILE with SIGNALS."
   (list :title (delib-flow--zk-note-title file)
         :file file
-        :score score))
+        :score (delib-flow--discovery-candidate-score signals)
+        :signals signals
+        :reasons (delib-flow--discovery-reasons signals)))
 
 (defun delib-flow--scored-discovery-candidates (package files)
   "Return scored discovery candidates for PACKAGE across FILES."
   (let (candidates)
     (dolist (file files (nreverse candidates))
-      (let ((score (delib-flow--discovery-candidate-score package file)))
+      (let* ((signals (delib-flow--discovery-signals package file))
+             (score (delib-flow--discovery-candidate-score signals)))
         (when (> score 0)
-          (push (delib-flow--make-discovery-candidate file score)
+          (push (delib-flow--make-discovery-candidate file signals)
                 candidates))))))
 
 (defun delib-flow--sort-discovery-candidates (candidates)
@@ -1075,16 +1162,114 @@ PRIORITY controls display order."
                 (> (plist-get candidate :score) 1))
               candidates))
 
+(defun delib-flow--filter-candidate-text (candidate)
+  "Return searchable filter text for CANDIDATE."
+  (concat
+   (or (plist-get candidate :title) "")
+   "\n"
+   (if-let ((file (plist-get candidate :file)))
+       (delib-flow--zk-note-text file)
+     "")))
+
+(defun delib-flow--filter-salience-signals (candidate)
+  "Return salient filtering signals for CANDIDATE."
+  (let ((text (downcase (delib-flow--filter-candidate-text candidate)))
+        signals)
+    (when (string-match-p "\\b\\(constraint\\|blocker\\|blocked\\|deadline\\|due\\)\\b" text)
+      (push "salient-constraint-context" signals))
+    (when (string-match-p "\\b\\(decision\\|decided\\|agreed\\)\\b" text)
+      (push "salient-decision-context" signals))
+    (when (string-match-p "\\b\\(prefer\\|preference\\|requested\\|request\\)\\b" text)
+      (push "salient-preference-context" signals))
+    (nreverse signals)))
+
+(defun delib-flow--retain-by-score-threshold-p (candidate)
+  "Return non-nil when CANDIDATE clears the score retention threshold."
+  (> (plist-get candidate :score) 1))
+
+(defun delib-flow--top-fallback-candidate-p (candidate top-candidate)
+  "Return non-nil when CANDIDATE should be retained as TOP-CANDIDATE fallback."
+  (and top-candidate
+       (equal candidate top-candidate)))
+
+(defun delib-flow--filter-base-retain-reasons (candidate)
+  "Return non-fallback retention reasons for CANDIDATE."
+  (append
+   (when (delib-flow--retain-by-score-threshold-p candidate)
+     '("retained-by-score-threshold"))
+   (delib-flow--filter-salience-signals candidate)))
+
+(defun delib-flow--filter-retain-reasons (candidate top-candidate)
+  "Return retention reasons for CANDIDATE given TOP-CANDIDATE."
+  (let ((reasons (delib-flow--filter-base-retain-reasons candidate)))
+    (if reasons
+        reasons
+      (when (delib-flow--top-fallback-candidate-p candidate top-candidate)
+        '("retained-as-top-fallback")))))
+
+(defun delib-flow--filter-reject-reasons (candidate)
+  "Return rejection reasons for CANDIDATE."
+  (or (delib-flow--filter-salience-signals candidate)
+      '("rejected-below-score-threshold")))
+
+(defun delib-flow--filter-decision-reasons (candidate status top-candidate)
+  "Return filter explanation list for CANDIDATE with STATUS and TOP-CANDIDATE."
+  (if (eq status 'retained)
+      (delib-flow--filter-retain-reasons candidate top-candidate)
+    (delib-flow--filter-reject-reasons candidate)))
+
+(defun delib-flow--filter-annotated-candidate (candidate status top-candidate)
+  "Return CANDIDATE annotated with filter STATUS and TOP-CANDIDATE."
+  (let ((copy (copy-sequence candidate)))
+    (plist-put
+     (plist-put
+      copy
+      :filter-status status)
+     :filter-reasons
+     (delib-flow--filter-decision-reasons candidate status top-candidate))))
+
+(defun delib-flow--annotated-filter-candidates (candidates selected)
+  "Return CANDIDATES annotated with retained/rejected decisions from SELECTED."
+  (let ((top-candidate (car candidates)))
+    (mapcar (lambda (candidate)
+              (delib-flow--filter-annotated-candidate
+               candidate
+               (if (member candidate selected) 'retained 'rejected)
+               top-candidate))
+            candidates)))
+
+(defun delib-flow--retained-annotated-candidates (candidates)
+  "Return retained annotated subset of CANDIDATES."
+  (seq-filter (lambda (candidate)
+                (delib-flow--filter-retain-reasons candidate nil))
+              candidates))
+
+(defun delib-flow--filter-reasons-text (candidate)
+  "Return human-readable filter reasons for CANDIDATE."
+  (mapconcat #'identity
+             (plist-get candidate :filter-reasons)
+             ", "))
+
 (defun delib-flow--filter-reference-material-result (package)
   "Return raw filter result for PACKAGE."
   (let* ((candidates (delib-flow--retrieved-candidates package))
-         (retained (delib-flow--retained-filter-candidates candidates))
+         (retained (delib-flow--retained-annotated-candidates candidates))
          (fallback (and candidates (list (car candidates))))
-         (selected (or retained fallback)))
+         (selected (or retained fallback))
+         (annotated (delib-flow--annotated-filter-candidates
+                     candidates
+                     selected)))
     (list :candidate-count (length candidates)
           :retained-count (length selected)
-          :retained-candidates selected
-          :rejected-count (- (length candidates) (length selected)))))
+          :retained-candidates
+          (seq-filter (lambda (candidate)
+                        (eq (plist-get candidate :filter-status) 'retained))
+                      annotated)
+          :rejected-count (- (length candidates) (length selected))
+          :rejected-candidates
+          (seq-filter (lambda (candidate)
+                        (eq (plist-get candidate :filter-status) 'rejected))
+                      annotated))))
 
 (defun delib-flow--source-title (package)
   "Return source title from PACKAGE."
@@ -2760,9 +2945,12 @@ PRIORITY controls display order."
   (let ((candidates (plist-get working :retrieved-candidates)))
     (if candidates
         (mapconcat (lambda (candidate)
-                     (format "- %s (%s)"
+                     (format "- %s (%s): %s"
                              (plist-get candidate :title)
-                             (plist-get candidate :score)))
+                             (plist-get candidate :score)
+                             (mapconcat #'identity
+                                        (plist-get candidate :reasons)
+                                        ", ")))
                    candidates
                    "\n")
       "No retrieved candidates are available yet.")))
@@ -2777,9 +2965,23 @@ PRIORITY controls display order."
   "Return filtered-context display text from WORKING."
   (let ((filtered (plist-get working :filtered-context)))
     (if filtered
-        (format "Retained: %s. Rejected: %s."
+        (format "Retained: %s. Rejected: %s. Retained decisions: %s. Rejected decisions: %s."
                 (plist-get filtered :retained-count)
-                (plist-get filtered :rejected-count))
+                (plist-get filtered :rejected-count)
+                (mapconcat (lambda (candidate)
+                             (format "%s=%s"
+                                     (plist-get candidate :title)
+                                     (delib-flow--filter-reasons-text candidate)))
+                           (plist-get filtered :retained-candidates)
+                           ", ")
+                (if-let ((rejected (plist-get filtered :rejected-candidates)))
+                    (mapconcat (lambda (candidate)
+                                 (format "%s=%s"
+                                         (plist-get candidate :title)
+                                         (delib-flow--filter-reasons-text candidate)))
+                               rejected
+                               ", ")
+                  "none"))
       "No filtered context is available yet.")))
 
 (defun delib-flow--cloud-context-status (run)
@@ -2920,6 +3122,60 @@ PRIORITY controls display order."
     (format "- Cloud-returned summary: %s"
             (delib-flow--cloud-returned-context-text working))))
 
+(defun delib-flow--retrieved-context-lines (working)
+  "Return reviewable retrieved-candidate lines from WORKING."
+  (when-let ((candidates (plist-get working :retrieved-candidates)))
+    (mapcar (lambda (candidate)
+              (format "- %s [%s]: %s"
+                      (plist-get candidate :title)
+                      (plist-get candidate :score)
+                      (mapconcat #'identity
+                                 (plist-get candidate :reasons)
+                                 ", ")))
+            candidates)))
+
+(defun delib-flow--retained-context-lines-for-review (working)
+  "Return reviewable retained-candidate lines from WORKING."
+  (when-let ((filtered (plist-get working :filtered-context)))
+    (let ((candidates (plist-get filtered :retained-candidates)))
+      (if candidates
+          (mapcar (lambda (candidate)
+                    (format "- %s [%s]: %s"
+                            (plist-get candidate :title)
+                            (plist-get candidate :score)
+                            (delib-flow--filter-reasons-text candidate)))
+                  candidates)
+        '("- none")))))
+
+(defun delib-flow--rejected-context-lines-for-review (working)
+  "Return reviewable rejected-candidate lines from WORKING."
+  (when-let ((filtered (plist-get working :filtered-context)))
+    (let ((candidates (plist-get filtered :rejected-candidates)))
+      (if candidates
+          (mapcar (lambda (candidate)
+                    (format "- %s [%s]: %s"
+                            (plist-get candidate :title)
+                            (plist-get candidate :score)
+                            (delib-flow--filter-reasons-text candidate)))
+                  candidates)
+        '("- none")))))
+
+(defun delib-flow--retrieval-review-subsections (working)
+  "Return retrieval review subsections for WORKING."
+  (concat
+   (or (delib-flow--lines-subsection
+        "Retrieved candidates"
+        (delib-flow--retrieved-context-lines working))
+       "")
+   (or (delib-flow--lines-subsection
+        "Retained context"
+        (delib-flow--retained-context-lines-for-review working))
+       "")
+   (or (delib-flow--lines-subsection
+        "Rejected context"
+        (delib-flow--rejected-context-lines-for-review working))
+       "")))
+
 (defun delib-flow--default-context-detail-lines (run working)
   "Return extra curated context lines for RUN and WORKING."
   (delq nil
@@ -2950,6 +3206,7 @@ PRIORITY controls display order."
    (delib-flow--bullet-lines
     (delib-flow--default-context-summary-pairs run working))
    "\n\n"
+   (delib-flow--retrieval-review-subsections working)
    (or (delib-flow--lines-subsection
         "Current routing and retrieval cues"
         (delib-flow--default-context-detail-lines run working))
@@ -3913,9 +4170,17 @@ PRIORITY controls display order."
 
 (defun delib-flow--normalize-discovery-candidate (candidate)
   "Return normalized text for discovery CANDIDATE."
-  (format "- %s [%s]"
+  (format "- %s [%s]: %s"
           (plist-get candidate :title)
-          (plist-get candidate :score)))
+          (plist-get candidate :score)
+          (mapconcat #'identity (plist-get candidate :reasons) ", ")))
+
+(defun delib-flow--normalize-filter-candidate (candidate)
+  "Return normalized text for filtered CANDIDATE."
+  (format "- %s [%s]: %s"
+          (plist-get candidate :title)
+          (plist-get candidate :score)
+          (delib-flow--filter-reasons-text candidate)))
 
 (defun delib-flow--normalize-discover-reference-material-output (raw-output)
   "Return normalized discovery text from RAW-OUTPUT."
@@ -3931,10 +4196,20 @@ PRIORITY controls display order."
 
 (defun delib-flow--normalize-filter-reference-material-output (raw-output)
   "Return normalized filter text from RAW-OUTPUT."
-  (format "- Candidate count: %s\n- Retained count: %s\n- Rejected count: %s"
+  (format "- Candidate count: %s\n- Retained count: %s\n- Rejected count: %s\n- Retained candidates:\n%s\n- Rejected candidates:\n%s"
           (plist-get raw-output :candidate-count)
           (plist-get raw-output :retained-count)
-          (plist-get raw-output :rejected-count)))
+          (plist-get raw-output :rejected-count)
+          (if-let ((retained (plist-get raw-output :retained-candidates)))
+              (mapconcat #'delib-flow--normalize-filter-candidate
+                         retained
+                         "\n")
+            "- none")
+          (if-let ((rejected (plist-get raw-output :rejected-candidates)))
+              (mapconcat #'delib-flow--normalize-filter-candidate
+                         rejected
+                         "\n")
+            "- none")))
 
 (defun delib-flow--normalize-manual-project-match-output (raw-output)
   "Return normalized manual project-match text from RAW-OUTPUT."

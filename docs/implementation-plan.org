@@ -58,6 +58,12 @@ intend to implement.
   semantics, operator-driven manual project disagreement handling, version 1
   source typing for email and meeting-note inputs, and audit-log refresh for
   post-stage review-state transitions.
+- Milestone 4 is now complete as a retrieval refinement pass. Discovery now
+  records explanation-backed ranking signals, uses source-linked files,
+  source-contact overlap, and shared source/project link evidence in addition
+  to project metadata, while filtering now preserves salient low-score context
+  and the cockpit renders explicit retrieved, retained, and rejected context
+  review subsections.
 - The validation scaffold is implemented: `make test`, `make coverage`,
   `make complexity`, and `make validate` are now the project gates.
 - The current codebase now includes a stable control-buffer foundation plus
@@ -1162,6 +1168,7 @@ Milestone 3 handoff state:
 
 Goal: provide grounded downstream context before action extraction.
 
+- Status: complete.
 - Implement candidate retrieval from project-linked material and PKM search.
 - Implement filtering of retrieved candidates into retained working context.
 - Render retained and rejected context in a reviewable form as appropriate.
@@ -1172,21 +1179,29 @@ Milestone 4 starting point:
   - `Filter Useful Reference Material`
 - Milestone 4 should therefore be treated as a refinement milestone, not first
   implementation.
-- The current retrieval path already scores linked project notes, file tags,
+- The retrieval path originally scored linked project notes, file tags,
   term overlap, and contact overlap.
-- The main remaining work is heuristic quality, review ergonomics, and clearer
-  retained-versus-rejected context presentation.
+- The completed refinement pass now also records explicit ranking reasons,
+  scores source-linked notes and source-contact overlap, incorporates shared
+  source/project link evidence, preserves salient low-score notes during
+  filtering, and renders retrieved, retained, and rejected context as separate
+  review subsections in the cockpit.
 - Milestone 4 should build on the existing cockpit UI rather than reopening the
   control-buffer shell unless a retrieval-specific review need clearly demands
   it.
 
-Recommended first Milestone 4 slice:
-1. Make retrieved-candidate and filtered-context rendering more diagnostic.
-2. Surface why a candidate was retained or rejected, not only the counts.
-3. Add tests that lock down ranking explanations before heuristic tuning.
+Delivered refinement slices:
+1. Retrieved candidates and filtered-context rendering became diagnostic rather
+   than count-only.
+2. Candidates now surface why they were ranked, retained, or rejected.
+3. Ranking explanations are locked down with tests before further heuristic
+   tuning.
+4. Filtering now preserves salient constraint, decision, and preference notes
+   even when raw overlap score is weak.
+5. The `Current context` section now renders separate retrieval review
+   subsections for retrieved, retained, and rejected context.
 
-Milestone 4 handoff checklist for the next agent:
-- Read [README.org] and this section before changing retrieval behavior.
+Milestone 4 maintenance notes:
 - Treat inspect/match acceptance gating as fixed upstream contract.
 - Preserve current deterministic execution shape and small-helper style so
   `make complexity` remains green.
@@ -1196,15 +1211,120 @@ Milestone 4 handoff checklist for the next agent:
 Exit criteria:
 - The workflow can gather and retain project-relevant context for downstream
   reasoning in a way the human can review.
+- Exit status: met.
 
 ** Milestone 5: action and note proposal path
 
 Goal: produce reviewable artifacts that can later be filed deterministically.
 
+- Status: partially complete.
 - Implement `Extract actions`, `Extract waiting-for`, and `Suggest reference
   notes`.
 - Define approval semantics for artifact-level acceptance.
 - Add validation warnings for weak next actions and waiting-for items.
+
+Milestone 5 starting point:
+- The executable proposal stages already exist:
+  - `Extract Actions`
+  - `Extract Waiting-For`
+  - `Suggest Reference Notes`
+- Each stage already produces deterministic draft filing artifacts in
+  `:filing :draft-items` and updates `Filing preview`.
+- The filing-review path already exists:
+  - `Select Approved Filing Actions`
+  - `File Approved Outputs`
+- The current approval model is deterministic and queue-based rather than
+  operator-selective:
+  - `Select Approved Filing Actions` currently approves the next draft item by
+    position, one at a time, and moves it into `:filing :approved-items`.
+- Current artifact generation is still intentionally simple:
+  - actions are title/retained-context-derived placeholders
+  - waiting-for items are title/retained-context-derived placeholders
+  - reference-note suggestions are title/retained-context-derived placeholders
+- Current artifact stages do not yet expose milestone-5-specific validation
+  warnings in the control buffer.
+
+Current implementation anchors:
+- Draft artifact constructors live in [delib-flow.el] around
+  `delib-flow--make-draft-action`, `delib-flow--make-draft-waiting-for`, and
+  `delib-flow--make-draft-reference-note`.
+- Deterministic proposal executors and raw outputs live in [delib-flow.el]
+  around `delib-flow--extract-actions-result`,
+  `delib-flow--extract-waiting-for-result`, and
+  `delib-flow--suggest-reference-notes-result`.
+- Deterministic filing approval currently lives in [delib-flow.el] around
+  `delib-flow--selected-filing-items` and
+  `delib-flow--select-approved-filing-actions-result`.
+- Baseline tests already cover draft production and deterministic approval:
+  see [test/delib-flow-test.el] for `extract-actions`,
+  `extract-waiting-for`, `suggest-reference-notes`, and
+  `select-approved-filing-actions`.
+
+Main remaining gaps:
+1. Artifact-level acceptance semantics are still too narrow.
+   The current implementation can approve only the next draft item in queue
+   order; it does not yet let the operator choose among multiple candidate
+   artifacts, defer one artifact while approving another, or explicitly reject
+   a draft artifact while keeping the run alive.
+2. Proposal quality validation is still missing.
+   The design expects warnings for weak next actions and waiting-for items, but
+   the current code only implements warning surfaces for inspect output.
+3. Reference-note validation is still minimal.
+   There is no milestone-5 review surface yet for note-title quality,
+   capture-template fit, Org-roam metadata readiness, or broader reuse
+   justification.
+4. Proposal generation is still heuristic scaffolding.
+   The current draft text does not yet attempt pomodoro sizing,
+   direct-executability checks, blocker phrasing checks, owner/identity checks,
+   or note-worthiness checks before surfacing artifacts.
+
+Recommended milestone 5 implementation slices:
+1. Add artifact-quality evaluators without changing filing behavior.
+   Start by implementing small pure helpers that score or flag:
+   - next-action scope/direct-executability/context clarity
+   - waiting-for blocker/dependency wording and owner presence
+   - reference-note title presence and note-type readiness
+   Output should be structured warning data attached to generated artifacts or
+   to the stage raw output.
+2. Render proposal warnings in the control buffer and stage result.
+   Reuse the existing lightweight warning pattern from inspect review rather
+   than inventing a new UI surface.
+   The first milestone-5 reviewable contract should let the operator answer:
+   - what artifacts were drafted
+   - which ones are weak
+   - why they are weak
+3. Replace queue-only approval with explicit artifact selection semantics.
+   The minimum useful improvement is to let the operator choose which draft
+   artifact to approve next instead of always approving `(car draft-items)`.
+   A stable first step is an editable block or deterministic selector syntax
+   inside the control buffer that chooses one artifact by index or exact text.
+4. Add reject/defer semantics for draft artifacts.
+   Approval should not be the only way to advance the queue. The operator
+   should be able to:
+   - approve one artifact
+   - reject one artifact
+   - leave the rest in draft state
+   without forcing filing or rerunning earlier stages.
+5. Only after the review semantics are explicit, tune proposal heuristics.
+   Heuristic improvement before review semantics will make the tests noisy and
+   hide whether changes improved quality or only changed wording.
+
+Recommended first pickup slice:
+1. Implement structured validation warnings for `Extract Actions` and
+   `Extract Waiting-For`.
+2. Surface those warnings in normalized output and `Filing preview`.
+3. Add tests that lock warning behavior before changing approval semantics.
+
+Milestone 5 maintenance notes:
+- Preserve the current deterministic execution shape and small-helper style so
+  `make complexity` remains green.
+- Do not reopen milestone-4 retrieval contracts unless proposal quality work
+  proves a missing upstream signal.
+- When changing artifact shapes, update both filing-preview rendering and test
+  assertions together.
+- Treat deterministic filing targets and one-at-a-time file writes as fixed
+  downstream contracts; milestone 5 should improve what gets approved, not
+  bypass milestone 7 filing boundaries.
 
 Exit criteria:
 - The workflow can produce candidate actions, waiting-for items, and reference
