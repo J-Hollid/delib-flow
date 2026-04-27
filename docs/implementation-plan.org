@@ -64,6 +64,11 @@ intend to implement.
   to project metadata, while filtering now preserves salient low-score context
   and the cockpit renders explicit retrieved, retained, and rejected context
   review subsections.
+- Milestone 5 is now complete as a proposal-review refinement pass. Draft
+  actions, waiting-for items, and reference notes now carry structured quality
+  warnings, the cockpit renders those warnings in stage results and `Filing
+  preview`, and filing review now supports operator-selective approve versus
+  reject decisions while leaving unselected artifacts deferred in draft state.
 - The validation scaffold is implemented: `make test`, `make coverage`,
   `make complexity`, and `make validate` are now the project gates.
 - The current codebase now includes a stable control-buffer foundation plus
@@ -1217,11 +1222,80 @@ Exit criteria:
 
 Goal: produce reviewable artifacts that can later be filed deterministically.
 
-- Status: partially complete.
-- Implement `Extract actions`, `Extract waiting-for`, and `Suggest reference
-  notes`.
-- Define approval semantics for artifact-level acceptance.
-- Add validation warnings for weak next actions and waiting-for items.
+- Status: complete.
+- `Extract Actions`, `Extract Waiting-For`, and `Suggest Reference Notes` all
+  produce draft artifacts with structured warning data.
+- Artifact-level filing review now supports explicit approve, reject, and
+  deferred draft states without changing the deterministic filing contract.
+- Tests lock warning generation, warning rendering, and operator-selective
+  filing review behavior.
+
+Milestone 5 definition of done:
+- Milestone 5 is not complete merely because proposal stages emit draft items.
+- Milestone 5 is complete only when the operator can review proposal quality,
+  make artifact-level decisions, and leave the approved subset in a filing-ready
+  state for the existing deterministic filing path.
+- In concrete terms, completion requires all of the following:
+  1. `Extract Actions`, `Extract Waiting-For`, and `Suggest Reference Notes`
+     continue to produce draft artifacts through the current stage contract.
+  2. Draft artifacts surface structured validation output that distinguishes at
+     least:
+     - next-action weakness
+     - waiting-for weakness
+     - reference-note readiness or quality issues
+  3. The control buffer makes those warnings reviewable in both the stage result
+     and `Filing preview`, so the operator can see:
+     - what was drafted
+     - which artifacts are weak
+     - why they are weak
+  4. Filing review is operator-selective rather than queue-only:
+     the operator can choose which single artifact to approve next instead of
+     always approving the head of `:filing :draft-items`.
+  5. Filing review supports at least three stable artifact states during the
+     run:
+     - approved for filing
+     - rejected from this run
+     - still deferred in draft state
+  6. Approving or rejecting one artifact does not force rerunning proposal
+     stages or filing unrelated draft artifacts.
+  7. Approved artifacts remain compatible with the existing one-at-a-time
+     deterministic filing contract; milestone 5 must not bypass milestone 7
+     boundaries.
+  8. Tests cover warning generation, warning rendering, and artifact-selection
+     behavior tightly enough to distinguish review-model changes from wording
+     drift.
+- Milestone 5 is still incomplete if approval remains queue-ordered only, if
+  weak artifacts are not visibly explained, or if artifact rejection/defer is
+  impossible without rerunning extraction.
+
+Milestone 5 non-goals:
+- Do not treat richer wording alone as milestone completion.
+- Do not require prompt-tuning, cloud routing changes, or retrieval redesign as
+  milestone-5 finish criteria.
+- Do not move filing execution earlier or make proposal stages write to target
+  files directly.
+
+Milestone 5 implementation summary:
+- The executable proposal stages exist and remain deterministic:
+  - `Extract Actions`
+  - `Extract Waiting-For`
+  - `Suggest Reference Notes`
+- Each stage produces draft filing artifacts in `:filing :draft-items`,
+  records structured warning metadata, and updates both normalized stage output
+  and `Filing preview`.
+- The filing-review path now supports explicit operator review:
+  - `Reject Draft Filing Artifact`
+  - `Select Approved Filing Actions`
+  - `File Approved Outputs`
+- The current approval model is operator-selective and one-at-a-time:
+  - the operator chooses one artifact by control-buffer selector syntax
+  - approval moves that item into `:filing :approved-items`
+  - rejection moves that item into `:filing :rejected-items`
+  - all unselected artifacts remain in `:filing :draft-items`
+- Current artifact generation remains intentionally simple:
+  - actions are title/retained-context-derived placeholders
+  - waiting-for items are title/retained-context-derived placeholders
+  - reference-note suggestions are title/retained-context-derived placeholders
 
 Milestone 5 starting point:
 - The executable proposal stages already exist:
@@ -1261,59 +1335,31 @@ Current implementation anchors:
   `select-approved-filing-actions`.
 
 Main remaining gaps:
-1. Artifact-level acceptance semantics are still too narrow.
-   The current implementation can approve only the next draft item in queue
-   order; it does not yet let the operator choose among multiple candidate
-   artifacts, defer one artifact while approving another, or explicitly reject
-   a draft artifact while keeping the run alive.
-2. Proposal quality validation is still missing.
-   The design expects warnings for weak next actions and waiting-for items, but
-   the current code only implements warning surfaces for inspect output.
-3. Reference-note validation is still minimal.
-   There is no milestone-5 review surface yet for note-title quality,
-   capture-template fit, Org-roam metadata readiness, or broader reuse
-   justification.
-4. Proposal generation is still heuristic scaffolding.
-   The current draft text does not yet attempt pomodoro sizing,
-   direct-executability checks, blocker phrasing checks, owner/identity checks,
-   or note-worthiness checks before surfacing artifacts.
+1. Proposal generation is still heuristic scaffolding.
+   The current draft text still favors title/retained-context-derived
+   placeholders over stronger task extraction or note-worthiness reasoning.
+2. Validation behavior is implemented as warning-only.
+   The design still allows future work around configurable warning severity and
+   blocking validations for note-filing readiness.
+3. Artifact review is explicit, but still single-item-at-a-time.
+   That is sufficient for milestone 5, but later ergonomics work could add
+   richer batch review without changing the current milestone contract.
 
-Recommended milestone 5 implementation slices:
-1. Add artifact-quality evaluators without changing filing behavior.
-   Start by implementing small pure helpers that score or flag:
-   - next-action scope/direct-executability/context clarity
-   - waiting-for blocker/dependency wording and owner presence
-   - reference-note title presence and note-type readiness
-   Output should be structured warning data attached to generated artifacts or
-   to the stage raw output.
-2. Render proposal warnings in the control buffer and stage result.
-   Reuse the existing lightweight warning pattern from inspect review rather
-   than inventing a new UI surface.
-   The first milestone-5 reviewable contract should let the operator answer:
-   - what artifacts were drafted
-   - which ones are weak
-   - why they are weak
-3. Replace queue-only approval with explicit artifact selection semantics.
-   The minimum useful improvement is to let the operator choose which draft
-   artifact to approve next instead of always approving `(car draft-items)`.
-   A stable first step is an editable block or deterministic selector syntax
-   inside the control buffer that chooses one artifact by index or exact text.
-4. Add reject/defer semantics for draft artifacts.
-   Approval should not be the only way to advance the queue. The operator
-   should be able to:
-   - approve one artifact
-   - reject one artifact
-   - leave the rest in draft state
-   without forcing filing or rerunning earlier stages.
-5. Only after the review semantics are explicit, tune proposal heuristics.
-   Heuristic improvement before review semantics will make the tests noisy and
-   hide whether changes improved quality or only changed wording.
-
-Recommended first pickup slice:
-1. Implement structured validation warnings for `Extract Actions` and
+Milestone 5 delivered slices:
+1. Structured validation warnings for `Extract Actions` and
    `Extract Waiting-For`.
-2. Surface those warnings in normalized output and `Filing preview`.
-3. Add tests that lock warning behavior before changing approval semantics.
+2. Warning rendering in normalized stage output and `Filing preview`.
+3. Explicit artifact selection semantics for one-at-a-time approval.
+4. Explicit reject/defer semantics for draft artifacts.
+5. Structured reference-note warnings for note-title, template-readiness, and
+   reuse-justification review.
+
+Follow-on work after milestone 5:
+1. Tune proposal heuristics now that review semantics are stable.
+2. Decide whether note-readiness checks should gain blocking behavior or remain
+   warning-only.
+3. Consider whether filing-review ergonomics should support richer multi-item
+   operations in a later milestone without weakening one-at-a-time filing.
 
 Milestone 5 maintenance notes:
 - Preserve the current deterministic execution shape and small-helper style so
@@ -1328,7 +1374,15 @@ Milestone 5 maintenance notes:
 
 Exit criteria:
 - The workflow can produce candidate actions, waiting-for items, and reference
-  notes and mark approved artifacts as filing-ready.
+  notes as draft artifacts through the current stage contract.
+- The operator can review artifact-quality warnings in both stage output and
+  `Filing preview`.
+- The operator can explicitly approve one artifact, reject one artifact, and
+  leave remaining artifacts deferred without rerunning proposal stages.
+- Approved artifacts remain filing-ready for the existing deterministic
+  one-at-a-time filing path.
+- Validation, rendering, and artifact-selection behavior are covered by tests
+  that keep milestone-5 review semantics stable.
 
 ** Milestone 6: audit log
 
