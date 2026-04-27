@@ -23,8 +23,9 @@ intend to implement.
 - Slice E has been implemented: managed regions are protected, conflicts are
   detected and reflected in action state, and refresh now rerenders the control
   buffer section-by-section.
-- Milestone 2 is underway beyond the minimum exit criteria: a generic local
-  stage execution contract exists, `Inspect Source` executes end to end
+- Milestones 2 and 3 are implemented beyond the original minimum exit
+  criteria: a generic local stage execution contract exists, `Inspect Source`
+  executes end to end
   through it, and `Match Project` now executes through the same contract
   against the configured My Projects file. `Discover Relevant Reference
   Material` now also executes through the same contract against the configured
@@ -51,6 +52,12 @@ intend to implement.
   now executes locally and writes the current approved artifact to
   deterministic project and note targets. Audit logging now records run and
   stage snapshots in the configured audit log file.
+- Milestone 3 is now complete as a refinement pass over source understanding
+  and project-decision review state. Inspect and match results now have
+  accepted-result records, explicit accept/reject flows, retry supersede
+  semantics, operator-driven manual project disagreement handling, version 1
+  source typing for email and meeting-note inputs, and audit-log refresh for
+  post-stage review-state transitions.
 - The validation scaffold is implemented: `make test`, `make coverage`,
   `make complexity`, and `make validate` are now the project gates.
 - The current codebase now includes a stable control-buffer foundation plus
@@ -1052,18 +1059,100 @@ Exit criteria:
 - At least one stage can execute end to end through the generic execution
   contract and appear in stage history with review state.
 
-** Milestone 3: inspect and match path
+** Milestone 3: source understanding and project decision path
 
-Goal: deliver the first useful version of source understanding.
+Status note:
+- Milestone 3 is complete.
+- The repository passed the original Milestone 3 minimum earlier; the work
+  completed in this pass was the refinement and hardening layer over the
+  existing inspect and match path so later stages depend on accepted workflow
+  state rather than merely completed stage execution.
 
-- Implement source typing and inspect output normalization.
-- Implement project matching against the My Projects file.
-- Support retry and manual disagreement paths for project matching.
-- Record stage-level approvals and accepted outputs.
+Goal: make inspect and project-match results trustworthy, reviewable, and
+explicitly accept/rejectable before downstream artifact stages depend on them.
+
+Locked scope:
+- Finalize source typing for version 1 inputs:
+  - classify imported email items
+  - classify meeting-note journal entries
+  - preserve `unknown` only as an explicit fallback when evidence is weak
+- Strengthen inspect output from a structural summary into a stable source
+  analysis object that later stages can depend on without reparsing rendered
+  text.
+- Replace the current deterministic manual-match fallback with a real
+  disagreement path:
+  - present candidate projects clearly
+  - allow explicit operator selection among candidates
+  - allow explicit rejection of all candidates
+  - preserve disagreement notes and manual rationale in run state
+- Add explicit stage-level acceptance semantics for inspect and match:
+  - pending review
+  - accepted
+  - rejected
+  - superseded by retry
+- Record accepted inspect and match outputs separately from raw stage outputs
+  so downstream stages consume accepted state rather than whatever stage ran
+  last.
+- Keep retry available for inspect and match, but make retries visible as
+  replacing prior unaccepted results rather than silently overwriting meaning.
+
+Execution sequence:
+1. Completed: introduce accepted-result state for inspect and match without changing the
+   current stage execution contract.
+   This should land first so later Milestone 3 changes can target a stable
+   acceptance boundary rather than writing more logic directly against
+   `:working-context`.
+2. Completed: add explicit actions for accepting and rejecting inspect results.
+   Downstream project matching should remain legal only when inspect output is
+   accepted, not merely completed.
+3. Completed: add explicit actions for accepting, rejecting, and retrying project-match
+   results.
+   Downstream retrieval and artifact stages should depend on accepted
+   project-match state.
+4. Completed: replace deterministic manual fallback selection with an operator-driven
+   project choice path.
+   The implementation may start with a structured in-buffer selection model
+   before any richer minibuffer or completion UI is considered.
+5. Completed: implement version 1 source typing and expand inspect normalization so the
+   accepted inspect object carries durable structured fields rather than only
+   lightweight summary text.
+6. Completed: finish with a state-transition hardening pass:
+   - accepted results survive refresh
+   - rejected results block dependent actions
+   - retries mark prior accepted/rejected entries as superseded when
+     appropriate
+   - audit records capture acceptance state transitions clearly
+
+Closed implementation decisions:
+- Acceptance state lives in both stage-history review-state fields and a
+  dedicated accepted-results domain keyed by stage id.
+- Manual project disagreement notes live on the manual project-match result in
+  working context and normalized stage output.
+- Source typing happens during inspect execution through a deterministic helper
+  that can be reused later if snapshot-time typing becomes necessary.
 
 Exit criteria:
-- A user can inspect a source item, review normalized analysis, and reach a
-  project-match decision path in the control workflow.
+- A source item can be inspected, reviewed, and explicitly accepted or
+  rejected in the control workflow.
+- Project matching can be reviewed, retried, manually overridden, or rejected
+  without depending on deterministic auto-pick fallback.
+- Downstream stages depend on accepted inspect and project-match state rather
+  than only on the existence of completed stage entries.
+- Accepted and superseded inspect/match results are represented clearly in run
+  state, rendering, and audit output.
+- Tests cover accept, reject, retry, and manual-override flows for inspect and
+  match.
+
+Milestone 3 handoff state:
+- The next agent should treat inspect and project-decision review boundaries as
+  stable infrastructure.
+- Retry semantics for `inspect-source` and `match-project` now supersede prior
+  reviewed results before the new stage run lands.
+- Audit refresh now rehydrates stage audit records from current stage history,
+  which means post-stage accept/reject/supersede transitions are durable in the
+  audit log.
+- The next milestone should not reopen review-state storage unless a later
+  feature proves the current dual representation insufficient.
 
 ** Milestone 4: context retrieval path
 
@@ -1072,6 +1161,30 @@ Goal: provide grounded downstream context before action extraction.
 - Implement candidate retrieval from project-linked material and PKM search.
 - Implement filtering of retrieved candidates into retained working context.
 - Render retained and rejected context in a reviewable form as appropriate.
+
+Milestone 4 starting point:
+- The executable retrieval stages already exist:
+  - `Discover Relevant Reference Material`
+  - `Filter Useful Reference Material`
+- Milestone 4 should therefore be treated as a refinement milestone, not first
+  implementation.
+- The current retrieval path already scores linked project notes, file tags,
+  term overlap, and contact overlap.
+- The main remaining work is heuristic quality, review ergonomics, and clearer
+  retained-versus-rejected context presentation.
+
+Recommended first Milestone 4 slice:
+1. Make retrieved-candidate and filtered-context rendering more diagnostic.
+2. Surface why a candidate was retained or rejected, not only the counts.
+3. Add tests that lock down ranking explanations before heuristic tuning.
+
+Milestone 4 handoff checklist for the next agent:
+- Read [README.org] and this section before changing retrieval behavior.
+- Treat inspect/match acceptance gating as fixed upstream contract.
+- Preserve current deterministic execution shape and small-helper style so
+  `make complexity` remains green.
+- When changing retrieval heuristics, update both normalized rendering and test
+  assertions together so ranking changes stay intentional.
 
 Exit criteria:
 - The workflow can gather and retain project-relevant context for downstream

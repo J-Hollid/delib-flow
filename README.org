@@ -15,6 +15,8 @@ This repository is being built incrementally from a design-first process.
 - Managed-region conflicts are detected and reflected in action state
 - Generic local stage execution contract implemented
 - `Inspect Source` executes end-to-end and is recorded in stage history
+- `Inspect Source` now classifies version 1 source types and records structured
+  source analysis for review
 - `Match Project` executes end-to-end against the configured My Projects file
 - `Match Project` now uses project-title, heading-tag, subtree-term, and contact metadata when scoring candidates
 - `Discover Relevant Reference Material` executes end-to-end against the
@@ -39,6 +41,10 @@ This repository is being built incrementally from a design-first process.
 - `Select Approved Filing Actions` executes end-to-end and approves one filing artifact at a time
 - `File Approved Outputs` executes end-to-end and writes the current approved artifact to deterministic targets
 - Project-match outcomes update working context and valid next actions
+- Inspect and project-match results now have explicit accept/reject review
+  boundaries with accepted-result state
+- Inspect retries and project-match retries now supersede prior reviewed
+  results instead of silently overwriting them
 - Project matching now succeeds on source-contact overlap even when title overlap is weak
 - Retrieved reference candidates update working context and unlock filtering
 - Retrieved reference candidates now reflect project-link, tag, and contact
@@ -62,6 +68,8 @@ This repository is being built incrementally from a design-first process.
 - Deterministic filing now also creates new project headings with a first child action from approved project proposals
 - Deterministic filing now detects target conflicts and preserves the current approved artifact for retry instead of writing blindly
 - Audit logging now records run and stage snapshots in the configured audit log file and surfaces append status in `Audit status`
+- Audit logging now also reflects post-stage inspect/match review-state
+  transitions such as accept, reject, and supersede
 - Draft next actions, waiting-for items, and reference-note suggestions now
   render in `Filing preview`
 - Validation gates implemented:
@@ -69,8 +77,195 @@ This repository is being built incrementally from a design-first process.
   - `make coverage`
   - `make complexity`
   - `make validate`
-- Milestone 2 core workflow is implemented; remaining work is refinement and
+- Milestones 2 and 3 are implemented; remaining work is refinement and
   heuristic improvement rather than missing control-flow stages
+- The next implementation focus is Milestone 4 retrieval refinement over the
+  existing discovery and filtering stages
+
+* User guide
+
+`delib-flow` currently works as a guided control buffer around a deterministic
+or adapter-backed workflow run started from an Org heading.
+
+At a high level, the package does this:
+
+- capture a frozen snapshot of the heading at point
+- open a dedicated control buffer
+- let you run one workflow stage at a time
+- keep stage history, working context, and filing artifacts in one place
+- require explicit review at key inspect and project-decision boundaries
+- support deterministic local filing into your projects file and ZK
+
+Typical workflow:
+
+1. Put point on an Org heading you want to process.
+2. Run `M-x delib-flow-start`.
+3. In the control buffer, run `Inspect Source`.
+4. Review the inspect result and choose `Accept Inspect Result` or reject/retry.
+5. Run `Match Project`.
+6. Review the project decision:
+   accept the match, reject it, or use `Choose Project Manually` when the
+   candidate set is ambiguous or no-match.
+7. Continue into retrieval, extraction, cloud-routing, reintegration, and
+   filing stages as needed.
+8. Review filing artifacts and use `File Approved Outputs` when ready.
+
+Important current behavior:
+
+- Only one active `delib-flow` run is supported at a time.
+- The source snapshot is frozen when the run starts; later edits to the source
+  heading do not change the active run automatically.
+- `inspect-source` and `match-project` now have explicit review state:
+  pending review, accepted, rejected, and superseded by retry.
+- Retrying inspect or project match supersedes the prior reviewed result before
+  the new candidate result lands.
+- The control buffer is the primary UI. Some workflow branches rely on editing
+  structured in-buffer blocks, especially manual project selection and reviewed
+  cloud packages.
+
+Current interactive entry points:
+
+- `M-x delib-flow-start`
+  Start a run from the Org heading at point.
+- `M-x delib-flow-refresh-buffer`
+  Rerender the active control buffer while preserving editable block state.
+- `M-x delib-flow-abort-run`
+  Abort the active run and finalize audit state.
+
+Most stage actions are normally triggered from the `Valid next actions` section
+of the control buffer. They also exist as interactive commands, but the
+expected usage is to work from the buffer that `delib-flow-start` opens.
+
+* Configuration
+
+The package exposes these main `defcustom` variables:
+
+- `delib-flow-my-projects-file`
+  Path to the authoritative My Projects Org file used by project matching and
+  deterministic project filing.
+- `delib-flow-zk-root`
+  Path to the searchable Zettelkasten root used for retrieval and note filing.
+- `delib-flow-prompt-library-file`
+  Path reserved for the prompt library file.
+  The current deterministic workflow does not depend heavily on it yet, but the
+  package exposes it as part of the intended contract.
+- `delib-flow-example-structures-file`
+  Path reserved for example structures used by later prompt-driven behavior.
+- `delib-flow-audit-log-file`
+  Path to the Org audit log file where run and stage records are appended.
+- `delib-flow-general-note-template`
+  Template used when deterministic filing creates a general PKM note.
+  Supported placeholders: `${title}`, `${source-artifact}`, `${note-type}`.
+- `delib-flow-project-support-note-template`
+  Template used when deterministic filing creates a project-support note.
+  Supported placeholders: `${title}`, `${source-artifact}`, `${note-type}`.
+- `delib-flow-default-local-model`
+  Default local model identifier recorded in run state and audit metadata.
+- `delib-flow-default-cloud-model`
+  Default cloud model identifier recorded in routing and audit metadata.
+- `delib-flow-cloud-policy-profile`
+  Default cloud sanitization policy profile. Supported values: `standard`,
+  `strict`.
+- `delib-flow-cloud-provider-policy-alist`
+  Provider-specific cloud policy overrides. Entries can set `:enabled` and
+  `:policy-profile`.
+- `delib-flow-local-stage-adapter`
+  Function used to execute local stages.
+  By default this points at the built-in deterministic executor.
+- `delib-flow-cloud-stage-adapter`
+  Function used to execute cloud stages.
+
+In practice, the minimum configuration for the current local deterministic
+workflow is:
+
+- `delib-flow-my-projects-file`
+- `delib-flow-zk-root`
+
+Useful optional configuration:
+
+- `delib-flow-audit-log-file` if you want persistent run logs
+- `delib-flow-general-note-template` and
+  `delib-flow-project-support-note-template` if you want custom filed note
+  shapes
+- `delib-flow-default-local-model`, `delib-flow-default-cloud-model`, and
+  adapter functions if you are wiring real model backends into the stage
+  contract
+
+* Setup
+
+Minimal setup example:
+
+#+begin_src emacs-lisp
+(require 'delib-flow)
+
+(setq delib-flow-my-projects-file "/absolute/path/to/my-projects.org")
+(setq delib-flow-zk-root "/absolute/path/to/zk/")
+(setq delib-flow-audit-log-file "/absolute/path/to/delib-flow-audit.org")
+#+end_src
+
+If you want deterministic filing to create custom note formats:
+
+#+begin_src emacs-lisp
+(setq delib-flow-general-note-template
+      "#+title: ${title}\n#+filetags: :reference:\n\n- Source: ${source-artifact}\n")
+
+(setq delib-flow-project-support-note-template
+      "#+title: ${title}\n#+filetags: :project:support:\n\n- Source: ${source-artifact}\n")
+#+end_src
+
+If you want to test with a custom local or cloud adapter:
+
+#+begin_src emacs-lisp
+(setq delib-flow-default-local-model "llama3")
+(setq delib-flow-local-stage-adapter #'my-local-stage-adapter)
+
+(setq delib-flow-default-cloud-model "provider/model")
+(setq delib-flow-cloud-stage-adapter #'my-cloud-stage-adapter)
+#+end_src
+
+There is also a repo-local manual testing bootstrap in
+[[file:delib-flow-local-test-config.el][delib-flow-local-test-config.el]].
+That file is intended for live local testing and shows a fuller configuration
+example, including adapter wiring and audit logging.
+
+Suggested setup order:
+
+1. Set `delib-flow-my-projects-file`.
+2. Set `delib-flow-zk-root`.
+3. Optionally set `delib-flow-audit-log-file`.
+4. Load the package.
+5. Start from an Org heading with `M-x delib-flow-start`.
+
+* Current capabilities
+
+What you can use today:
+
+- Source inspection with deterministic source typing for email, meeting-note,
+  or unknown.
+- Project matching against your projects file, including ambiguity and no-match
+  branches.
+- Explicit project-decision review with accept, reject, retry, and manual
+  override behavior.
+- Reference-material discovery and filtering against your ZK.
+- Draft artifact generation for actions, waiting-for items, and reference
+  notes.
+- Optional cloud-routing, sanitization, reviewed-package approval, cloud-stage
+  execution, and reintegration flow.
+- Deterministic filing into your projects file and note store.
+- Audit logging of run state, stage inputs/outputs, and inspect/match review
+  transitions.
+
+Current limits to keep in mind:
+
+- The control flow is implemented, but later-stage heuristics are still being
+  refined.
+- Retrieval and filtering are deterministic heuristics, not yet deeply
+  explanation-rich.
+- The prompt-library and example-structures settings are exposed, but the
+  current package behavior is still more workflow-contract-focused than
+  prompt-system-heavy.
+- Adapter-backed model behavior depends entirely on the functions you assign to
+  `delib-flow-local-stage-adapter` and `delib-flow-cloud-stage-adapter`.
 
 * Development
 
