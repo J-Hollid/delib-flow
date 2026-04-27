@@ -7,6 +7,13 @@ dated entries.
 
 * 2026-04-27
 
+- Implemented the Milestone 5 proposal-review refinement pass in
+  `delib-flow.el` and `test/delib-flow-test.el`, adding structured quality
+  warnings for drafted actions, waiting-for items, and reference notes, plus
+  operator-selective approve and reject review over draft filing artifacts.
+- Updated `README.org` and `docs/implementation-plan.org` to mark Milestone 5
+  as implemented and to move remaining work into post-milestone heuristic and
+  ergonomics follow-up.
 - Implemented the locked-in Milestone 2 hardening pass in `delib-flow.el` and
   `test/delib-flow-test.el`, so deterministic project-support note filing now
   also updates the matched project's `REFERENCE_FILES` metadata with a link to
