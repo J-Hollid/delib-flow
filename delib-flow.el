@@ -236,7 +236,10 @@ and returns raw stage output."
   "Stage descriptors keyed by stage identifier.")
 
 (defconst delib-flow--stage-decision-alist
-  '((match-project . "Review project match and choose next action.")
+  '((inspect-source
+     . "Review inspect result and choose whether to accept, reject, or retry.")
+    (match-project
+     . "Review project match and choose whether to accept, reject, manually override, or retry.")
     (discover-reference-material
      . "Review retrieved reference candidates and choose next action.")
     (filter-reference-material
@@ -273,7 +276,7 @@ and returns raw stage output."
     (match-project . delib-flow--apply-match-project-entry)
     (discover-reference-material . delib-flow--apply-discovery-entry)
     (filter-reference-material . delib-flow--apply-filter-entry)
-    (manual-project-match . delib-flow--apply-match-project-entry)
+    (manual-project-match . delib-flow--apply-manual-project-match-entry)
     (propose-new-project . delib-flow--apply-propose-new-project-entry)
     (extract-actions . delib-flow--apply-extract-actions-entry)
     (extract-waiting-for . delib-flow--apply-extract-waiting-for-entry)
@@ -289,6 +292,19 @@ and returns raw stage output."
      . delib-flow--apply-select-approved-filing-actions-entry)
     (file-approved-outputs . delib-flow--apply-file-approved-outputs-entry))
   "Stage-specific apply functions keyed by stage identifier.")
+
+(defconst delib-flow--reviewable-stage-ids
+  '(inspect-source match-project)
+  "Stage identifiers that participate in accepted-result review state.")
+
+(defconst delib-flow--meeting-source-keywords
+  '("meeting" "standup" "sync" "retro" "planning" "check-in" "kickoff"
+    "agenda" "minutes" "attendees" "1:1")
+  "Keywords used to classify meeting-note source items.")
+
+(defconst delib-flow--meeting-source-section-labels
+  '("agenda:" "attendees:" "notes:" "decisions:" "action items:" "next steps:")
+  "Structured section labels used to classify meeting-note source items.")
 
 (defun delib-flow--org-heading-at-point-p ()
   "Return non-nil when point is on an Org heading."
@@ -352,6 +368,13 @@ ANCHOR-ID is the stable in-buffer anchor for the block."
           "Current decision"
           '("Current decision" "Operator notes")
           "delib-edit-operator-notes"))
+   (cons 'manual-project-selection
+         (delib-flow--make-editable-block
+          'manual-project-selection
+          'manual-selection
+          "Current decision"
+          '("Current decision" "Manual project selection")
+          "delib-edit-manual-project-selection"))
    (cons 'cloud-package-review
          (delib-flow--make-editable-block
           'cloud-package-review
@@ -369,6 +392,24 @@ ANCHOR-ID is the stable in-buffer anchor for the block."
   (list :items nil
         :selected-action nil
         :last-action nil))
+
+(defun delib-flow--make-stage-review-record (stage-id)
+  "Return an accepted-result review record for STAGE-ID."
+  (list :stage-id stage-id
+        :candidate-stage-id nil
+        :candidate-output nil
+        :candidate-normalized-output nil
+        :candidate-review-state 'not-available
+        :accepted-stage-id nil
+        :accepted-output nil
+        :accepted-normalized-output nil))
+
+(defun delib-flow--initial-review-results ()
+  "Return the initial accepted-result review records for a new run."
+  (mapcar (lambda (stage-id)
+            (cons stage-id
+                  (delib-flow--make-stage-review-record stage-id)))
+          delib-flow--reviewable-stage-ids))
 
 (defun delib-flow--make-action (id label status reason handler priority)
   "Return an action object for ID with LABEL, STATUS, and HANDLER.
@@ -461,6 +502,37 @@ PRIORITY controls display order."
 (defun delib-flow--run-stage-history (run)
   "Return the stage-history plist from RUN."
   (plist-get run :stage-history))
+
+(defun delib-flow--review-results (working)
+  "Return accepted-result review records from WORKING."
+  (plist-get working :review-results))
+
+(defun delib-flow--review-record (working stage-id)
+  "Return accepted-result review record for STAGE-ID from WORKING."
+  (alist-get stage-id (delib-flow--review-results working)))
+
+(defun delib-flow--replace-review-record (records stage-id new-record)
+  "Return RECORDS with NEW-RECORD stored under STAGE-ID."
+  (mapcar (lambda (entry)
+            (if (eq (car entry) stage-id)
+                (cons stage-id new-record)
+              entry))
+          records))
+
+(defun delib-flow--stage-review-state (run stage-id)
+  "Return candidate review-state for STAGE-ID from RUN."
+  (delib-flow--review-record-status
+   (delib-flow--review-record (delib-flow--run-working-context run) stage-id)))
+
+(defun delib-flow--stage-accepted-p (run stage-id)
+  "Return non-nil when STAGE-ID has accepted output in RUN."
+  (delib-flow--review-record-accepted-p
+   (delib-flow--review-record (delib-flow--run-working-context run) stage-id)))
+
+(defun delib-flow--project-decision-ready-p (run)
+  "Return non-nil when RUN has an accepted or manual project decision."
+  (or (delib-flow--stage-accepted-p run 'match-project)
+      (delib-flow--stage-executed-p run 'manual-project-match)))
 
 (defun delib-flow--run-routing (run)
   "Return the routing plist from RUN."
@@ -579,6 +651,28 @@ PRIORITY controls display order."
         :terms terms
         :links links))
 
+(defun delib-flow--project-state-heading-p (title)
+  "Return non-nil when TITLE is a project-state bucket heading."
+  (member (downcase (or title ""))
+          '("active" "complete" "waiting")))
+
+(defun delib-flow--top-heading-title-at-point ()
+  "Return the enclosing top-level heading title at point."
+  (save-excursion
+    (while (> (org-outline-level) 1)
+      (org-up-heading-safe))
+    (org-get-heading t t t t)))
+
+(defun delib-flow--project-heading-candidate-p ()
+  "Return non-nil when the heading at point should be parsed as a project."
+  (let ((title (org-get-heading t t t t))
+        (level (org-outline-level)))
+    (or (and (= level 1)
+             (not (delib-flow--project-state-heading-p title)))
+        (and (> level 1)
+             (delib-flow--project-state-heading-p
+              (delib-flow--top-heading-title-at-point))))))
+
 (defun delib-flow--project-candidate-at-point (base-dir)
   "Return the current top-level project candidate at point using BASE-DIR."
   (let* ((title (org-get-heading t t t t))
@@ -596,15 +690,16 @@ PRIORITY controls display order."
   "Return project candidates parsed from Org FILE."
   (with-temp-buffer
     (let ((base-dir (file-name-directory file)))
-    (insert-file-contents file)
-    (org-mode)
-    (let (candidates)
-      (goto-char (point-min))
-      (while (re-search-forward "^\\* \\(.+\\)$" nil t)
-        (beginning-of-line)
-        (push (delib-flow--project-candidate-at-point base-dir) candidates)
-        (org-end-of-subtree t t))
-      (nreverse candidates)))))
+      (insert-file-contents file)
+      (org-mode)
+      (let (candidates)
+        (goto-char (point-min))
+        (while (re-search-forward "^\\*+ \\(.+\\)$" nil t)
+          (beginning-of-line)
+          (when (delib-flow--project-heading-candidate-p)
+            (push (delib-flow--project-candidate-at-point base-dir) candidates))
+          (outline-next-heading))
+        (nreverse candidates)))))
 
 (defun delib-flow--source-match-text (source)
   "Return normalized source text used for project matching from SOURCE."
@@ -701,21 +796,81 @@ PRIORITY controls display order."
                 (string-lessp (plist-get left :title)
                               (plist-get right :title)))))))
 
+(defun delib-flow--manual-project-selection-text-from-package (package)
+  "Return editable manual project-selection text from PACKAGE."
+  (delib-flow--editable-block-text
+   (alist-get 'manual-project-selection
+              (plist-get (plist-get package :ui) :editable-blocks))))
+
+(defun delib-flow--manual-project-selection-value (package)
+  "Return trimmed Selection value from PACKAGE manual project text."
+  (when-let* ((text (delib-flow--manual-project-selection-text-from-package package))
+              (_ (string-match "^Selection:[ \t]*\\(.*\\)$" text)))
+    (string-trim (match-string 1 text))))
+
+(defun delib-flow--manual-project-selection-notes (package)
+  "Return trimmed Notes text from PACKAGE manual project text."
+  (when-let* ((text (delib-flow--manual-project-selection-text-from-package package)))
+    (when (string-match
+           "^[Nn]otes:[ \t\n]*\\(\\(?:.\\|\n\\)*?\\)\\(?:^Candidates:\\|\\'\\)"
+           text)
+      (string-trim (or (match-string 1 text) "")))))
+
+(defun delib-flow--manual-project-reject-all-p (selection)
+  "Return non-nil when SELECTION explicitly rejects all candidates."
+  (member (downcase (or selection ""))
+          '("reject" "reject-all" "none" "no-match")))
+
+(defun delib-flow--manual-project-selection-template (candidates)
+  "Return editable manual project-selection template for CANDIDATES."
+  (concat
+   "Selection: \n"
+   "Notes:\n"
+   "\n"
+   "Candidates:\n"
+   (if candidates
+       (mapconcat (lambda (candidate)
+                    (format "- %s" (plist-get candidate :title)))
+                  candidates
+                  "\n")
+     "- No candidates available. Use `REJECT` to keep the result as no-match.")))
+
 (defun delib-flow--manual-project-choice (package)
-  "Return chosen fallback project candidate from PACKAGE."
-  (car (delib-flow--manual-project-match-candidates package)))
+  "Return chosen manual project candidate from PACKAGE."
+  (let* ((selection (delib-flow--manual-project-selection-value package))
+         (candidates (delib-flow--manual-project-match-candidates package)))
+    (unless selection
+      (error "Manual project selection requires a Selection value"))
+    (unless (delib-flow--manual-project-reject-all-p selection)
+      (or (seq-find (lambda (candidate)
+                      (string-equal
+                       (downcase selection)
+                       (downcase (plist-get candidate :title))))
+                    candidates)
+          (error "Manual project selection did not match any available candidate: %s"
+                 selection)))))
 
 (defun delib-flow--manual-project-match-result (package)
   "Return raw manual-project-match result for PACKAGE."
   (let* ((choice (delib-flow--manual-project-choice package))
+         (selection (delib-flow--manual-project-selection-value package))
+         (notes (delib-flow--manual-project-selection-notes package))
          (candidates (delib-flow--manual-project-match-candidates package)))
-    (unless choice
-      (error "No project candidates are available for manual selection"))
-    (list :match-status 'matched
-          :selection-method 'manual
-          :best-project choice
-          :candidates candidates
-          :reason "Manual fallback selected a concrete project candidate.")))
+    (if choice
+        (list :match-status 'matched
+              :selection-method 'manual
+              :best-project choice
+              :candidates candidates
+              :operator-selection selection
+              :operator-notes notes
+              :reason "Operator selected a concrete project candidate after manual review.")
+      (list :match-status 'no-match
+            :selection-method 'manual
+            :best-project nil
+            :candidates candidates
+            :operator-selection selection
+            :operator-notes notes
+            :reason "Operator rejected all available project candidates after manual review."))))
 
 (defun delib-flow--source-search-title (package)
   "Return source title for retrieval from PACKAGE."
@@ -1351,19 +1506,27 @@ PRIORITY controls display order."
      (plist-put run-record :run-status (delib-flow--audit-run-status run))
      :ended-at (plist-get session :ended-at))))
 
-(defun delib-flow--append-audit-record (run entry)
-  "Return RUN with audit state updated from stage ENTRY."
+(defun delib-flow--audit-stage-records-from-run (run)
+  "Return audit stage records regenerated from RUN stage history."
+  (mapcar #'delib-flow--make-audit-stage-record
+          (plist-get (delib-flow--run-stage-history run) :entries)))
+
+(defun delib-flow--sync-audit-state (run checkpoint)
+  "Return RUN with audit state synchronized from current run state at CHECKPOINT."
   (let* ((audit (plist-get run :audit))
-         (stage-record (delib-flow--make-audit-stage-record entry))
          (updated-audit
           (plist-put
            (plist-put
             (plist-put audit :run-record (delib-flow--updated-run-record run))
             :stage-records
-            (append (plist-get audit :stage-records) (list stage-record)))
+            (delib-flow--audit-stage-records-from-run run))
            :pending-checkpoints
-           (list (plist-get entry :stage-id)))))
+           (list checkpoint))))
     (plist-put run :audit updated-audit)))
+
+(defun delib-flow--append-audit-record (run entry)
+  "Return RUN with audit state updated from stage ENTRY."
+  (delib-flow--sync-audit-state run (plist-get entry :stage-id)))
 
 (defun delib-flow--persist-audit-state (run checkpoint)
   "Return RUN after persisting audit CHECKPOINT when configured."
@@ -1386,12 +1549,9 @@ PRIORITY controls display order."
 
 (defun delib-flow--refresh-run-audit (run checkpoint)
   "Return RUN with refreshed run audit state at CHECKPOINT."
-  (let* ((audit (plist-get run :audit))
-         (updated-run
-          (plist-put
-           run :audit
-           (plist-put audit :run-record (delib-flow--updated-run-record run)))))
-    (delib-flow--persist-audit-state updated-run checkpoint)))
+  (delib-flow--persist-audit-state
+   (delib-flow--sync-audit-state run checkpoint)
+   checkpoint))
 
 (defun delib-flow--editable-block (run block-id)
   "Return editable block BLOCK-ID from RUN."
@@ -1608,9 +1768,32 @@ PRIORITY controls display order."
      #'delib-flow-action-inspect-source
      10)))
 
+(defun delib-flow--accept-inspect-source-action (run)
+  "Return the accept-inspect-source action for RUN."
+  (when (eq (delib-flow--stage-review-state run 'inspect-source) 'pending-review)
+    (delib-flow--make-action
+     'accept-inspect-source
+     "Accept Inspect Result"
+     'available
+     nil
+     #'delib-flow-action-accept-inspect-source
+     15)))
+
+(defun delib-flow--reject-inspect-source-action (run)
+  "Return the reject-inspect-source action for RUN."
+  (when (eq (delib-flow--stage-review-state run 'inspect-source) 'pending-review)
+    (delib-flow--make-action
+     'reject-inspect-source
+     "Reject Inspect Result"
+     'available
+     nil
+     #'delib-flow-action-reject-inspect-source
+     16)))
+
 (defun delib-flow--match-project-action (run)
   "Return the match-project action for RUN."
-  (when (delib-flow--stage-executed-p run 'inspect-source)
+  (when (or (delib-flow--stage-accepted-p run 'inspect-source)
+            (delib-flow--stage-executed-p run 'match-project))
     (delib-flow--make-action
      'match-project
      (if (delib-flow--stage-executed-p run 'match-project)
@@ -1621,9 +1804,31 @@ PRIORITY controls display order."
      #'delib-flow-action-match-project
      20)))
 
+(defun delib-flow--accept-match-project-action (run)
+  "Return the accept-match-project action for RUN."
+  (when (eq (delib-flow--stage-review-state run 'match-project) 'pending-review)
+    (delib-flow--make-action
+     'accept-match-project
+     "Accept Project Match"
+     'available
+     nil
+     #'delib-flow-action-accept-match-project
+     21)))
+
+(defun delib-flow--reject-match-project-action (run)
+  "Return the reject-match-project action for RUN."
+  (when (eq (delib-flow--stage-review-state run 'match-project) 'pending-review)
+    (delib-flow--make-action
+     'reject-match-project
+     "Reject Project Match"
+     'available
+     nil
+     #'delib-flow-action-reject-match-project
+     22)))
+
 (defun delib-flow--discover-reference-material-action (run)
   "Return the discover-reference-material action for RUN."
-  (when (delib-flow--stage-executed-p run 'inspect-source)
+  (when (delib-flow--project-decision-ready-p run)
     (delib-flow--make-action
      'discover-reference-material
      (if (delib-flow--stage-executed-p run 'discover-reference-material)
@@ -1649,7 +1854,8 @@ PRIORITY controls display order."
 
 (defun delib-flow--manual-project-match-action (run)
   "Return the manual-project-match action for RUN."
-  (when (or (memq (delib-flow--match-status run) '(ambiguous no-match))
+  (when (or (and (delib-flow--stage-accepted-p run 'match-project)
+                 (memq (delib-flow--match-status run) '(ambiguous no-match)))
             (delib-flow--stage-executed-p run 'manual-project-match))
     (delib-flow--make-action
      'manual-project-match
@@ -1663,7 +1869,8 @@ PRIORITY controls display order."
 
 (defun delib-flow--extract-actions-action (run)
   "Return the extract-actions action for RUN."
-  (when (eq (delib-flow--match-status run) 'matched)
+  (when (and (delib-flow--project-decision-ready-p run)
+             (eq (delib-flow--match-status run) 'matched))
     (delib-flow--make-action
      'extract-actions
      (if (delib-flow--stage-executed-p run 'extract-actions)
@@ -1676,7 +1883,8 @@ PRIORITY controls display order."
 
 (defun delib-flow--extract-waiting-for-action (run)
   "Return the extract-waiting-for action for RUN."
-  (when (eq (delib-flow--match-status run) 'matched)
+  (when (and (delib-flow--project-decision-ready-p run)
+             (eq (delib-flow--match-status run) 'matched))
     (delib-flow--make-action
      'extract-waiting-for
      (if (delib-flow--stage-executed-p run 'extract-waiting-for)
@@ -1689,7 +1897,8 @@ PRIORITY controls display order."
 
 (defun delib-flow--suggest-reference-notes-action (run)
   "Return the suggest-reference-notes action for RUN."
-  (when (eq (delib-flow--match-status run) 'matched)
+  (when (and (delib-flow--project-decision-ready-p run)
+             (eq (delib-flow--match-status run) 'matched))
     (delib-flow--make-action
      'suggest-reference-notes
      (if (delib-flow--stage-executed-p run 'suggest-reference-notes)
@@ -1702,7 +1911,8 @@ PRIORITY controls display order."
 
 (defun delib-flow--propose-new-project-action (run)
   "Return the propose-new-project action for RUN."
-  (when (eq (delib-flow--match-status run) 'no-match)
+  (when (and (delib-flow--project-decision-ready-p run)
+             (eq (delib-flow--match-status run) 'no-match))
     (delib-flow--make-action
      'propose-new-project
      (if (delib-flow--stage-executed-p run 'propose-new-project)
@@ -1836,6 +2046,8 @@ PRIORITY controls display order."
   (seq-remove
    #'null
     (list
+     (delib-flow--accept-inspect-source-action run)
+     (delib-flow--reject-inspect-source-action run)
      (delib-flow--match-project-action run)
      (delib-flow--discover-reference-material-action run)
      (delib-flow--filter-reference-material-action run)
@@ -1861,16 +2073,21 @@ PRIORITY controls display order."
      (append
      (list
        (delib-flow--match-project-action run)
-       (delib-flow--discover-reference-material-action run))
-     (if (eq status 'matched)
+       (delib-flow--accept-match-project-action run)
+       (delib-flow--reject-match-project-action run))
+     (if (delib-flow--project-decision-ready-p run)
+         (append
+          (list (delib-flow--discover-reference-material-action run))
+          (if (eq status 'matched)
           (list
            (delib-flow--manual-project-match-action run)
            (delib-flow--extract-actions-action run)
            (delib-flow--extract-waiting-for-action run)
            (delib-flow--suggest-reference-notes-action run))
-        (list
-         (delib-flow--manual-project-match-action run)
-         (delib-flow--propose-new-project-action run)))
+            (list
+             (delib-flow--manual-project-match-action run)
+             (delib-flow--propose-new-project-action run))))
+       (list))
        (list
        (delib-flow--filter-reference-material-action run)
        (delib-flow--decide-cloud-pass-action run)
@@ -1968,14 +2185,42 @@ PRIORITY controls display order."
          (title (or (plist-get source :title) "Untitled source"))
          (file (or (plist-get source :file) "No file"))
          (id (or (plist-get source :id) "No ID"))
+         (source-type (delib-flow--display-source-type run))
          (content (string-trim (or (plist-get source :content) ""))))
-    (format "** Title\n%s\n\n** File\n%s\n\n** ID\n%s\n\n** Snapshot\n#+begin_example\n%s\n#+end_example\n"
-            title file id content)))
+    (format "** Title\n%s\n\n** Source type\n%s\n\n** File\n%s\n\n** ID\n%s\n\n** Snapshot\n#+begin_example\n%s\n#+end_example\n"
+            title source-type file id content)))
 
 (defun delib-flow--project-match-status (project-match)
   "Return display status symbol for PROJECT-MATCH."
   (or (plist-get project-match :match-status)
       'not-run))
+
+(defun delib-flow--review-record-status (record)
+  "Return candidate review-state for accepted-result RECORD."
+  (or (plist-get record :candidate-review-state)
+      'not-available))
+
+(defun delib-flow--review-record-accepted-p (record)
+  "Return non-nil when accepted-result RECORD has accepted output."
+  (plist-get record :accepted-output))
+
+(defun delib-flow--review-record-status-line (label record)
+  "Return status line for accepted-result LABEL and RECORD."
+  (format "%s: candidate=%s. accepted=%s."
+          label
+          (delib-flow--review-record-status record)
+          (if (delib-flow--review-record-accepted-p record) "available" "not available")))
+
+(defun delib-flow--manual-project-selection-text (run)
+  "Return editable manual project-selection text from RUN."
+  (delib-flow--editable-block-text
+   (delib-flow--editable-block run 'manual-project-selection)))
+
+(defun delib-flow--manual-project-selection-active-p (run)
+  "Return non-nil when RUN should surface manual project selection."
+  (or (delib-flow--stage-executed-p run 'manual-project-match)
+      (and (delib-flow--stage-accepted-p run 'match-project)
+           (memq (delib-flow--match-status run) '(ambiguous no-match)))))
 
 (defun delib-flow--project-match-text (project-match)
   "Return display text for PROJECT-MATCH."
@@ -1990,6 +2235,34 @@ PRIORITY controls display order."
       "No project match found.")
      (t
       "Project matching has not run yet."))))
+
+(defun delib-flow--accepted-project-decision (run)
+  "Return the effective accepted project decision from RUN."
+  (let* ((working (delib-flow--run-working-context run))
+         (project-match (plist-get working :project-match))
+         (match-review (delib-flow--review-record working 'match-project))
+         (accepted-match (plist-get match-review :accepted-output)))
+    (cond
+     ((eq (plist-get project-match :selection-method) 'manual)
+      project-match)
+     (accepted-match accepted-match)
+     (t nil))))
+
+(defun delib-flow--accepted-project-status (run)
+  "Return accepted project-decision display status from RUN."
+  (if-let ((project (delib-flow--accepted-project-decision run)))
+      (delib-flow--project-match-status project)
+    'not-available))
+
+(defun delib-flow--accepted-project-text (run)
+  "Return accepted project-decision display text from RUN."
+  (if-let ((project (delib-flow--accepted-project-decision run)))
+      (delib-flow--project-match-text project)
+    "No accepted project decision is available yet."))
+
+(defun delib-flow--reviewed-cloud-package-status (text)
+  "Return display status for reviewed cloud package TEXT."
+  (if (string-empty-p text) "not available" "available"))
 
 (defun delib-flow--retrieved-context-status (working)
   "Return retrieval display status from WORKING."
@@ -2085,6 +2358,8 @@ PRIORITY controls display order."
   (let* ((working (delib-flow--run-working-context _run))
          (inspect-output (plist-get working :inspect-output))
          (project-match (plist-get working :project-match))
+         (inspect-review (delib-flow--review-record working 'inspect-source))
+         (match-review (delib-flow--review-record working 'match-project))
          (retained-context (plist-get working :retained-context))
          (inspect-status (if inspect-output "available" "not available"))
          (project-status (delib-flow--project-match-status project-match))
@@ -2101,14 +2376,18 @@ PRIORITY controls display order."
          (retained-text (or retained-context
                             "No retained context is available yet.")))
     (format
-     "** Context status\nInspect output: %s.\nProject match: %s.\nRetrieved context: %s.\nFiltered context: %s.\nCloud-sanitized context: %s.\nReviewed cloud package: %s.\nCloud-returned context: %s.\n\n** Project context\n%s\n\n** Retrieved candidates\n%s\n\n** Filtered context\n%s\n\n** Retained context\n%s\n\n** Cloud-sanitized context\n%s\n\n** Reviewed cloud package\n%s\n\n** Cloud-returned context\n%s\n\n** Editable working slice\n%s"
+     "** Context status\nInspect output: %s.\nProject match: %s.\nAccepted project decision: %s.\nRetrieved context: %s.\nFiltered context: %s.\nCloud-sanitized context: %s.\nReviewed cloud package: %s.\nCloud-returned context: %s.\n\n** Accepted-result review state\n%s\n%s\n\n** Accepted project decision\n%s\n\n** Latest project candidate\n%s\n\n** Retrieved candidates\n%s\n\n** Filtered context\n%s\n\n** Retained context\n%s\n\n** Cloud-sanitized context\n%s\n\n** Reviewed cloud package\n%s\n\n** Cloud-returned context\n%s\n\n** Editable working slice\n%s"
      inspect-status
      project-status
+     (delib-flow--accepted-project-status _run)
      retrieved-status
      filtered-status
      cloud-status
-     (if (string-empty-p reviewed-cloud-text) "not available" "available")
+     (delib-flow--reviewed-cloud-package-status reviewed-cloud-text)
      returned-status
+     (delib-flow--review-record-status-line "Inspect Source" inspect-review)
+     (delib-flow--review-record-status-line "Match Project" match-review)
+     (delib-flow--accepted-project-text _run)
      project-text
      retrieved-text
      filtered-text
@@ -2141,9 +2420,14 @@ PRIORITY controls display order."
 
 (defun delib-flow--render-current-decision-section (run)
   "Return Org text for the Current decision section from RUN."
-  (format "** Decision status\n%s\n\n** Operator notes\n%s"
-          (plist-get (delib-flow--run-session run) :current-decision)
-          (delib-flow--render-editable-block run 'operator-notes)))
+  (concat
+   (format "** Decision status\n%s\n\n** Operator notes\n%s"
+           (plist-get (delib-flow--run-session run) :current-decision)
+           (delib-flow--render-editable-block run 'operator-notes))
+   (if (delib-flow--manual-project-selection-active-p run)
+       (format "\n\n** Manual project selection\n%s"
+               (delib-flow--render-editable-block run 'manual-project-selection))
+     "")))
 
 (defun delib-flow--render-valid-next-actions-section (_run)
   "Return Org text for the Valid next actions section."
@@ -2278,16 +2562,165 @@ PRIORITY controls display order."
       (not (string-empty-p (string-trim line))))
     (cdr (split-string content "\n")))))
 
+(defun delib-flow--count-text-words (text)
+  "Return normalized word count for TEXT."
+  (length (delib-flow--string-words text)))
+
+(defun delib-flow--source-body-text (content)
+  "Return CONTENT without the heading line."
+  (mapconcat #'identity (cdr (split-string (or content "") "\n")) "\n"))
+
+(defun delib-flow--source-metadata-header-count (text)
+  "Return count of email-style metadata headers found in TEXT."
+  (let ((count 0))
+    (dolist (line (split-string (or text "") "\n") count)
+      (when (string-match-p
+             "^[[:space:]]*\\(From\\|To\\|Cc\\|Bcc\\|Subject\\|Date\\):"
+             line)
+        (setq count (1+ count))))))
+
+(defun delib-flow--source-meeting-keywords (text)
+  "Return meeting keywords detected in TEXT."
+  (let ((downcased (downcase (or text ""))))
+    (seq-filter (lambda (keyword)
+                  (string-match-p (regexp-quote keyword) downcased))
+                delib-flow--meeting-source-keywords)))
+
+(defun delib-flow--source-meeting-section-count (text)
+  "Return count of meeting-style section labels found in TEXT."
+  (let ((count 0)
+        (downcased (downcase (or text ""))))
+    (dolist (label delib-flow--meeting-source-section-labels count)
+      (when (string-match-p (regexp-quote label) downcased)
+        (setq count (1+ count))))))
+
+(defun delib-flow--journal-outline-path-p (outline-path)
+  "Return non-nil when OUTLINE-PATH suggests a journal-style source."
+  (seq-some (lambda (segment)
+              (string-match-p "journal\\|daily\\|logbook" (downcase segment)))
+            outline-path))
+
+(defun delib-flow--email-source-classification (header-count emails)
+  "Return email classification plist for HEADER-COUNT and EMAILS."
+  (list :source-type 'email
+        :source-type-reason
+        "Detected email-style headers and participant addresses."
+        :source-type-signals
+        (delq nil
+              (list (and (> header-count 0)
+                         (format "%s email-style headers" header-count))
+                    (and (> (length emails) 0)
+                         (format "%s participant addresses" (length emails)))))))
+
+(defun delib-flow--meeting-source-classification (journal-path-p meeting-section-count meeting-keywords)
+  "Return meeting-note classification plist for detected signals."
+  (list :source-type 'meeting-note
+        :source-type-reason
+        "Detected meeting-note structure from keywords, sections, or journal placement."
+        :source-type-signals
+        (delq nil
+              (append
+               (and journal-path-p '("journal outline path"))
+               (when (> meeting-section-count 0)
+                 (list (format "%s meeting sections" meeting-section-count)))
+               meeting-keywords))))
+
+(defun delib-flow--unknown-source-classification ()
+  "Return fallback unknown source classification plist."
+  (list :source-type 'unknown
+        :source-type-reason
+        "Evidence is too weak to classify this source beyond unknown."
+        :source-type-signals nil))
+
+(defun delib-flow--email-source-p (header-count emails)
+  "Return non-nil when HEADER-COUNT and EMAILS indicate an email source."
+  (or (>= header-count 2)
+      (and (> header-count 0) (> (length emails) 0))))
+
+(defun delib-flow--meeting-source-p (journal-path-p meeting-section-count meeting-keywords)
+  "Return non-nil when detected signals indicate a meeting-note source."
+  (or (>= meeting-section-count 2)
+      (>= (length meeting-keywords) 2)
+      (and journal-path-p
+           (or (> meeting-section-count 0)
+               meeting-keywords))))
+
+(defun delib-flow--maybe-email-source-classification (header-count emails)
+  "Return email classification plist when HEADER-COUNT and EMAILS qualify."
+  (when (delib-flow--email-source-p header-count emails)
+    (delib-flow--email-source-classification header-count emails)))
+
+(defun delib-flow--maybe-meeting-source-classification (journal-path-p meeting-section-count meeting-keywords)
+  "Return meeting-note classification plist when detected signals qualify."
+  (when (delib-flow--meeting-source-p
+         journal-path-p meeting-section-count meeting-keywords)
+    (delib-flow--meeting-source-classification
+     journal-path-p meeting-section-count meeting-keywords)))
+
+(defun delib-flow--source-type-classification (source)
+  "Return deterministic source-type classification plist for SOURCE."
+  (let* ((title (plist-get source :title))
+         (content (or (plist-get source :content) ""))
+         (body-text (delib-flow--source-body-text content))
+         (outline-path (plist-get source :outline-path))
+         (combined-text (string-join (delq nil (list title body-text
+                                                     (and outline-path
+                                                          (mapconcat #'identity outline-path " "))))
+                                     "\n"))
+         (emails (delib-flow--text-emails content))
+         (header-count (delib-flow--source-metadata-header-count body-text))
+         (meeting-keywords (delete-dups
+                            (delib-flow--source-meeting-keywords combined-text)))
+         (meeting-section-count
+          (delib-flow--source-meeting-section-count body-text))
+         (journal-path-p (delib-flow--journal-outline-path-p outline-path)))
+    (or (delib-flow--maybe-email-source-classification header-count emails)
+        (delib-flow--maybe-meeting-source-classification
+         journal-path-p meeting-section-count meeting-keywords)
+        (delib-flow--unknown-source-classification))))
+
+(defun delib-flow--display-source-type (run)
+  "Return the best available source type for RUN."
+  (let* ((source (delib-flow--run-source run))
+         (working (delib-flow--run-working-context run))
+         (inspect-review (delib-flow--review-record working 'inspect-source))
+         (accepted-inspect (plist-get inspect-review :accepted-output))
+         (candidate-inspect (plist-get inspect-review :candidate-output)))
+    (or (plist-get accepted-inspect :source-type)
+        (plist-get candidate-inspect :source-type)
+        (plist-get source :source-type)
+        'unknown)))
+
+(defun delib-flow--inspect-source-analysis (source)
+  "Return structured inspect analysis for SOURCE."
+  (let* ((content (or (plist-get source :content) ""))
+         (body-text (delib-flow--source-body-text content))
+         (file (plist-get source :file))
+         (base-dir (and file (file-name-directory file)))
+         (outline-path (plist-get source :outline-path))
+         (classification (delib-flow--source-type-classification source))
+         (emails (delib-flow--text-emails content))
+         (org-file-links (if base-dir
+                             (delib-flow--text-org-file-links content base-dir)
+                           nil)))
+    (append
+     (list :title (plist-get source :title)
+           :outline-path outline-path
+           :body-line-count (delib-flow--count-body-lines content)
+           :content-word-count (delib-flow--count-text-words body-text)
+           :has-id (not (null (plist-get source :id)))
+           :contact-emails emails
+           :contact-email-count (length emails)
+           :org-file-links org-file-links
+           :org-file-link-count (length org-file-links)
+           :body-preview (string-trim (truncate-string-to-width body-text 160 nil nil t)))
+     classification)))
+
 (defun delib-flow--execute-inspect-source (package)
   "Return raw inspect-source output for PACKAGE."
   (let* ((source (plist-get package :source))
-         (content (or (plist-get source :content) ""))
-         (outline-path (plist-get source :outline-path)))
-    (list :source-type (plist-get source :source-type)
-          :title (plist-get source :title)
-          :outline-path outline-path
-          :body-line-count (delib-flow--count-body-lines content)
-          :has-id (not (null (plist-get source :id))))))
+         (analysis (delib-flow--inspect-source-analysis source)))
+    (plist-put (copy-tree analysis) :analysis analysis)))
 
 (defun delib-flow--match-project-source (package)
   "Return the source object used for project matching from PACKAGE."
@@ -2787,13 +3220,20 @@ PRIORITY controls display order."
 (defun delib-flow--normalize-inspect-source-output (raw-output)
   "Return normalized inspect-source text from RAW-OUTPUT."
   (format
-   "- Source type: %s\n- Title: %s\n- Outline path: %s\n- Body lines: %s\n- Source has ID: %s"
+   "- Source type: %s\n- Source type reason: %s\n- Title: %s\n- Outline path: %s\n- Body lines: %s\n- Content words: %s\n- Source has ID: %s\n- Contact emails: %s\n- Org file links: %s\n- Body preview: %s"
    (plist-get raw-output :source-type)
+   (plist-get raw-output :source-type-reason)
    (or (plist-get raw-output :title) "Untitled source")
    (or (mapconcat #'identity (plist-get raw-output :outline-path) " > ")
        "No outline path")
    (plist-get raw-output :body-line-count)
-   (if (plist-get raw-output :has-id) "yes" "no")))
+   (plist-get raw-output :content-word-count)
+   (if (plist-get raw-output :has-id) "yes" "no")
+   (if-let ((emails (plist-get raw-output :contact-emails)))
+       (mapconcat #'identity emails ", ")
+     "none")
+   (plist-get raw-output :org-file-link-count)
+   (or (plist-get raw-output :body-preview) "No body preview")))
 
 (defun delib-flow--candidate-title-list (candidates)
   "Return a comma-separated title list for CANDIDATES."
@@ -2846,10 +3286,13 @@ PRIORITY controls display order."
 
 (defun delib-flow--normalize-manual-project-match-output (raw-output)
   "Return normalized manual project-match text from RAW-OUTPUT."
-  (format "- Match status: %s\n- Selection method: %s\n- Selected project: %s\n- Reason: %s"
+  (format "- Match status: %s\n- Selection method: %s\n- Selected project: %s\n- Operator selection: %s\n- Operator notes: %s\n- Reason: %s"
           (plist-get raw-output :match-status)
           (plist-get raw-output :selection-method)
-          (plist-get (plist-get raw-output :best-project) :title)
+          (or (plist-get (plist-get raw-output :best-project) :title)
+              "none")
+          (or (plist-get raw-output :operator-selection) "none")
+          (or (plist-get raw-output :operator-notes) "none")
           (plist-get raw-output :reason)))
 
 (defun delib-flow--normalize-propose-new-project-output (raw-output)
@@ -2998,6 +3441,14 @@ PRIORITY controls display order."
    (plist-put (delib-flow--run-working-context run)
               :project-match
               (plist-get entry :raw-output))))
+
+(defun delib-flow--apply-manual-project-match-entry (run entry)
+  "Return RUN updated from completed manual-project-match ENTRY."
+  (let ((updated-run
+         (delib-flow--apply-match-project-entry run entry)))
+    (if (delib-flow--stage-accepted-p updated-run 'match-project)
+        (delib-flow--supersede-stage-review-state updated-run 'match-project)
+      updated-run)))
 
 (defun delib-flow--apply-discovery-entry (run entry)
   "Return RUN updated from completed discovery ENTRY."
@@ -3217,17 +3668,181 @@ PRIORITY controls display order."
         (append (plist-get filing :target-locations)
                 (plist-get raw :target-locations)))))))
 
+(defun delib-flow--review-record-from-entry (record entry)
+  "Return accepted-result RECORD updated from completed stage ENTRY."
+  (plist-put
+   (plist-put
+    (plist-put
+     (plist-put record :candidate-stage-id (plist-get entry :stage-id))
+     :candidate-output (plist-get entry :raw-output))
+    :candidate-normalized-output (plist-get entry :normalized-output))
+   :candidate-review-state (plist-get entry :review-state)))
+
+(defun delib-flow--set-stage-entry-review-state (entries stage-id review-state)
+  "Return ENTRIES with the latest STAGE-ID review-state set to REVIEW-STATE."
+  (let ((updated nil))
+    (mapcar
+     (lambda (entry)
+       (if (and (not updated)
+                (eq (plist-get entry :stage-id) stage-id))
+           (progn
+             (setq updated t)
+             (plist-put (copy-sequence entry) :review-state review-state))
+         entry))
+     (reverse entries))))
+
+(defun delib-flow--update-stage-history-review-state (run stage-id review-state)
+  "Return RUN with latest STAGE-ID history review-state set to REVIEW-STATE."
+  (let* ((history (delib-flow--run-stage-history run))
+         (entries (plist-get history :entries)))
+    (plist-put
+     run :stage-history
+     (plist-put history :entries
+                (reverse
+                 (delib-flow--set-stage-entry-review-state
+                  entries stage-id review-state))))))
+
+(defun delib-flow--set-review-record-state (record review-state)
+  "Return RECORD updated to REVIEW-STATE."
+  (let ((candidate-output (plist-get record :candidate-output))
+        (candidate-normalized-output
+         (plist-get record :candidate-normalized-output))
+        (stage-id (plist-get record :candidate-stage-id)))
+    (if (eq review-state 'accepted)
+        (plist-put
+         (plist-put
+          (plist-put
+           (plist-put record :candidate-review-state 'accepted)
+           :accepted-stage-id stage-id)
+          :accepted-output candidate-output)
+         :accepted-normalized-output candidate-normalized-output)
+      (plist-put
+       (plist-put
+        (plist-put
+         (plist-put record :candidate-review-state review-state)
+         :accepted-stage-id nil)
+        :accepted-output nil)
+       :accepted-normalized-output nil))))
+
+(defun delib-flow--set-stage-review-state (run stage-id review-state)
+  "Return RUN with STAGE-ID review-state set to REVIEW-STATE."
+  (let* ((working (delib-flow--run-working-context run))
+         (record (delib-flow--review-record working stage-id))
+         (updated-record (delib-flow--set-review-record-state
+                          record review-state))
+         (updated-records
+          (delib-flow--replace-review-record
+           (delib-flow--review-results working)
+           stage-id
+           updated-record))
+         (updated-run
+         (plist-put run :working-context
+                     (plist-put working :review-results updated-records))))
+    (delib-flow--update-stage-history-review-state
+     updated-run stage-id review-state)))
+
+(defun delib-flow--supersede-stage-review-state (run stage-id)
+  "Return RUN with STAGE-ID review state marked superseded and acceptance cleared."
+  (let* ((working (delib-flow--run-working-context run))
+         (record (delib-flow--review-record working stage-id))
+         (updated-record
+          (plist-put
+           (plist-put
+            (plist-put
+             (plist-put record :candidate-review-state 'superseded)
+             :accepted-stage-id nil)
+            :accepted-output nil)
+           :accepted-normalized-output nil))
+         (updated-records
+          (delib-flow--replace-review-record
+           (delib-flow--review-results working)
+           stage-id
+           updated-record))
+         (updated-run
+          (plist-put run :working-context
+                     (plist-put working :review-results updated-records))))
+    (delib-flow--update-stage-history-review-state
+     updated-run stage-id 'superseded)))
+
+(defun delib-flow--seed-manual-project-selection-block (run)
+  "Return RUN with the manual project-selection block populated from current candidates."
+  (let* ((package (delib-flow--stage-input-package run 'manual-project-match))
+         (candidates (delib-flow--manual-project-match-candidates package))
+         (block (delib-flow--editable-block run 'manual-project-selection))
+         (updated-block
+          (delib-flow--set-editable-block-text
+           block
+           (delib-flow--manual-project-selection-template candidates))))
+    (delib-flow--set-editable-block run 'manual-project-selection updated-block)))
+
+(defun delib-flow--apply-inspect-review-outcome (run review-state decision)
+  "Return RUN after setting inspect REVIEW-STATE and current DECISION."
+  (let ((updated-run
+         (delib-flow--set-stage-review-state run 'inspect-source review-state)))
+    (plist-put
+     updated-run :session
+     (plist-put (delib-flow--run-session updated-run)
+                :current-decision
+                decision))))
+
+(defun delib-flow--inspect-review-pending-p (run)
+  "Return non-nil when RUN has inspect output pending review."
+  (eq (delib-flow--stage-review-state run 'inspect-source) 'pending-review))
+
+(defun delib-flow--apply-match-review-outcome (run review-state decision)
+  "Return RUN after setting match REVIEW-STATE and current DECISION."
+  (let* ((updated-run
+          (delib-flow--set-stage-review-state run 'match-project review-state))
+         (prepared-run
+          (if (and (eq review-state 'accepted)
+                   (memq (delib-flow--match-status updated-run) '(ambiguous no-match)))
+              (delib-flow--seed-manual-project-selection-block updated-run)
+            updated-run)))
+    (plist-put
+     prepared-run :session
+     (plist-put (delib-flow--run-session prepared-run)
+                :current-decision
+                decision))))
+
+(defun delib-flow--match-review-pending-p (run)
+  "Return non-nil when RUN has a project match pending review."
+  (eq (delib-flow--stage-review-state run 'match-project) 'pending-review))
+
+(defun delib-flow--prepare-reviewable-stage-retry (run stage-id)
+  "Return RUN prepared for a retry of reviewable STAGE-ID."
+  (if (and (memq stage-id delib-flow--reviewable-stage-ids)
+           (delib-flow--stage-executed-p run stage-id))
+      (delib-flow--supersede-stage-review-state run stage-id)
+    run))
+
+(defun delib-flow--apply-reviewable-stage-entry (run entry)
+  "Return RUN updated with accepted-result review state from ENTRY."
+  (let* ((stage-id (plist-get entry :stage-id))
+         (working (delib-flow--run-working-context run)))
+    (if (memq stage-id delib-flow--reviewable-stage-ids)
+        (let* ((record (delib-flow--review-record working stage-id))
+               (updated-record (delib-flow--review-record-from-entry record entry))
+               (updated-records
+                (delib-flow--replace-review-record
+                 (delib-flow--review-results working)
+                 stage-id
+                 updated-record)))
+          (plist-put run :working-context
+                     (plist-put working :review-results updated-records)))
+      run)))
+
 (defun delib-flow--completed-stage-apply-function (stage-id)
   "Return apply function for completed STAGE-ID."
   (alist-get stage-id delib-flow--stage-apply-function-alist))
 
 (defun delib-flow--apply-completed-stage-entry (run entry)
   "Return RUN updated for completed stage ENTRY."
-  (if-let ((apply-fn
-            (delib-flow--completed-stage-apply-function
-             (plist-get entry :stage-id))))
-      (funcall apply-fn run entry)
-    run))
+  (let ((updated-run (delib-flow--apply-reviewable-stage-entry run entry)))
+    (if-let ((apply-fn
+              (delib-flow--completed-stage-apply-function
+               (plist-get entry :stage-id))))
+        (funcall apply-fn updated-run entry)
+      updated-run)))
 
 (defun delib-flow--apply-stage-entry (run entry)
   "Return RUN updated for completed or failed stage ENTRY."
@@ -3253,8 +3868,9 @@ PRIORITY controls display order."
 
 (defun delib-flow--run-stage-locally (run stage-id)
   "Return RUN after executing STAGE-ID through the local stage contract."
-  (let* ((descriptor (delib-flow--stage-descriptor stage-id))
-         (package (delib-flow--stage-input-package run stage-id)))
+  (let* ((prepared-run (delib-flow--prepare-reviewable-stage-retry run stage-id))
+         (descriptor (delib-flow--stage-descriptor stage-id))
+         (package (delib-flow--stage-input-package prepared-run stage-id)))
     (condition-case err
         (let* ((raw-output (funcall delib-flow-local-stage-adapter
                                     descriptor package))
@@ -3262,17 +3878,18 @@ PRIORITY controls display order."
                 (delib-flow--normalize-stage-output stage-id raw-output))
                (entry (delib-flow--make-stage-entry
                        stage-id package raw-output normalized-output)))
-          (delib-flow--finalize-stage-run run entry))
+          (delib-flow--finalize-stage-run prepared-run entry))
       (error
        (let ((entry
               (delib-flow--make-stage-failure-entry
                stage-id package (error-message-string err))))
-         (delib-flow--finalize-stage-run run entry))))))
+         (delib-flow--finalize-stage-run prepared-run entry))))))
 
 (defun delib-flow--run-stage-in-cloud (run stage-id)
   "Return RUN after executing STAGE-ID through the cloud stage contract."
-  (let* ((descriptor (delib-flow--stage-descriptor stage-id))
-         (package (delib-flow--stage-input-package run stage-id)))
+  (let* ((prepared-run (delib-flow--prepare-reviewable-stage-retry run stage-id))
+         (descriptor (delib-flow--stage-descriptor stage-id))
+         (package (delib-flow--stage-input-package prepared-run stage-id)))
     (condition-case err
         (let* ((raw-output (funcall delib-flow-cloud-stage-adapter
                                     descriptor package))
@@ -3280,12 +3897,12 @@ PRIORITY controls display order."
                 (delib-flow--normalize-stage-output stage-id raw-output))
                (entry (delib-flow--make-stage-entry
                        stage-id package raw-output normalized-output)))
-          (delib-flow--finalize-stage-run run entry))
+          (delib-flow--finalize-stage-run prepared-run entry))
       (error
        (let ((entry
               (delib-flow--make-stage-failure-entry
                stage-id package (error-message-string err))))
-         (delib-flow--finalize-stage-run run entry))))))
+         (delib-flow--finalize-stage-run prepared-run entry))))))
 
 (defun delib-flow--initialize-run (source-snapshot)
   "Create a new run state from SOURCE-SNAPSHOT."
@@ -3296,12 +3913,13 @@ PRIORITY controls display order."
          (list :source-snapshot source-snapshot
                :inspect-output nil
                :project-match nil
+               :review-results (delib-flow--initial-review-results)
                :retrieved-candidates nil
                :filtered-context nil
                :retained-context nil
                :cloud-sanitized-context nil
                :cloud-returned-context nil
-               :editable-block-ids '(context-main operator-notes cloud-package-review))
+               :editable-block-ids '(context-main operator-notes manual-project-selection cloud-package-review))
          :stage-history
          (list :entries nil
                :latest-stage nil
@@ -3417,10 +4035,82 @@ PRIORITY controls display order."
   (interactive)
   (unless delib-flow--active-run
     (user-error "No active delib-flow run"))
+  (unless (delib-flow--stage-accepted-p delib-flow--active-run 'inspect-source)
+    (user-error "Inspect result must be accepted before project matching"))
   (setq delib-flow--active-run
         (delib-flow--seed-actions
          (delib-flow--run-stage-locally delib-flow--active-run
                                         'match-project)))
+  (delib-flow--rerender-active-run-buffer))
+
+(defun delib-flow-action-accept-inspect-source ()
+  "Accept the current inspect-source result for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (unless (delib-flow--inspect-review-pending-p delib-flow--active-run)
+    (user-error "No inspect result is pending review"))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--refresh-run-audit
+          (delib-flow--apply-inspect-review-outcome
+           delib-flow--active-run
+           'accepted
+           "Inspect result accepted. You may now match the project or retry inspect.")
+          'inspect-source)))
+  (delib-flow--rerender-active-run-buffer))
+
+(defun delib-flow-action-reject-inspect-source ()
+  "Reject the current inspect-source result for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (unless (delib-flow--inspect-review-pending-p delib-flow--active-run)
+    (user-error "No inspect result is pending review"))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--refresh-run-audit
+          (delib-flow--apply-inspect-review-outcome
+           delib-flow--active-run
+           'rejected
+           "Inspect result rejected. Retry inspect before matching a project.")
+          'inspect-source)))
+  (delib-flow--rerender-active-run-buffer))
+
+(defun delib-flow-action-accept-match-project ()
+  "Accept the current match-project result for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (unless (delib-flow--match-review-pending-p delib-flow--active-run)
+    (user-error "No project match is pending review"))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--refresh-run-audit
+          (delib-flow--apply-match-review-outcome
+           delib-flow--active-run
+           'accepted
+           (if (memq (delib-flow--match-status delib-flow--active-run) '(ambiguous no-match))
+               "Project match accepted for manual review. Edit the manual project selection block, then choose a project manually or continue with no-match follow-up."
+             "Project match accepted. Continue with downstream stages as appropriate."))
+          'match-project)))
+  (delib-flow--rerender-active-run-buffer))
+
+(defun delib-flow-action-reject-match-project ()
+  "Reject the current match-project result for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (unless (delib-flow--match-review-pending-p delib-flow--active-run)
+    (user-error "No project match is pending review"))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--refresh-run-audit
+          (delib-flow--apply-match-review-outcome
+           delib-flow--active-run
+           'rejected
+           "Project match rejected. Retry project matching before downstream project-dependent stages.")
+          'match-project)))
   (delib-flow--rerender-active-run-buffer))
 
 (defun delib-flow-action-discover-reference-material ()
@@ -3428,6 +4118,8 @@ PRIORITY controls display order."
   (interactive)
   (unless delib-flow--active-run
     (user-error "No active delib-flow run"))
+  (unless (delib-flow--project-decision-ready-p delib-flow--active-run)
+    (user-error "Project match must be accepted or manually overridden before reference discovery"))
   (setq delib-flow--active-run
         (delib-flow--seed-actions
          (delib-flow--run-stage-locally delib-flow--active-run
@@ -3450,9 +4142,15 @@ PRIORITY controls display order."
   (interactive)
   (unless delib-flow--active-run
     (user-error "No active delib-flow run"))
+  (unless (or (delib-flow--stage-executed-p delib-flow--active-run 'manual-project-match)
+              (and (delib-flow--stage-accepted-p delib-flow--active-run 'match-project)
+                   (memq (delib-flow--match-status delib-flow--active-run)
+                         '(ambiguous no-match))))
+    (user-error "Accept an ambiguous or no-match project result before manual override"))
   (setq delib-flow--active-run
         (delib-flow--seed-actions
-         (delib-flow--run-stage-locally delib-flow--active-run
+         (delib-flow--run-stage-locally
+          (delib-flow--sync-run-from-control-buffer delib-flow--active-run)
                                         'manual-project-match)))
   (delib-flow--rerender-active-run-buffer))
 
@@ -3461,6 +4159,9 @@ PRIORITY controls display order."
   (interactive)
   (unless delib-flow--active-run
     (user-error "No active delib-flow run"))
+  (unless (and (delib-flow--project-decision-ready-p delib-flow--active-run)
+               (eq (delib-flow--match-status delib-flow--active-run) 'no-match))
+    (user-error "A reviewed no-match project decision is required before proposing a new project"))
   (setq delib-flow--active-run
         (delib-flow--seed-actions
          (delib-flow--run-stage-locally delib-flow--active-run
@@ -3472,6 +4173,9 @@ PRIORITY controls display order."
   (interactive)
   (unless delib-flow--active-run
     (user-error "No active delib-flow run"))
+  (unless (and (delib-flow--project-decision-ready-p delib-flow--active-run)
+               (eq (delib-flow--match-status delib-flow--active-run) 'matched))
+    (user-error "Accepted or manual project match is required before extracting actions"))
   (setq delib-flow--active-run
         (delib-flow--seed-actions
          (delib-flow--run-stage-locally delib-flow--active-run
@@ -3483,6 +4187,9 @@ PRIORITY controls display order."
   (interactive)
   (unless delib-flow--active-run
     (user-error "No active delib-flow run"))
+  (unless (and (delib-flow--project-decision-ready-p delib-flow--active-run)
+               (eq (delib-flow--match-status delib-flow--active-run) 'matched))
+    (user-error "Accepted or manual project match is required before extracting waiting-for items"))
   (setq delib-flow--active-run
         (delib-flow--seed-actions
          (delib-flow--run-stage-locally delib-flow--active-run
@@ -3494,6 +4201,9 @@ PRIORITY controls display order."
   (interactive)
   (unless delib-flow--active-run
     (user-error "No active delib-flow run"))
+  (unless (and (delib-flow--project-decision-ready-p delib-flow--active-run)
+               (eq (delib-flow--match-status delib-flow--active-run) 'matched))
+    (user-error "Accepted or manual project match is required before suggesting reference notes"))
   (setq delib-flow--active-run
         (delib-flow--seed-actions
          (delib-flow--run-stage-locally delib-flow--active-run
