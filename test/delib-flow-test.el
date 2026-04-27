@@ -1535,7 +1535,16 @@ FILES is an alist of relative path to file content."
                            :retrieved-candidates)))
           (should retrieved)
           (should (equal "Support Material"
-                         (plist-get (car retrieved) :title))))))))
+                         (plist-get (car retrieved) :title)))
+          (should (equal '(linked-project-file text-overlap)
+                         (mapcar (lambda (signal)
+                                   (plist-get signal :key))
+                                 (seq-filter
+                                  (lambda (signal)
+                                    (> (plist-get signal :contribution) 0))
+                                  (plist-get (car retrieved) :signals)))))
+          (should (member "linked-project-file=1 (+12)"
+                          (plist-get (car retrieved) :reasons))))))))
 
 (ert-deftest delib-flow-discover-reference-material-uses-project-tags-and-contacts ()
   (delib-flow-test--with-temp-zk-root
@@ -1557,6 +1566,64 @@ FILES is an alist of relative path to file content."
         (should retrieved)
         (should (equal "Follow-up material"
                        (plist-get (car retrieved) :title)))))))
+
+(ert-deftest delib-flow-discover-reference-material-prioritizes-source-linked-notes ()
+  (delib-flow-test--with-temp-zk-root
+      '(("linked-from-source.org" . "#+title: Linked From Source\nReferenced directly by the source item.\n")
+        ("term-heavy.org" . "#+title: Alpha Project Kickoff Notes\nAlpha project kickoff agenda and blockers.\n"))
+    (let* ((linked-file (expand-file-name "linked-from-source.org" delib-flow-zk-root))
+           (source-file (make-temp-file "delib-flow-source" nil ".org"))
+           (source-content
+            (format "* Alpha Project kickoff\nAgenda\nSee [[file:%s][Linked]]\n"
+                    linked-file)))
+      (unwind-protect
+          (delib-flow-test--with-temp-project-file
+              "* Alpha Project\n"
+            (let* ((run (delib-flow--initialize-run
+                         (list :title "Alpha Project kickoff"
+                               :file source-file
+                               :content source-content)))
+                   (inspected (delib-flow-test--accept-inspect
+                               (delib-flow--run-stage-locally run 'inspect-source)))
+                   (matched (delib-flow-test--accept-match
+                             (delib-flow--run-stage-locally inspected 'match-project)))
+                   (updated-run
+                    (delib-flow--run-stage-locally matched
+                                                   'discover-reference-material))
+                   (retrieved
+                    (plist-get (delib-flow--run-working-context updated-run)
+                               :retrieved-candidates)))
+              (should retrieved)
+              (should (equal "Linked From Source"
+                             (plist-get (car retrieved) :title)))
+              (should (member "linked-source-file=1 (+15)"
+                              (plist-get (car retrieved) :reasons)))))
+        (delete-file source-file)))))
+
+(ert-deftest delib-flow-discover-reference-material-uses-source-contact-overlap ()
+  (delib-flow-test--with-temp-zk-root
+      '(("source-contact-note.org" . "#+title: Source Contact Note\nPlease coordinate with alice@example.com.\n")
+        ("plain-note.org" . "#+title: General Notes\nMiscellaneous text.\n"))
+    (delib-flow-test--with-temp-project-file
+        "* Alpha Project\n"
+      (let* ((run (delib-flow--initialize-run
+                   (list :title "Alpha Project kickoff"
+                         :content "* Alpha Project kickoff\nContact alice@example.com\n")))
+             (inspected (delib-flow-test--accept-inspect
+                         (delib-flow--run-stage-locally run 'inspect-source)))
+             (matched (delib-flow-test--accept-match
+                       (delib-flow--run-stage-locally inspected 'match-project)))
+             (updated-run
+              (delib-flow--run-stage-locally matched
+                                             'discover-reference-material))
+             (retrieved
+              (plist-get (delib-flow--run-working-context updated-run)
+                         :retrieved-candidates)))
+        (should retrieved)
+        (should (equal "Source Contact Note"
+                       (plist-get (car retrieved) :title)))
+        (should (member "source-contact-overlap=1 (+3)"
+                        (plist-get (car retrieved) :reasons)))))))
 
 (ert-deftest delib-flow-discover-reference-material-command-rerenders-history ()
   (delib-flow-test--with-temp-zk-root
@@ -1581,7 +1648,9 @@ FILES is an alist of relative path to file content."
               (with-current-buffer (get-buffer delib-flow-control-buffer-name)
                 (goto-char (point-min))
                 (should (search-forward "Retrieved context: available" nil t))
+                (should (search-forward "*** Retrieved candidates" nil t))
                 (should (search-forward "Alpha Project Notes" nil t))
+                (should (search-forward "title-overlap=" nil t))
                 (goto-char (point-min))
                 (should (search-forward "- Stage: Discover Relevant Reference Material" nil t))
                 (should (search-forward "- Candidate count: 1" nil t))
@@ -1615,6 +1684,12 @@ FILES is an alist of relative path to file content."
       (should (equal 'filter-reference-material (plist-get entry :stage-id)))
       (should filtered)
       (should (> (plist-get filtered :retained-count) 0))
+      (should (equal 'retained
+                     (plist-get (car (plist-get filtered :retained-candidates))
+                                :filter-status)))
+      (should (member "retained-by-score-threshold"
+                      (plist-get (car (plist-get filtered :retained-candidates))
+                                 :filter-reasons)))
       (should (string-match-p "Alpha Project Notes"
                               (plist-get working :retained-context)))
       (should (string-match-p "Review retained context"
@@ -1645,18 +1720,96 @@ FILES is an alist of relative path to file content."
             (with-current-buffer buffer
               (setq-local delib-flow--active-run-buffer t))
             (delib-flow-action-filter-reference-material)
-            (with-current-buffer (get-buffer delib-flow-control-buffer-name)
-              (goto-char (point-min))
-              (should (search-forward "Filtered context: available" nil t))
-              (should (search-forward "Retained: 2. Rejected: 0." nil t))
-              (should (search-forward "Alpha Project Notes" nil t))
-              (goto-char (point-min))
-              (should (search-forward "- Stage: Filter Useful Reference Material" nil t))
-              (should (search-forward "- Retained count: 2" nil t))
-              (goto-char (point-min))
-              (should (search-forward "- Retry Filter Useful Reference Material [available]" nil t))))
+              (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+                (goto-char (point-min))
+                (should (search-forward "Filtered context: available" nil t))
+                (should (search-forward "*** Retained context" nil t))
+                (should (search-forward "*** Rejected context" nil t))
+                (should (search-forward "Retained: 2. Rejected: 0." nil t))
+                (should (search-forward "retained-by-score-threshold" nil t))
+                (should (search-forward "Alpha Project Notes" nil t))
+                (goto-char (point-min))
+                (should (search-forward "- Stage: Filter Useful Reference Material" nil t))
+                (should (search-forward "- Retained count: 2" nil t))
+                (should (search-forward "- Retained candidates:" nil t))
+                (goto-char (point-min))
+                (should (search-forward "- Retry Filter Useful Reference Material [available]" nil t))))
         (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
           (kill-buffer (get-buffer delib-flow-control-buffer-name)))))))
+
+(ert-deftest delib-flow-filter-reference-material-annotates-fallback-retention ()
+  (let* ((candidate-a (list :title "Top candidate"
+                            :score 1
+                            :reasons '("title-overlap=1 (+1)")))
+         (candidate-b (list :title "Rejected candidate"
+                            :score 1
+                            :reasons '("text-overlap=1 (+1)")))
+         (package (list :working-context
+                        (list :retrieved-candidates (list candidate-a candidate-b))))
+         (filtered (delib-flow--filter-reference-material-result package)))
+    (should (equal 2 (plist-get filtered :candidate-count)))
+    (should (equal 1 (plist-get filtered :retained-count)))
+    (should (equal 1 (plist-get filtered :rejected-count)))
+    (should (equal '("retained-as-top-fallback")
+                   (plist-get (car (plist-get filtered :retained-candidates))
+                              :filter-reasons)))
+    (should (equal '("rejected-below-score-threshold")
+                   (plist-get (car (plist-get filtered :rejected-candidates))
+                              :filter-reasons)))))
+
+(ert-deftest delib-flow-working-context-renders-retrieval-review-subsections ()
+  (delib-flow-test--with-temp-zk-root
+      '(("alpha.org" . "#+title: Alpha Project Notes\nKickoff agenda and blockers.\n")
+        ("beta.org" . "#+title: Beta Notes\nUnrelated material.\n"))
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Alpha Project kickoff"
+                       :content "* Alpha Project kickoff\nAgenda\n")))
+           (inspected (delib-flow-test--accept-inspect
+                       (delib-flow--run-stage-locally run 'inspect-source)))
+           (discovered
+            (delib-flow--run-stage-locally inspected
+                                           'discover-reference-material))
+           (filtered
+            (delib-flow--run-stage-locally discovered
+                                           'filter-reference-material))
+           (buffer (delib-flow--render-control-buffer filtered)))
+      (unwind-protect
+          (with-current-buffer buffer
+            (goto-char (point-min))
+            (should (search-forward "*** Retrieved candidates" nil t))
+            (should (search-forward "*** Retained context" nil t))
+            (should (search-forward "*** Rejected context" nil t))
+            (should (search-forward "Alpha Project Notes" nil t))
+            (should (search-forward "- none" nil t)))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest delib-flow-filter-reference-material-retains-salient-context ()
+  (let ((file (make-temp-file "delib-flow-note" nil ".org"
+                              "#+title: Constraint note\nA blocker remains because of a client deadline.\n")))
+    (unwind-protect
+        (let* ((candidate-a (list :title "Constraint note"
+                                  :file file
+                                  :score 1
+                                  :reasons '("text-overlap=1 (+1)")))
+               (candidate-b (list :title "Filler note"
+                                  :score 1
+                                  :reasons '("text-overlap=1 (+1)")))
+               (package (list :working-context
+                              (list :retrieved-candidates
+                                    (list candidate-a candidate-b))))
+               (filtered (delib-flow--filter-reference-material-result package)))
+          (should (equal 1 (plist-get filtered :retained-count)))
+          (should (equal "Constraint note"
+                         (plist-get (car (plist-get filtered :retained-candidates))
+                                    :title)))
+          (should (member "salient-constraint-context"
+                          (plist-get (car (plist-get filtered :retained-candidates))
+                                     :filter-reasons)))
+          (should (equal '("rejected-below-score-threshold")
+                         (plist-get (car (plist-get filtered :rejected-candidates))
+                                    :filter-reasons))))
+      (delete-file file))))
 
 (ert-deftest delib-flow-extract-actions-updates-stage-history-and-filing ()
   (delib-flow-test--with-temp-zk-root

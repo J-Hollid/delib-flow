@@ -51,7 +51,15 @@ This repository is being built incrementally from a design-first process.
 - Retrieved reference candidates update working context and unlock filtering
 - Retrieved reference candidates now reflect project-link, tag, and contact
   signals rather than plain term overlap alone
+- Retrieved reference candidates now also reflect source-linked notes,
+  source-contact overlap, shared source/project links, and explanation-backed
+  ranking signals
 - Filtered retained context now updates the downstream working-context artifact
+- Filtered context now preserves salient constraint, decision, and preference
+  notes even when raw score overlap is weak
+- Retrieval review in `Current context` now renders first-class `Retrieved
+  candidates`, `Retained context`, and `Rejected context` subsections with
+  explicit keep/drop reasons
 - No-match project decisions now can produce a draft project plus first next action
 - Ambiguous or rejected project matches now can take a deterministic manual-selection path
 - Cloud-routing decisions now update working context and routing state
@@ -79,10 +87,9 @@ This repository is being built incrementally from a design-first process.
   - `make coverage`
   - `make complexity`
   - `make validate`
-- Milestones 2 and 3 are implemented; remaining work is refinement and
-  heuristic improvement rather than missing control-flow stages
-- The next implementation focus is Milestone 4 retrieval refinement over the
-  existing discovery and filtering stages
+- Milestones 2, 3, and 4 are implemented
+- The retrieval path now has explanation-backed discovery, salience-aware
+  filtering, and reviewable retained-versus-rejected context presentation
 
 * User guide
 
