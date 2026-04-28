@@ -69,6 +69,19 @@ intend to implement.
   warnings, the cockpit renders those warnings in stage results and `Filing
   preview`, and filing review now supports operator-selective approve versus
   reject decisions while leaving unselected artifacts deferred in draft state.
+- Milestone 6 is now complete as an audit-log refinement pass. Run and stage
+  snapshots now persist into the configured audit log file, review-state
+  transitions refresh persisted records, and the control buffer surfaces audit
+  readiness and append status.
+- Milestone 7 is now complete as a deterministic-filing refinement pass.
+  Approved artifacts now file one at a time into deterministic Org targets,
+  filing preview surfaces draft, approved, rejected, conflict, and filed
+  states, and filing preflights duplicate targets before writing.
+- Milestone 8 is now complete as a cloud-sanitization refinement pass. Cloud
+  routing now records provider and policy state, deterministic sanitization
+  prepares a reviewed package, send and reintegration both require explicit
+  approval, and cloud-returned output is kept reviewable before local
+  integration.
 - The validation scaffold is implemented: `make test`, `make coverage`,
   `make complexity`, and `make validate` are now the project gates.
 - The current codebase now includes a stable control-buffer foundation plus
@@ -1264,9 +1277,6 @@ Milestone 5 definition of done:
   8. Tests cover warning generation, warning rendering, and artifact-selection
      behavior tightly enough to distinguish review-model changes from wording
      drift.
-- Milestone 5 is still incomplete if approval remains queue-ordered only, if
-  weak artifacts are not visibly explained, or if artifact rejection/defer is
-  impossible without rerunning extraction.
 
 Milestone 5 non-goals:
 - Do not treat richer wording alone as milestone completion.
@@ -1297,27 +1307,6 @@ Milestone 5 implementation summary:
   - waiting-for items are title/retained-context-derived placeholders
   - reference-note suggestions are title/retained-context-derived placeholders
 
-Milestone 5 starting point:
-- The executable proposal stages already exist:
-  - `Extract Actions`
-  - `Extract Waiting-For`
-  - `Suggest Reference Notes`
-- Each stage already produces deterministic draft filing artifacts in
-  `:filing :draft-items` and updates `Filing preview`.
-- The filing-review path already exists:
-  - `Select Approved Filing Actions`
-  - `File Approved Outputs`
-- The current approval model is deterministic and queue-based rather than
-  operator-selective:
-  - `Select Approved Filing Actions` currently approves the next draft item by
-    position, one at a time, and moves it into `:filing :approved-items`.
-- Current artifact generation is still intentionally simple:
-  - actions are title/retained-context-derived placeholders
-  - waiting-for items are title/retained-context-derived placeholders
-  - reference-note suggestions are title/retained-context-derived placeholders
-- Current artifact stages do not yet expose milestone-5-specific validation
-  warnings in the control buffer.
-
 Current implementation anchors:
 - Draft artifact constructors live in [delib-flow.el] around
   `delib-flow--make-draft-action`, `delib-flow--make-draft-waiting-for`, and
@@ -1326,21 +1315,24 @@ Current implementation anchors:
   around `delib-flow--extract-actions-result`,
   `delib-flow--extract-waiting-for-result`, and
   `delib-flow--suggest-reference-notes-result`.
-- Deterministic filing approval currently lives in [delib-flow.el] around
-  `delib-flow--selected-filing-items` and
-  `delib-flow--select-approved-filing-actions-result`.
-- Baseline tests already cover draft production and deterministic approval:
+- Filing-review selection and rejection currently live in [delib-flow.el]
+  around `delib-flow--filing-selection-template`,
+  `delib-flow--select-approved-filing-actions-result`, and
+  `delib-flow--reject-draft-filing-artifact-result`.
+- Tests now cover draft production, warning rendering, explicit approval, and
+  explicit rejection:
   see [test/delib-flow-test.el] for `extract-actions`,
   `extract-waiting-for`, `suggest-reference-notes`, and
-  `select-approved-filing-actions`.
+  filing-review stages.
 
 Main remaining gaps:
 1. Proposal generation is still heuristic scaffolding.
    The current draft text still favors title/retained-context-derived
    placeholders over stronger task extraction or note-worthiness reasoning.
-2. Validation behavior is implemented as warning-only.
-   The design still allows future work around configurable warning severity and
-   blocking validations for note-filing readiness.
+2. Blocking behavior is implemented for filing-readiness failures, but still
+   intentionally narrow.
+   The current design now blocks non-ready waiting-for and reference-note
+   artifacts while leaving broader next-action quality heuristics advisory.
 3. Artifact review is explicit, but still single-item-at-a-time.
    That is sufficient for milestone 5, but later ergonomics work could add
    richer batch review without changing the current milestone contract.
@@ -1356,8 +1348,8 @@ Milestone 5 delivered slices:
 
 Follow-on work after milestone 5:
 1. Tune proposal heuristics now that review semantics are stable.
-2. Decide whether note-readiness checks should gain blocking behavior or remain
-   warning-only.
+2. Decide whether broader next-action quality checks should gain blocking
+   behavior or remain advisory.
 3. Consider whether filing-review ergonomics should support richer multi-item
    operations in a later milestone without weakening one-at-a-time filing.
 
@@ -1388,51 +1380,556 @@ Exit criteria:
 
 Goal: make runs inspectable after the fact.
 
-- Implement audit-log entry rendering and append behavior.
-- Record run metadata, stage metadata, inputs, raw outputs, normalized results,
-  and approval state.
-- Surface audit readiness and append status in the control buffer.
-- Ensure audit append behavior supports diagnostics before filing is implemented.
+- Status: complete.
+- Audit state now persists structured run and stage snapshots into the
+  configured audit log Org file.
+- Review-driven transitions such as accept, reject, supersede, and abort now
+  also refresh the persisted audit record rather than only stage execution.
+- The control buffer renders both run-audit state and stage-audit readiness so
+  append status is visible during the run.
+
+Milestone 6 definition of done:
+- Milestone 6 is not complete merely because a stage can dump text to an audit
+  file.
+- Milestone 6 is complete only when run history, stage snapshots, and
+  post-stage review transitions are durably re-renderable from current run
+  state and visible to the operator during execution.
+- In concrete terms, completion requires all of the following:
+  1. Every completed or failed stage execution updates audit state from current
+     run state and records a durable stage snapshot.
+  2. Persisted audit data includes at least:
+     - run metadata
+     - stage metadata
+     - input packages
+     - raw outputs
+     - normalized outputs
+     - review state
+  3. Audit persistence rewrites the current run subtree by run id rather than
+     blindly appending duplicate snapshots for the same run.
+  4. Post-stage review transitions such as accept, reject, retry/supersede, and
+     abort can refresh persisted audit state without rerunning the original
+     stage.
+  5. The control buffer surfaces audit configuration plus append readiness,
+     including recorded-stage count, pending checkpoints, and the last appended
+     checkpoint.
+  6. Tests cover stage append, review refresh, supersede refresh, audit-status
+     rendering, abort-state persistence, and audit-visible filing targets.
+
+Milestone 6 non-goals:
+- Do not require immutable versioned snapshots for every intermediate UI edit.
+- Do not treat analytics, cross-run reporting, or log-rotation policy as part
+  of milestone 6 completion.
+- Do not require audit redaction policy beyond the current local configured-file
+  contract.
+
+Milestone 6 implementation summary:
+- Audit state lives in `:audit` with:
+  - `:run-record`
+  - `:stage-records`
+  - `:pending-checkpoints`
+  - `:last-appended-checkpoint`
+- Stage execution and review refresh paths both synchronize audit state from
+  current run state before persistence.
+- Persisted audit output is written as Org subtrees keyed by `RUN_ID`, with one
+  subtree per run and nested stage subtrees for each recorded stage.
+- The current audit record includes:
+  - run id, run status, source title, source file, start/end timestamps
+  - stage id, label, status, review state, prompt id, provider, model name,
+    start/end timestamps
+  - stage input package, normalized result, and raw output
+
+Current implementation anchors:
+- Audit-state construction and synchronization live in [delib-flow.el] around
+  `delib-flow--initial-audit-state`,
+  `delib-flow--make-audit-stage-record`,
+  `delib-flow--sync-audit-state`, and
+  `delib-flow--refresh-run-audit`.
+- File persistence and run-subtree replacement live in [delib-flow.el] around
+  `delib-flow--audit-run-bounds` and
+  `delib-flow--write-audit-log-file`.
+- Control-buffer audit rendering lives in [delib-flow.el] around
+  `delib-flow--audit-run-state-text`,
+  `delib-flow--audit-stage-readiness-text`, and
+  `delib-flow--render-audit-status-section`.
+- Tests cover append, refresh, supersede, abort, UI rerender, and filed-target
+  capture in [test/delib-flow-test.el].
+
+Main remaining gaps:
+1. Audit payloads are intentionally verbose and local-first.
+   There is no separate retention, pruning, or redaction policy yet.
+2. Audit rendering is run-oriented rather than analytics-oriented.
+   Cross-run querying and summaries belong to later tooling, not milestone 6.
+3. Audit checkpoints are stage- and review-driven, not edit-history-driven.
+   Fine-grained editable-block revision history is still out of scope.
+
+Follow-on work after milestone 6:
+1. Decide whether any later cloud-routing milestone needs additional audit
+   redaction or split-log behavior.
+2. Consider whether later UX work should add direct navigation from control
+   buffer status lines into the persisted audit subtree.
 
 Exit criteria:
-- Completed or partial runs can append a structured audit record matching the
-  design contract.
+- Completed, partial, failed, reviewed, retried, and aborted runs can persist a
+  structured audit record matching the current run-state contract.
+- Persisted records remain aligned with current stage history and review state
+  rather than drifting after post-stage decisions.
+- Audit readiness and append status are visible in the control buffer and
+  covered by tests.
 
 ** Milestone 7: deterministic filing
 
 Goal: turn approved artifacts into concrete Org changes.
 
-- Implement filing target resolution.
-- Implement filing previews.
-- Implement one-action-at-a-time execution for supported filing actions.
-- Surface target-change conflicts and partial filing failures.
+- Status: complete.
+- Deterministic filing now writes approved artifacts through explicit target
+  resolution instead of leaving filing as review-only state.
+- Filing review remains one artifact at a time even when multiple drafts exist,
+  so operator approval and file writes stay aligned.
+- Tests cover matched-project child insertion, new-project creation,
+  reference-note creation, configurable note templates, project-support note
+  metadata updates, conflict surfacing, preview rerendering, and audit-visible
+  target capture.
+
+Milestone 7 definition of done:
+- Milestone 7 is not complete merely because draft artifacts can be rendered in
+  `Filing preview`.
+- Milestone 7 is complete only when an explicitly approved artifact can be
+  turned into deterministic Org changes, conflicts are preflighted before any
+  write, and the control buffer remains truthful about what was written versus
+  what still needs review.
+- In concrete terms, completion requires all of the following:
+  1. The filing path resolves supported artifact kinds into deterministic
+     targets:
+     - matched-project child headings in the configured My Projects file
+     - newly proposed top-level project headings with a first child action
+     - reference-note files in the configured ZK root
+  2. `Select Approved Filing Actions` leaves at most one artifact in the
+     approved slot at a time, and `File Approved Outputs` consumes only that
+     explicit approval.
+  3. Filing preflight checks detect duplicate targets before writing:
+     - existing identical matched-project child headings
+     - existing top-level project headings for project proposals
+     - existing deterministic note-file paths for reference notes
+  4. A filing conflict does not clear the current approved artifact.
+     The operator can review the conflict and retry after correcting the
+     underlying target state.
+  5. Successful filing records the written target locations in both run state
+     and the audit-visible stage output.
+  6. The control buffer renders the filing state clearly enough to distinguish:
+     - remaining draft artifacts
+     - currently approved artifacts
+     - rejected artifacts
+     - current filing conflicts
+     - already filed target locations
+  7. Tests cover both successful deterministic writes and failure surfacing
+     tightly enough to keep milestone-7 behavior stable during later
+     refinements.
+
+Milestone 7 non-goals:
+- Do not add free-form AI writes directly into arbitrary buffers or files.
+- Do not bypass operator approval by auto-filing draft artifacts.
+- Do not weaken deterministic one-at-a-time filing in the name of batch
+  throughput.
+- Do not treat broader filing ergonomics, rename workflows, or conflict
+  auto-resolution as milestone-7 finish criteria.
+
+Milestone 7 implementation summary:
+- The executable filing-review and filing stages now exist and remain
+  deterministic:
+  - `Select Approved Filing Actions`
+  - `Reject Draft Filing Artifact`
+  - `File Approved Outputs`
+- Approved artifacts currently file through these deterministic paths:
+  - next actions and waiting-for items insert child headings into the matched
+    project
+  - project proposals create new top-level project headings with their first
+    child item
+  - reference-note suggestions create note files under the configured ZK root
+- Filing preview now renders the full operator-visible filing lifecycle:
+  - draft artifacts
+  - approved artifacts
+  - rejected artifacts
+  - filing conflicts
+  - filed target locations
+- Deterministic note creation is template-backed:
+  - general PKM notes use `delib-flow-general-note-template`
+  - project-support notes use `delib-flow-project-support-note-template`
+- Project-support note filing also updates matched-project metadata with a
+  `REFERENCE_FILES` link to the newly created support note.
+
+Current implementation anchors:
+- Artifact approval and rejection state transitions live in [delib-flow.el]
+  around `delib-flow--select-approved-filing-actions-result` and
+  `delib-flow--reject-draft-filing-artifact-result`.
+- Filing preview rendering lives in [delib-flow.el] around
+  `delib-flow--render-filing-preview-section`,
+  `delib-flow--filing-conflict-text`, and
+  `delib-flow--filed-target-locations-text`.
+- Deterministic target resolution, conflict preflight, and file writes live in
+  [delib-flow.el] around `delib-flow--approved-item-conflicts`,
+  `delib-flow--file-approved-item`,
+  `delib-flow--file-approved-output-locations`, and
+  `delib-flow--file-approved-outputs-result`.
+- Tests cover selection, writes, conflicts, rerendering, templates, metadata
+  updates, and audit-visible target capture in [test/delib-flow-test.el].
+
+Main remaining gaps:
+1. Conflict handling is now guided, but still intentionally one-artifact and
+   rewrite-driven.
+   The workflow supports retry, reject, and deterministic retargeting of the
+   current approved artifact, but does not yet offer richer multi-artifact or
+   transactional conflict management.
+2. Filing remains intentionally conservative and artifact-shaped.
+   The system does not yet support richer batching, mixed multi-artifact
+   transactions, or reversible write journals.
+3. Deterministic insertion rules are currently narrow by design.
+   Broader capture-template integration and more nuanced target placement can
+   come later without weakening the current contract.
+
+Follow-on work after milestone 7:
+1. Decide whether later ergonomics work should add richer conflict batching or
+   transactional recovery without bypassing preflight checks.
+2. Decide whether later filing work should support richer target-placement
+   strategies while preserving deterministic write boundaries.
+3. Keep the existing cloud-path and filing-path contracts aligned around
+   explicit approval boundaries and audit-visible state.
 
 Exit criteria:
 - Approved artifacts can be filed through deterministic Org operations with
-  preview and failure surfacing.
+  explicit one-at-a-time approval, conflict preflight, preview visibility, and
+  audit-visible target capture.
+- Exit status: met.
 
 ** Milestone 8: cloud sanitization path
 
 Goal: add optional cloud routing without weakening local-first guarantees.
 
-- Implement sanitization package generation and review.
-- Implement explicit approve-send and approve-reintegrate flow.
-- Add cloud failure and fallback decision handling.
+- Status: complete.
+- The cloud path now exists as an executable reviewed sequence rather than a
+  design placeholder.
+- Routing decisions record provider and policy-profile state before any cloud
+  send occurs.
+- Sanitized packages are prepared deterministically, shown in the control
+  buffer, editable before send, and must be explicitly approved before cloud
+  execution.
+- Cloud-returned output remains local-review state first: it is shown,
+  explicitly approved for reintegration, and only then merged into downstream
+  local context.
+
+Milestone 8 definition of done:
+- Milestone 8 is not complete merely because a stage can call a cloud adapter.
+- Milestone 8 is complete only when cloud use is gated by an explicit reviewed
+  sanitization path, cloud-returned output is held behind reintegration
+  approval, and the local workflow remains usable when cloud routing is not
+  taken.
+- In concrete terms, completion requires all of the following:
+  1. A valid cloud-routing path exists through explicit executable stages:
+     - `Decide on Cloud Pass`
+     - `Sanitize for Cloud`
+     - `Approve Cloud Send`
+     - `Run Cloud Stage`
+     - `Approve Candidate Reintegration`
+  2. Routing decisions record at least:
+     - selected cloud model
+     - selected provider
+     - effective policy profile
+     - pending sanitization state
+  3. Provider policy can block cloud routing before any sanitized package is
+     sent.
+  4. Sanitization produces a deterministic reviewed package from current source
+     and retained context, rather than sending raw local context directly.
+  5. The reviewed sanitized package remains editable in the control buffer
+     before send, and approval commits the reviewed package that will be used
+     for cloud execution.
+  6. Cloud execution stores returned output in reviewable local state rather
+     than reintegrating it automatically.
+  7. Reintegration requires a separate explicit approval step before local
+     integration can consume returned cloud output.
+  8. Tests cover routing state, policy blocking, sanitization behavior,
+     reviewed-package approval, cloud execution, reintegration approval, and a
+     full cloud-assisted workflow tightly enough to keep milestone-8 behavior
+     stable.
+
+Milestone 8 non-goals:
+- Do not allow unsanitized local context to bypass the reviewed cloud package.
+- Do not auto-reintegrate cloud output into local context without explicit
+  approval.
+- Do not require cloud routing for the package to remain usable.
+- Do not treat cloud failure fallback UX, retry policy, or provider-agnostic
+  stage rerouting for arbitrary reasoning stages as milestone-8 finish
+  criteria.
+
+Milestone 8 implementation summary:
+- The executable cloud-routing path now exists and remains review-gated:
+  - `Decide on Cloud Pass`
+  - `Sanitize for Cloud`
+  - `Approve Cloud Send`
+  - `Run Cloud Stage`
+  - `Approve Candidate Reintegration`
+- Provider-aware routing policy is implemented:
+  - `delib-flow-cloud-provider-policy-alist` can disable a provider or set a
+    policy profile override
+  - routing state records the selected provider, selected model, and effective
+    policy profile
+- Deterministic sanitization is policy-profile-aware:
+  - the standard profile redacts emails, URLs, and capitalized names
+  - the strict profile also redacts Org file links and matched
+    project-identifying terms
+- The control buffer now exposes both cloud-specific review surfaces:
+  - editable reviewed cloud package before send
+  - visible cloud-returned context before reintegration
+- The cloud adapter path is separate from local execution:
+  - reviewed cloud-stage input is executed through
+    `delib-flow-cloud-stage-adapter`
+  - returned output is recorded in run state and stage history for local
+    follow-up
+
+Current implementation anchors:
+- Provider-policy resolution and deterministic routing decisions live in
+  [delib-flow.el] around `delib-flow--cloud-provider-policy`,
+  `delib-flow--cloud-policy-profile`, and
+  `delib-flow--decide-cloud-pass-result`.
+- Sanitization logic lives in [delib-flow.el] around
+  `delib-flow--sanitize-cloud-text`,
+  `delib-flow--sanitize-project-terms`, and
+  `delib-flow--sanitize-for-cloud-result`.
+- Reviewed-package approval and cloud execution live in [delib-flow.el] around
+  `delib-flow--reviewed-cloud-package`,
+  `delib-flow--approve-cloud-send-result`,
+  `delib-flow--run-stage-in-cloud`, and
+  `delib-flow--cloud-stage-result`.
+- Run-state application and control-buffer rendering for cloud state live in
+  [delib-flow.el] around `delib-flow--apply-decide-cloud-pass-entry`,
+  `delib-flow--apply-sanitize-for-cloud-entry`,
+  `delib-flow--apply-run-cloud-stage-entry`,
+  `delib-flow--apply-approve-candidate-reintegration-entry`, and
+  `delib-flow--cloud-context-text`.
+- Tests cover routing, sanitization, approval, cloud execution, reintegration,
+  and end-to-end workflow behavior in [test/delib-flow-test.el].
+
+Main remaining gaps:
+1. Cloud routing is still stage-specific rather than fully generic.
+   The current executable path centers on the dedicated cloud stages already in
+   the workflow instead of rerouting arbitrary reasoning stages through the
+   same reviewed package machinery.
+2. Sanitization remains deterministic and intentionally simple.
+   The current redaction policy is reviewable and provider-aware, but it does
+   not yet support richer per-stage policy tuning or more nuanced structured
+   secrecy classes.
+
+Follow-on work after milestone 8:
+1. Decide whether later routing work should generalize cloud passes to a wider
+   set of reasoning stages without weakening the current approval path.
+2. Decide whether later sanitization work needs richer structured redaction or
+   provider-specific package shaping beyond the current policy-profile model.
 
 Exit criteria:
 - A valid stage can be rerouted through a reviewed sanitized cloud package and
   reintegrated back into local context only after explicit approval.
+- Cloud routing records provider and policy state, reviewed packages remain
+  editable before send, and returned cloud output remains review-gated before
+  local reintegration.
+- Exit status: met.
 
-* Near-term next steps
+* Post-milestone roadmap
 
-These are the most useful planning tasks before further implementation.
+The highest-value remaining work is no longer stage coverage. It is refinement
+work on proposal quality, validation behavior, filing ergonomics, cloud
+failure handling, and infrastructure hygiene.
 
-1. Define the exact stage-execution adapter function contract and result shape.
-2. Define the exact editable-region model for control-buffer artifacts and how
-   action selection validates pending edits.
-3. Define audit append checkpoints and minimal persisted data per checkpoint.
-4. Refine Milestone 1 into concrete tracked tasks now that the major sequencing
-   decisions are settled.
+Execution order:
+
+1. Milestone 9: proposal-quality refinement
+- Strengthen `Extract Actions`, `Extract Waiting-For`, and
+  `Suggest Reference Notes` so they use source-body evidence, retained-context
+  salience, and matched-project context more effectively than the current
+  title-derived scaffolding.
+- Keep the current deterministic stage contract and warning model stable while
+  improving the draft artifact text itself.
+
+2. Milestone 10: validation and approval gates
+- Status: complete.
+- Warning severity is implemented and filing approval now distinguishes
+  advisory quality issues from blocking filing-readiness failures.
+- Blocking validations now cover deterministic reference-note readiness and
+  non-ready waiting-for artifacts that still lack a clear owner or concrete
+  blocked dependency.
+- Filing review now surfaces readiness and remediation per artifact, guides the
+  operator toward ready selections, and persists blocked approval attempts with
+  explicit recovery paths.
+- The current explicit filing review path remains intact; milestone 10 does not
+  move writes earlier or weaken one-at-a-time deterministic filing.
+
+3. Milestone 11: filing conflict-resolution workflow
+- Status: complete.
+- Deterministic filing conflicts now surface an executable local recovery path
+  instead of stopping at detection.
+- `Resolve Filing Conflict` preserves the one-approved-artifact contract while
+  allowing the operator to:
+  - retry after fixing the underlying target state
+  - reject the currently approved artifact from this run
+  - retarget deterministic note, project-child, and project-heading conflicts
+    by editing only the approved artifact in memory before retry
+- The conflict workflow remains intentionally conservative:
+  it does not auto-resolve duplicates, bypass preflight, or widen filing into a
+  batch transaction model.
+
+4. Milestone 12: cloud failure and fallback workflow
+- Status: complete.
+- `Run Cloud Stage` failures now persist explicit cloud-failure review state in
+  routing and the control buffer instead of only appending a generic failed
+  stage entry.
+- `Resolve Cloud Failure` now gives the operator explicit recovery choices:
+  retry cloud execution, continue with a local fallback, skip the cloud branch,
+  or abort the run.
+- The reviewed sanitization and reintegration boundaries remain intact:
+  cloud retry still reuses the approved reviewed package, and local fallback
+  remains an explicit reviewed transition rather than a silent automatic
+  downgrade.
+- The current failure workflow is intentionally narrow:
+  it covers the existing `Run Cloud Stage` execution boundary and does not yet
+  generalize failure handling across arbitrary rerouted reasoning stages.
+
+5. Milestone 13: generic reviewed cloud rerouting
+- Generalize the cloud-path machinery so more reasoning stages can be routed
+  through reviewed sanitization without bespoke stage-specific logic.
+- Status: completed.
+- Reviewed cloud execution now records the selected rerouted stage's raw and
+  normalized payload, and approved reintegration now applies that payload back
+  through the target stage's normal local state-update path.
+- Rerouted stages now also appear as first-class cloud stage-history records,
+  and rerouted cloud failures are now recorded against the actual target stage.
+- Approved reviewed cloud packages are now reusable for a direct retry of the
+  current rerouted cloud target, and the operator can also restart the cloud
+  path back at sanitization without supporting arbitrary cloud-step rewinding.
+- The current-result surface, failure-recovery copy, and control-buffer action
+  labels now foreground the rerouted cloud target stage while still keeping
+  `Run Cloud Stage` as the explicit reviewed transport and approval boundary.
+- The current implementation intentionally does not let operators promote
+  rerouted cloud stage entries into totally independent control-buffer stages;
+  direct retry and restart stay subordinate to the reviewed cloud corridor.
+- Keep provider-policy enforcement and explicit approval semantics fixed.
+
+6. Milestone 14: audit hygiene and prompt integration
+- Status: complete.
+- Add audit retention/redaction policy, improve audit navigation, and
+  introduce more meaningful prompt-library-backed resolution where the current
+  descriptor-only prompt contract is still thin.
+- Audit persistence is now policy-driven with explicit `full`, `redacted`, and
+  `metadata-only` payload modes, and the control buffer now surfaces the audit
+  file path, payload policy, redaction profile, and latest recorded stage.
+- Stage input packages now resolve prompt-library entries by `PROMPT_ID` when
+  available, surface example-structure availability, and now also carry a
+  rendered prompt payload instead of only a bare descriptor prompt id.
+- Stage input packages now also carry stage-aware structured prompt guidance,
+  including response schemas for source analysis, decision fields for project
+  matching, project-creation checklists, artifact-quality rules, and shared
+  contracts for cloud-corridor and filing-review stages.
+- Persisted audit stage records now include per-stage attempt numbers and
+  rerouted cloud transport-stage metadata to improve retry and cloud walkthrough
+  readability.
+- The control buffer now also surfaces audit-navigation readiness plus compact
+  latest-attempt summary text, and operators can jump directly to the active
+  run audit subtree or latest audit stage subtree from the control buffer.
+
+7. Milestone 15: debug framework for local verification
+- Status: in progress.
+- Build a dedicated debug/verification layer that makes it easy to run the
+  workflow end to end with dummy data, start from specific intermediate stages,
+  inspect stage packages and outputs, and capture diagnostics when behavior
+  diverges from expectation.
+- The goal of this milestone is not new production workflow behavior; it is to
+  reduce the friction of verifying existing behavior locally and make audit and
+  diagnosis loops fast enough to support stage-by-stage trust-building.
+- Planned scope:
+  1. Easy end-to-end fixture setup
+     - Helpers for creating disposable source inputs, temporary project files,
+       and temporary ZK roots from a small set of dummy scenarios.
+     - One-command local workflow startup against those fixtures.
+  2. Stage-entry setup and replay
+     - Helpers to seed run state at specific stage boundaries so a single stage
+       or approval path can be exercised without replaying the whole workflow.
+     - Explicit support for rerunning reviewed, cloud, and filing paths from
+       controlled checkpoints.
+  3. Package and output diagnostics
+     - Commands or summaries to inspect the exact stage input package, resolved
+       prompt contract, normalized output, and accepted output at each step.
+     - Fast surfacing of which context fields changed after a stage executes.
+  4. Audit and run navigation
+     - Direct jump paths from the control buffer to the active run’s audit
+       subtree and latest recorded stage.
+     - Compact summaries for retries, superseded attempts, rerouted cloud
+       stages, failures, and payload-retention mode.
+  5. Failure and divergence debugging
+     - Purpose-built diagnostics for “expected X, got Y” local verification,
+       such as showing blocking warnings, inferred source typing, project-match
+       candidates, filing target selection, and cloud-routing target state.
+  6. Verification-oriented docs
+     - A documented local walkthrough recipe for full-run and per-stage checks
+       using dummy data, including where to inspect state, prompt payloads, and
+       audit traces.
+- Acceptance criteria:
+  1. A local operator can launch at least one full dummy-data run with minimal
+     setup and inspect each resulting stage payload and audit checkpoint.
+  2. A local operator can start from at least one intermediate checkpoint for
+     each major phase: review, context retrieval, artifact drafting, cloud, and
+     filing.
+  3. The control/debug surfaces make it clear what changed after a stage and
+     where to look next when a result is surprising.
+  4. Tests cover the fixture/setup helpers and any persistent debug-state or
+     navigation behavior that becomes part of the runtime contract.
+- Current implementation slice:
+  - Built-in debug scenarios can now create disposable temp source/project/ZK
+    and audit fixtures, start a run directly into a chosen checkpoint, and tear
+    those fixtures down automatically when the run ends.
+  - The checkpointed path now covers `source`, `inspect-reviewed`,
+    `project-reviewed`, `manual-project-ready`, `context-ready`,
+    `artifact-ready`, `cloud-ready`, `cloud-failure-ready`,
+    `filing-ready`, and `filing-conflict-ready`.
+  - The control buffer now also exposes a latest-stage debug inspection command
+    for exact prompt/package/output inspection during local walkthroughs.
+  - The debug inspection now also summarizes tracked state changes across core
+    workflow domains and adds stage-specific diagnostics for project matching,
+    cloud routing, and filing.
+  - Scenario/checkpoint compatibility is now explicit so hard-branch replay
+    paths stay deterministic instead of depending on accidental fixture shape.
+  - The control buffer now also exposes a comparison view that can diff the
+    active run against a fresh replay of its originating debug
+    scenario/checkpoint and against the previous attempt of the latest stage.
+  - The control buffer now also exposes a walkthrough guide and starter flow
+    for named local verification targets so operators can enter full-run,
+    project-review, manual-project, artifact-drafting, cloud-failure, and
+    filing-conflict recipes without manually pairing scenarios to checkpoints.
+  - Active walkthrough targets can now advance to their next deterministic
+    checkpoint or restart from their baseline directly from the control buffer,
+    so common verification paths no longer require manual scenario relaunches
+    between steps.
+  - The walkthrough guide now also carries an explicit operator verification
+    loop plus checkpoint-specific expectations for each named target, so local
+    dummy-data passes have a built-in script for what to inspect and confirm at
+    each stage boundary.
+  - The control buffer now also exposes contextual helper presets for active
+    manual review blocks, so local verification can seed valid manual-project,
+    cloud-failure, filing-selection, and filing-conflict decisions without
+    manually drafting each template from scratch.
+
+Cross-cutting maintenance rules:
+
+- Preserve the current small-helper implementation style so `make complexity`
+  remains green.
+- Keep stage output rendering and test assertions aligned whenever artifact
+  shapes or warning behavior change.
+- Avoid reopening stable milestone-3 review state or milestone-7 deterministic
+  write boundaries unless a later refinement proves them insufficient.
+
+Current execution focus:
+
+- Milestone 14 is complete.
+- Milestone 15 is the active implementation target.
+- The next bounded slice should come from actual manual dummy-data passes:
+  tighten any stage-specific helper or diagnostic flow that still feels too
+  manual once the current walkthrough, comparison, and helper-preset surfaces
+  are used end to end.
 
 * Milestone 1 code breakdown
 
