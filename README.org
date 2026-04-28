@@ -79,6 +79,11 @@ This repository is being built incrementally from a design-first process.
   project metadata drawer with a `REFERENCE_FILES` link to the filed note
 - Deterministic filing now also creates new project headings with a first child action from approved project proposals
 - Deterministic filing now detects target conflicts and preserves the current approved artifact for retry instead of writing blindly
+- Filing conflict review now exposes explicit retry, reject, and
+  reference-note retargeting paths instead of leaving conflicts as detection
+  only
+- Filing conflict review now also supports project-child rewording and
+  top-level project retitling before retrying deterministic writes
 - Audit logging now records run and stage snapshots in the configured audit log file and surfaces append status in `Audit status`
 - Audit logging now also reflects post-stage inspect/match review-state
   transitions such as accept, reject, and supersede
@@ -86,15 +91,46 @@ This repository is being built incrementally from a design-first process.
   render in `Filing preview`
 - Draft next actions, waiting-for items, and reference-note suggestions now
   also carry visible quality warnings in both stage results and `Filing preview`
+- Filing review now distinguishes advisory warnings from blocking
+  filing-readiness issues, renders per-artifact readiness and fix guidance, and
+  preserves blocked approval attempts until the operator chooses a ready
+  alternative, fixes the artifact, or rejects it
+- Draft filing review now supports explicit selection and rejection of one
+  artifact at a time while leaving the rest deferred in draft state
+- Default next-action and waiting-for proposal scaffolding is now less vague:
+  actions use stronger placeholder verbs and waiting-for drafts reuse source
+  contact signals when available
 - Milestone 5 is implemented:
   proposal stages now have reviewable quality warnings and operator-selective
   approve/reject/defer filing review semantics
+- Milestone 6 is implemented:
+  audit logging now persists run and stage snapshots, refreshes review-state
+  transitions, and surfaces append readiness in the control buffer
+- Milestone 7 is implemented:
+  deterministic filing now resolves approved artifacts into concrete Org
+  targets, preflights duplicate targets, and surfaces filed locations plus
+  conflicts in `Filing preview`
+- Milestone 8 is implemented:
+  cloud routing now runs through reviewed sanitization, provider-aware policy
+  checks, explicit send and reintegration approvals, and reviewable returned
+  cloud context
+- Milestone 10 is implemented:
+  validation gates now distinguish advisory versus blocking artifact issues and
+  filing review now exposes readiness-driven approval guidance and recovery
+  state
+- Milestone 11 is implemented:
+  deterministic filing conflicts now have explicit local recovery flows for
+  retry, reject, and retargeting across current note and project target shapes
+- Milestone 12 is implemented:
+  cloud-stage failures now have an explicit reviewed recovery flow for retry,
+  local fallback, skip, and abort decisions instead of relying only on generic
+  failed-stage state
 - Validation gates implemented:
   - `make test`
   - `make coverage`
   - `make complexity`
   - `make validate`
-- Milestones 2, 3, 4, and 5 are implemented
+- Milestones 2, 3, 4, 5, 6, 7, and 8 are implemented
 - The retrieval path now has explanation-backed discovery, salience-aware
   filtering, and reviewable retained-versus-rejected context presentation
 

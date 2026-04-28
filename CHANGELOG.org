@@ -7,6 +7,72 @@ dated entries.
 
 * 2026-04-27
 
+- Started the Milestone 13 generic cloud-rerouting pass in `delib-flow.el`
+  and `test/delib-flow-test.el`, adding explicit reviewed cloud target-stage
+  selection, recorded `:cloud-target-stage` routing state, a dedicated
+  cloud-routing review block, and cloud-stage output that now reports which
+  rerouted reasoning stage the reviewed package was sent through.
+- Completed the Milestone 12 cloud-failure and fallback workflow in
+  `delib-flow.el`, `test/delib-flow-test.el`, `README.org`, and
+  `docs/implementation-plan.org`, adding explicit cloud-failure review state,
+  a `Resolve Cloud Failure` stage with retry/local-fallback/skip/abort
+  outcomes, and documentation that now treats milestone 12 as implemented and
+  moves active roadmap focus to Milestone 13.
+- Added a post-milestone roadmap to `docs/implementation-plan.org` covering
+  the remaining backlog after milestones 5 through 8, and started Milestone 9
+  work on proposal-quality refinement.
+- Refined proposal drafting in `delib-flow.el` and `test/delib-flow-test.el`
+  so action extraction now prefers concrete source-body action lines,
+  waiting-for extraction can reuse explicit waiting lines from the source, and
+  source-derived reference-note suggestions prefer project-support notes when a
+  matched project already exists.
+- Continued the Milestone 9 proposal-quality pass in `delib-flow.el` and
+  `test/delib-flow-test.el` so retained reference material can now contribute
+  concrete action lines, explicit waiting lines, and note-worthy support-note
+  focus text instead of relying only on retained note titles.
+- Started the next Milestone 9 validation slice in `delib-flow.el` and
+  `test/delib-flow-test.el`, adding warning severity, surfacing blocking
+  warning counts in proposal output and filing preview, and preventing filing
+  approval of artifacts that are not yet deterministically file-ready.
+- Continued the Milestone 10 filing-review pass in `delib-flow.el` and
+  `test/delib-flow-test.el`, persisting blocked approval attempts into filing
+  state, rendering explicit blocked-artifact recovery details in `Filing
+  preview`, and clearing stale block state when new filing drafts are generated.
+- Completed the Milestone 10 validation-and-approval-gates pass in
+  `delib-flow.el`, `test/delib-flow-test.el`, `README.org`, and
+  `docs/implementation-plan.org`, adding per-artifact readiness/remediation
+  guidance, broader waiting-for blocking validations, ready-versus-blocked
+  selection guidance, and documentation that now treats milestone 10 as
+  implemented.
+- Started the Milestone 11 filing-conflict-resolution pass in
+  `delib-flow.el`, `test/delib-flow-test.el`, and `README.org`, adding an
+  executable `Resolve Filing Conflict` stage, explicit retry/reject/rename-note
+  recovery paths, a dedicated conflict-resolution review block in `Filing
+  preview`, and test-covered reference-note retargeting after deterministic
+  conflicts.
+- Extended the Milestone 11 filing-conflict-resolution pass in
+  `delib-flow.el` and `test/delib-flow-test.el` so deterministic conflict
+  recovery now also supports project-child rewording and top-level project
+  retitling before retrying the existing filing stage.
+- Updated `docs/implementation-plan.org` and `README.org` after the Milestone
+  11 audit pass so the repo now treats conflict resolution as implemented for
+  the current deterministic filing targets and moves the active roadmap focus
+  to Milestone 12.
+- Updated `README.org` and `docs/implementation-plan.org` after a Milestone 8
+  audit pass to mark the reviewed cloud-routing path as implemented with
+  explicit definition of done, implementation anchors, remaining gaps, and
+  test-backed exit criteria.
+- Updated `README.org` and `docs/implementation-plan.org` after a Milestone 7
+  audit pass to mark deterministic filing as implemented with explicit
+  definition of done, implementation anchors, non-goals, follow-on work, and
+  test-backed exit criteria.
+- Tuned the remaining Milestone 5 proposal heuristics in `delib-flow.el` and
+  `test/delib-flow-test.el`, replacing the weakest action and waiting-for
+  placeholder wording with stronger default scaffolding and owner-aware
+  waiting-for drafts.
+- Updated `README.org` and `docs/implementation-plan.org` after a Milestone 6
+  audit pass to mark audit logging as implemented with explicit definition of
+  done, non-goals, implementation anchors, and test-backed exit criteria.
 - Implemented the Milestone 5 proposal-review refinement pass in
   `delib-flow.el` and `test/delib-flow-test.el`, adding structured quality
   warnings for drafted actions, waiting-for items, and reference notes, plus

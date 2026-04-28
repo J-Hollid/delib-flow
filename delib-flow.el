@@ -65,6 +65,14 @@ Supported placeholders are `${title}', `${source-artifact}', and `${note-type}'.
   "Default cloud model identifier."
   :type '(choice (const :tag "Unset" nil) string))
 
+(defcustom delib-flow-cloud-reroutable-stage-ids
+  '(run-cloud-stage filter-reference-material extract-actions
+                    extract-waiting-for suggest-reference-notes)
+  "Stage identifiers that may be executed through the reviewed cloud path.
+
+Entries must be stage ids present in `delib-flow--stage-descriptor-alist'."
+  :type '(repeat symbol))
+
 (defcustom delib-flow-cloud-policy-profile 'standard
   "Default cloud sanitization policy profile.
 
@@ -222,6 +230,12 @@ and returns raw stage output."
      :prompt-id milestone2-run-cloud-stage
      :executor delib-flow--execute-run-cloud-stage
      :normalizer delib-flow--normalize-run-cloud-stage-output)
+    (resolve-cloud-failure
+     :id resolve-cloud-failure
+     :label "Resolve Cloud Failure"
+     :prompt-id milestone12-resolve-cloud-failure
+     :executor delib-flow--execute-resolve-cloud-failure
+     :normalizer delib-flow--normalize-resolve-cloud-failure-output)
     (approve-candidate-reintegration
      :id approve-candidate-reintegration
      :label "Approve Candidate Reintegration"
@@ -246,6 +260,12 @@ and returns raw stage output."
      :prompt-id milestone2-select-approved-filing-actions
      :executor delib-flow--execute-select-approved-filing-actions
      :normalizer delib-flow--normalize-select-approved-filing-actions-output)
+    (resolve-filing-conflict
+     :id resolve-filing-conflict
+     :label "Resolve Filing Conflict"
+     :prompt-id milestone11-resolve-filing-conflict
+     :executor delib-flow--execute-resolve-filing-conflict
+     :normalizer delib-flow--normalize-resolve-filing-conflict-output)
     (file-approved-outputs
      :id file-approved-outputs
      :label "File Approved Outputs"
@@ -280,6 +300,8 @@ and returns raw stage output."
      . "Review approved cloud package and choose next action.")
     (run-cloud-stage
      . "Review cloud-returned result and choose next action.")
+    (resolve-cloud-failure
+     . "Review cloud-failure resolution and choose next action.")
     (approve-candidate-reintegration
      . "Review approved reintegration candidate and choose next action.")
     (integrate-into-source
@@ -288,6 +310,8 @@ and returns raw stage output."
      . "Review rejected filing artifact and choose next action.")
     (select-approved-filing-actions
      . "Review selected filing action and choose next action.")
+    (resolve-filing-conflict
+     . "Review filing-conflict resolution and choose next action.")
     (file-approved-outputs
      . "Review filed outputs and choose next action."))
   "Stage-specific current-decision text keyed by stage identifier.")
@@ -306,6 +330,7 @@ and returns raw stage output."
     (sanitize-for-cloud . delib-flow--apply-sanitize-for-cloud-entry)
     (approve-cloud-send . delib-flow--apply-approve-cloud-send-entry)
     (run-cloud-stage . delib-flow--apply-run-cloud-stage-entry)
+    (resolve-cloud-failure . delib-flow--apply-resolve-cloud-failure-entry)
     (approve-candidate-reintegration
      . delib-flow--apply-approve-candidate-reintegration-entry)
     (integrate-into-source . delib-flow--apply-integrate-into-source-entry)
@@ -313,6 +338,7 @@ and returns raw stage output."
      . delib-flow--apply-reject-draft-filing-artifact-entry)
     (select-approved-filing-actions
      . delib-flow--apply-select-approved-filing-actions-entry)
+    (resolve-filing-conflict . delib-flow--apply-resolve-filing-conflict-entry)
     (file-approved-outputs . delib-flow--apply-file-approved-outputs-entry))
   "Stage-specific apply functions keyed by stage identifier.")
 
@@ -428,6 +454,13 @@ ANCHOR-ID is the stable in-buffer anchor for the block."
           "Filing preview"
           '("Filing preview" "Artifact selection")
           "delib-edit-filing-selection-review"))
+   (cons 'filing-conflict-resolution
+         (delib-flow--make-editable-block
+          'filing-conflict-resolution
+          'filing-conflict
+          "Filing preview"
+          '("Filing preview" "Conflict resolution")
+          "delib-edit-filing-conflict-resolution"))
    (cons 'inspect-source-review
          (delib-flow--make-editable-block
           'inspect-source-review
@@ -441,7 +474,21 @@ ANCHOR-ID is the stable in-buffer anchor for the block."
           'cloud-review
           "Details"
           '("Details" "Accepted working context" "Reviewed cloud package")
-          "delib-edit-cloud-package-review"))))
+          "delib-edit-cloud-package-review"))
+   (cons 'cloud-routing-review
+         (delib-flow--make-editable-block
+          'cloud-routing-review
+          'cloud-routing
+          "Details"
+          '("Details" "Accepted working context" "Cloud routing review")
+          "delib-edit-cloud-routing-review"))
+   (cons 'cloud-failure-review
+         (delib-flow--make-editable-block
+          'cloud-failure-review
+          'cloud-failure
+          "Details"
+          '("Details" "Accepted working context" "Cloud failure review")
+          "delib-edit-cloud-failure-review"))))
 
 (defun delib-flow--initial-section-anchors ()
   "Return the initial section-anchor alist for a new run."
@@ -610,9 +657,11 @@ PRIORITY controls display order."
   "Return non-nil when RUN has material ready for integration."
   (or (delib-flow--stage-executed-p run 'integrate-into-source)
       (plist-get (plist-get run :filing) :draft-items)
-      (and (plist-get (delib-flow--run-working-context run) :cloud-returned-context)
-           (eq (plist-get (delib-flow--run-routing run) :reintegration-status)
-               'approved))))
+      (and (eq (plist-get (delib-flow--run-routing run) :reintegration-status)
+               'approved)
+           (or (plist-get (delib-flow--run-working-context run) :cloud-returned-context)
+               (delib-flow--cloud-fallback-mode
+                (delib-flow--run-routing run))))))
 
 (defun delib-flow--approved-items-ready-p (run)
   "Return non-nil when RUN has approved items ready to file."
@@ -943,6 +992,36 @@ PRIORITY controls display order."
   (delib-flow--editable-block-text
    (delib-flow--filing-selection-review-block package)))
 
+(defun delib-flow--filing-conflict-resolution-block (package)
+  "Return filing-conflict-resolution editable block from PACKAGE."
+  (alist-get 'filing-conflict-resolution
+             (plist-get (plist-get package :ui) :editable-blocks)))
+
+(defun delib-flow--cloud-failure-review-block (package)
+  "Return cloud-failure-review editable block from PACKAGE."
+  (alist-get 'cloud-failure-review
+             (plist-get (plist-get package :ui) :editable-blocks)))
+
+(defun delib-flow--cloud-routing-review-block (package)
+  "Return cloud-routing-review editable block from PACKAGE."
+  (alist-get 'cloud-routing-review
+             (plist-get (plist-get package :ui) :editable-blocks)))
+
+(defun delib-flow--cloud-routing-review-text-from-package (package)
+  "Return editable cloud-routing text from PACKAGE."
+  (delib-flow--editable-block-text
+   (delib-flow--cloud-routing-review-block package)))
+
+(defun delib-flow--cloud-failure-review-text-from-package (package)
+  "Return editable cloud-failure text from PACKAGE."
+  (delib-flow--editable-block-text
+   (delib-flow--cloud-failure-review-block package)))
+
+(defun delib-flow--filing-conflict-resolution-text-from-package (package)
+  "Return editable filing-conflict-resolution text from PACKAGE."
+  (delib-flow--editable-block-text
+   (delib-flow--filing-conflict-resolution-block package)))
+
 (defun delib-flow--filing-selection-value (package)
   "Return trimmed Selection value from PACKAGE filing-selection text."
   (when-let* ((text (delib-flow--filing-selection-review-text-from-package package))
@@ -957,6 +1036,60 @@ PRIORITY controls display order."
            text)
       (string-trim (or (match-string 1 text) "")))))
 
+(defun delib-flow--filing-conflict-resolution-value (package)
+  "Return trimmed Resolution value from PACKAGE conflict-resolution text."
+  (when-let* ((text (delib-flow--filing-conflict-resolution-text-from-package package))
+              (_ (string-match "^Resolution:[ \t]*\\(.*\\)$" text)))
+    (string-trim (match-string 1 text))))
+
+(defun delib-flow--filing-conflict-resolution-notes (package)
+  "Return trimmed Notes text from PACKAGE conflict-resolution text."
+  (when-let* ((text (delib-flow--filing-conflict-resolution-text-from-package package)))
+    (when (string-match
+           "^[Nn]otes:[ \t\n]*\\(\\(?:.\\|\n\\)*?\\)\\(?:^New title:\\|^New text:\\|^Conflict summary:\\|\\'\\)"
+           text)
+      (string-trim (or (match-string 1 text) "")))))
+
+(defun delib-flow--filing-conflict-resolution-new-title (package)
+  "Return trimmed New title value from PACKAGE conflict-resolution text."
+  (when-let* ((text (delib-flow--filing-conflict-resolution-text-from-package package))
+              (_ (string-match "^New title:[ \t]*\\(.*\\)$" text)))
+    (string-trim (match-string 1 text))))
+
+(defun delib-flow--filing-conflict-resolution-new-text (package)
+  "Return trimmed New text value from PACKAGE conflict-resolution text."
+  (when-let* ((text (delib-flow--filing-conflict-resolution-text-from-package package))
+              (_ (string-match "^New text:[ \t]*\\(.*\\)$" text)))
+    (string-trim (match-string 1 text))))
+
+(defun delib-flow--filing-conflict-resolution-keyword (value)
+  "Return normalized conflict-resolution keyword from VALUE."
+  (upcase (or value "")))
+
+(defun delib-flow--cloud-failure-resolution-value (package)
+  "Return trimmed Resolution value from PACKAGE cloud-failure text."
+  (when-let* ((text (delib-flow--cloud-failure-review-text-from-package package))
+              (_ (string-match "^Resolution:[ \t]*\\(.*\\)$" text)))
+    (string-trim (match-string 1 text))))
+
+(defun delib-flow--cloud-failure-resolution-notes (package)
+  "Return trimmed Notes text from PACKAGE cloud-failure text."
+  (when-let* ((text (delib-flow--cloud-failure-review-text-from-package package)))
+    (when (string-match
+           "^[Nn]otes:[ \t\n]*\\(\\(?:.\\|\n\\)*?\\)\\(?:^Failure summary:\\|^Guidance:\\|\\'\\)"
+           text)
+      (string-trim (or (match-string 1 text) "")))))
+
+(defun delib-flow--cloud-failure-resolution-keyword (value)
+  "Return normalized cloud-failure resolution keyword from VALUE."
+  (upcase (or value "")))
+
+(defun delib-flow--cloud-routing-target-stage-value (package)
+  "Return trimmed Target stage value from PACKAGE cloud-routing text."
+  (when-let* ((text (delib-flow--cloud-routing-review-text-from-package package))
+              (_ (string-match "^Target stage:[ \t]*\\(.*\\)$" text)))
+    (string-trim (match-string 1 text))))
+
 (defun delib-flow--indexed-draft-item-line (index item)
   "Return numbered filing-selection line for INDEX and draft ITEM."
   (format "- [%d] %s %s"
@@ -964,13 +1097,57 @@ PRIORITY controls display order."
           (delib-flow--draft-item-keyword item)
           (plist-get item :text)))
 
+(defun delib-flow--indexed-draft-item-lines (index item)
+  "Return numbered filing-selection lines for INDEX and draft ITEM."
+  (append
+   (list (delib-flow--indexed-draft-item-line index item)
+         (format "  Status: %s"
+                 (delib-flow--draft-item-readiness-text item)))
+   (delib-flow--draft-item-warning-lines item)
+   (delib-flow--draft-item-remediation-lines item)))
+
+(defun delib-flow--selection-index-list (indexes)
+  "Return readable selection INDEXES list."
+  (if indexes
+      (mapconcat #'number-to-string indexes ", ")
+    "none"))
+
+(defun delib-flow--draft-item-selection-indexes (items predicate)
+  "Return 1-based indexes in ITEMS matching PREDICATE."
+  (let ((index 0)
+        matches)
+    (dolist (item items (nreverse matches))
+      (setq index (1+ index))
+      (when (funcall predicate item)
+        (push index matches)))))
+
+(defun delib-flow--filing-selection-guidance-lines (items)
+  "Return operator guidance lines for filing selection ITEMS."
+  (let ((ready-indexes
+         (delib-flow--draft-item-selection-indexes items
+                                                   #'delib-flow--draft-item-ready-p))
+        (blocked-indexes
+         (delib-flow--draft-item-selection-indexes
+          items
+          (lambda (item)
+            (not (delib-flow--draft-item-ready-p item))))))
+    (list
+     (format "Ready selections: %s"
+             (delib-flow--selection-index-list ready-indexes))
+     (format "Blocked selections: %s"
+             (delib-flow--selection-index-list blocked-indexes))
+     "Selecting a ready artifact approves only that item and leaves the rest in draft state."
+     "Blocked artifacts must be fixed, skipped by choosing a different ready item, or rejected from this run.")))
+
 (defun delib-flow--filing-selection-item-lines (items)
   "Return numbered filing-selection lines for draft ITEMS."
   (let ((index 0)
         lines)
-    (dolist (item items (nreverse lines))
+    (dolist (item items lines)
       (setq index (1+ index))
-      (push (delib-flow--indexed-draft-item-line index item) lines))))
+      (setq lines
+            (append lines
+                    (delib-flow--indexed-draft-item-lines index item))))))
 
 (defun delib-flow--filing-selection-template (items)
   "Return editable filing-selection template for draft ITEMS."
@@ -978,12 +1155,183 @@ PRIORITY controls display order."
    "Selection: \n"
    "Notes:\n"
    "\n"
+   "Selection guidance:\n"
+   (if items
+       (mapconcat #'identity
+                  (delib-flow--filing-selection-guidance-lines items)
+                  "\n")
+     "No ready or blocked selections are available.")
+   "\n\n"
    "Draft artifacts:\n"
    (if items
        (mapconcat #'identity
                   (delib-flow--filing-selection-item-lines items)
                   "\n")
      "- No draft artifacts are available.")))
+
+(defun delib-flow--reference-note-item-with-title (item title)
+  "Return reference-note ITEM rewritten to use TITLE."
+  (plist-put
+   (copy-sequence item)
+   :text
+   (if (eq (plist-get item :note-type) 'project-support)
+     (format "Create project support note from %s" title)
+     (format "Create general PKM note for %s" title))))
+
+(defun delib-flow--project-item-with-title (item title)
+  "Return project ITEM rewritten to use TITLE."
+  (let ((updated (copy-tree item)))
+    (plist-put
+     (plist-put
+      updated
+      :title title)
+     :text title)))
+
+(defun delib-flow--project-child-item-with-text (item text)
+  "Return project child ITEM rewritten to use TEXT."
+  (plist-put (copy-sequence item) :text text))
+
+(defun delib-flow--conflict-resolution-guidance-lines (item conflicts)
+  "Return operator guidance lines for approved ITEM and current CONFLICTS."
+  (append
+   '("Allowed resolutions:"
+     "- RETRY: keep the approved artifact and retry filing after correcting the target state."
+     "- REJECT: move the approved artifact out of the approved slot for this run.")
+   (when (and item
+              (memq (plist-get item :kind) '(next-action waiting-for)))
+     '("- REWORD-ITEM: change the deterministic project-child heading text and keep the artifact approved for retry."))
+   (when (and item
+              (eq (plist-get item :kind) 'project))
+     '("- RETITLE-PROJECT: change the deterministic top-level project title and keep the artifact approved for retry."))
+   (when (and item
+              (eq (plist-get item :kind) 'reference-note))
+     '("- RENAME-NOTE: change the deterministic note title and keep the artifact approved for retry."))
+   (list
+    (format "Current conflict count: %s" (length conflicts)))))
+
+(defun delib-flow--filing-conflict-resolution-template (run)
+  "Return editable conflict-resolution template for RUN."
+  (let* ((filing (plist-get run :filing))
+         (approved (car (plist-get filing :approved-items)))
+         (conflicts (plist-get filing :conflicts)))
+    (concat
+     "Resolution: RETRY\n"
+     "Notes:\n"
+     "\n"
+     "New title:\n"
+     "\n"
+     "New text:\n"
+     "\n"
+     "Conflict summary:\n"
+     (if conflicts
+         (mapconcat #'delib-flow--filing-conflict-line conflicts "\n")
+       "- No filing conflicts are currently recorded.")
+     "\n\n"
+     "Approved artifact:\n"
+     (if approved
+         (delib-flow--draft-item-preview-text (list approved))
+       "- No approved artifacts are available yet.")
+     "\n\n"
+     "Guidance:\n"
+     (mapconcat #'identity
+                (delib-flow--conflict-resolution-guidance-lines approved conflicts)
+                "\n"))))
+
+(defun delib-flow--cloud-failure-stage (routing)
+  "Return recorded cloud-failure stage from ROUTING."
+  (plist-get routing :cloud-failure-stage))
+
+(defun delib-flow--cloud-failure-message (routing)
+  "Return recorded cloud-failure message from ROUTING."
+  (plist-get routing :cloud-failure-message))
+
+(defun delib-flow--cloud-failure-active-p (run)
+  "Return non-nil when RUN has a recorded cloud failure awaiting review."
+  (let ((routing (delib-flow--run-routing run)))
+    (and (delib-flow--cloud-failure-stage routing)
+         (delib-flow--cloud-failure-message routing))))
+
+(defun delib-flow--cloud-fallback-mode (routing)
+  "Return explicit cloud fallback mode from ROUTING, if any."
+  (plist-get routing :cloud-fallback-mode))
+
+(defun delib-flow--cloud-failure-guidance-lines ()
+  "Return operator guidance lines for cloud failure review."
+  '("Allowed resolutions:"
+    "- RETRY-CLOUD: keep the reviewed cloud package and retry cloud execution."
+    "- USE-LOCAL: continue locally without cloud output and allow local reintegration."
+    "- SKIP-CLOUD: explicitly skip the cloud branch for this run and continue locally."
+    "- ABORT: stop the run after recording the failure review."))
+
+(defun delib-flow--cloud-reroutable-stage-ids ()
+  "Return valid reroutable cloud target stages."
+  (seq-filter #'delib-flow--stage-descriptor
+              delib-flow-cloud-reroutable-stage-ids))
+
+(defun delib-flow--default-cloud-target-stage ()
+  "Return default rerouted cloud target stage."
+  (or (car (delib-flow--cloud-reroutable-stage-ids))
+      'run-cloud-stage))
+
+(defun delib-flow--cloud-target-stage (routing)
+  "Return selected cloud target stage from ROUTING."
+  (or (plist-get routing :cloud-target-stage)
+      (delib-flow--default-cloud-target-stage)))
+
+(defun delib-flow--cloud-target-stage-name (stage-id)
+  "Return editable display name for cloud target STAGE-ID."
+  (symbol-name stage-id))
+
+(defun delib-flow--cloud-target-stage-choice (package)
+  "Return validated cloud target stage chosen in PACKAGE."
+  (let* ((value (delib-flow--cloud-routing-target-stage-value package))
+         (stage-id (if (delib-flow--non-empty-string-p value)
+                       (intern value)
+                     (delib-flow--default-cloud-target-stage))))
+    (unless (memq stage-id (delib-flow--cloud-reroutable-stage-ids))
+      (error "Cloud target stage must be one of %s"
+             (mapconcat #'symbol-name
+                        (delib-flow--cloud-reroutable-stage-ids)
+                        ", ")))
+    stage-id))
+
+(defun delib-flow--cloud-routing-review-template (run)
+  "Return editable cloud-routing review template for RUN."
+  (let* ((routing (delib-flow--run-routing run))
+         (target-stage (delib-flow--cloud-target-stage routing)))
+    (concat
+     (format "Target stage: %s\n"
+             (delib-flow--cloud-target-stage-name target-stage))
+     "Notes:\n"
+     "\n"
+     "Allowed target stages:\n"
+     (mapconcat
+      (lambda (stage-id)
+        (format "- %s: %s"
+                (delib-flow--cloud-target-stage-name stage-id)
+                (delib-flow--stage-label stage-id)))
+      (delib-flow--cloud-reroutable-stage-ids)
+      "\n"))))
+
+(defun delib-flow--cloud-failure-review-template (run)
+  "Return editable cloud-failure review template for RUN."
+  (let* ((routing (delib-flow--run-routing run))
+         (stage-id (delib-flow--cloud-failure-stage routing))
+         (message (delib-flow--cloud-failure-message routing)))
+    (concat
+     "Resolution: RETRY-CLOUD\n"
+     "Notes:\n"
+     "\n"
+     "Failure summary:\n"
+     (format "- Stage: %s\n- Message: %s\n\n"
+             (if stage-id
+                 (delib-flow--stage-label stage-id)
+               "Unknown stage")
+             (or message "No cloud failure message is recorded."))
+     "Guidance:\n"
+     (mapconcat #'identity
+                (delib-flow--cloud-failure-guidance-lines)
+                "\n"))))
 
 (defun delib-flow--filing-selection-choice-by-index (selection items)
   "Return selected draft item from SELECTION and draft ITEMS by numeric index."
@@ -1384,6 +1732,17 @@ PRIORITY controls display order."
   (plist-get (plist-get (plist-get package :working-context) :filtered-context)
              :retained-candidates))
 
+(defun delib-flow--package-contact-emails (package)
+  "Return best available contact emails from PACKAGE."
+  (let* ((working (plist-get package :working-context))
+         (inspect-review (delib-flow--review-record working 'inspect-source))
+         (accepted-inspect (plist-get inspect-review :accepted-output))
+         (candidate-inspect (plist-get inspect-review :candidate-output)))
+    (or (plist-get accepted-inspect :contact-emails)
+        (plist-get candidate-inspect :contact-emails)
+        (delib-flow--text-emails
+         (plist-get (plist-get package :source) :content)))))
+
 (defun delib-flow--make-draft-action (text source)
   "Return draft action object for TEXT and SOURCE."
   (list :kind 'next-action
@@ -1403,10 +1762,11 @@ PRIORITY controls display order."
         :source source
         :note-type note-type))
 
-(defun delib-flow--make-artifact-warning (code message)
-  "Return structured artifact warning with CODE and MESSAGE."
+(defun delib-flow--make-artifact-warning (code message &optional severity)
+  "Return structured artifact warning with CODE, MESSAGE, and SEVERITY."
   (list :code code
-        :message message))
+        :message message
+        :severity (or severity 'advisory)))
 
 (defun delib-flow--draft-item-warnings (item)
   "Return structured warning list from draft ITEM."
@@ -1418,9 +1778,95 @@ PRIORITY controls display order."
             (plist-get warning :message))
           (delib-flow--draft-item-warnings item)))
 
+(defun delib-flow--draft-item-warning-severity (warning)
+  "Return normalized WARNING severity."
+  (or (plist-get warning :severity) 'advisory))
+
+(defun delib-flow--draft-item-warning-remediation (warning)
+  "Return operator-facing remediation text for WARNING."
+  (pcase (plist-get warning :code)
+    ('weak-next-action-verb
+     "Replace the opening verb with the concrete next step or deliverable.")
+    ('vague-action-context
+     "Name the concrete deliverable, recipient, or change instead of generic follow-up wording.")
+    ('broad-action-scope
+     "Split this into a smaller next action that fits one focused work session.")
+    ('waiting-for-missing-owner
+     "Name who owns the response or dependency, ideally with a specific person or email.")
+    ('waiting-for-vague-blocker
+     "Name the exact response, approval, or deliverable that is blocking progress.")
+    ('waiting-for-state-phrasing
+     "Rewrite it to start with `Waiting for ...` so the blocked dependency is explicit.")
+    ('reference-note-missing-title
+     "Edit the note text so a stable note title can be derived before approval.")
+    ('reference-note-unsupported-type
+     "Use a supported note type such as `general-pkm` or `project-support`.")
+    ('reference-note-template-title
+     "Add `${title}` to the configured note template before approving this note.")
+    ('reference-note-project-context
+     "Match or choose a project before approving a project-support note.")
+    ('reference-note-reuse-justification
+     "Explain why this note should live as a reusable general PKM note.")
+    (_
+     "Revise this artifact until the issue is resolved before approval.")))
+
+(defun delib-flow--blocking-artifact-warning-p (warning)
+  "Return non-nil when WARNING should block filing approval."
+  (eq (delib-flow--draft-item-warning-severity warning) 'blocking))
+
+(defun delib-flow--draft-item-blocking-warnings (item)
+  "Return blocking warnings from draft ITEM."
+  (seq-filter #'delib-flow--blocking-artifact-warning-p
+              (delib-flow--draft-item-warnings item)))
+
+(defun delib-flow--draft-item-blocking-warning-count (item)
+  "Return blocking warning count for draft ITEM."
+  (length (delib-flow--draft-item-blocking-warnings item)))
+
+(defun delib-flow--item-blocking-warning-total (items)
+  "Return total blocking warning count across draft ITEMS."
+  (apply #'+ (mapcar #'delib-flow--draft-item-blocking-warning-count items)))
+
+(defun delib-flow--items-with-blocking-warnings-count (items)
+  "Return count of ITEMS carrying at least one blocking warning."
+  (seq-count (lambda (item)
+               (> (delib-flow--draft-item-blocking-warning-count item) 0))
+             items))
+
 (defun delib-flow--draft-item-warning-count (item)
   "Return warning count for draft ITEM."
   (length (delib-flow--draft-item-warnings item)))
+
+(defun delib-flow--draft-item-ready-p (item)
+  "Return non-nil when draft ITEM has no blocking warnings."
+  (= 0 (delib-flow--draft-item-blocking-warning-count item)))
+
+(defun delib-flow--draft-item-readiness (item)
+  "Return readiness symbol for draft ITEM."
+  (cond
+   ((not (delib-flow--draft-item-ready-p item)) 'blocked)
+   ((> (delib-flow--draft-item-warning-count item) 0) 'warning)
+   (t 'ready)))
+
+(defun delib-flow--draft-item-readiness-text (item)
+  "Return operator-facing readiness text for draft ITEM."
+  (pcase (delib-flow--draft-item-readiness item)
+    ('blocked
+     (format "blocked by %s filing-readiness issue(s)"
+             (delib-flow--draft-item-blocking-warning-count item)))
+    ('warning
+     (format "ready with %s advisory warning(s)"
+             (delib-flow--draft-item-warning-count item)))
+    (_
+     "ready for approval")))
+
+(defun delib-flow--draft-item-remediation-lines (item)
+  "Return remediation lines for draft ITEM."
+  (mapcar
+   (lambda (warning)
+     (format "  Fix: %s"
+             (delib-flow--draft-item-warning-remediation warning)))
+   (delib-flow--draft-item-warnings item)))
 
 (defun delib-flow--draft-item-with-warnings (item warnings)
   "Return ITEM annotated with structured WARNING list."
@@ -1474,10 +1920,15 @@ PRIORITY controls display order."
 (defun delib-flow--waiting-for-warning-missing-owner (item)
   "Return warning when waiting-for ITEM lacks a clear owner."
   (let ((text (or (plist-get item :text) "")))
-    (unless (string-match-p "\\bfrom\\b[[:space:]]+[^[:space:]]" text)
+    (unless (or (string-match-p "\\bfrom\\b[[:space:]]+[^[:space:]]" text)
+                (let ((case-fold-search nil))
+                  (string-match-p
+                   "\\`[Ww]aiting for[[:space:]]+\\(?:[[:upper:]][^[:space:]]*\\|[^[:space:]]+@[^[:space:]]+\\)"
+                   text)))
       (delib-flow--make-artifact-warning
        'waiting-for-missing-owner
-       "Does not identify who owns the response or dependency."))))
+       "Does not identify who owns the response or dependency."
+       'blocking))))
 
 (defun delib-flow--waiting-for-warning-vague-blocker (item)
   "Return warning when waiting-for ITEM uses vague blocker wording."
@@ -1485,7 +1936,8 @@ PRIORITY controls display order."
     (when (string-match-p "concrete response about" text)
       (delib-flow--make-artifact-warning
        'waiting-for-vague-blocker
-       "Names a waiting state, but the blocked dependency is still phrased too vaguely."))))
+       "Names a waiting state, but the blocked dependency is still phrased too vaguely."
+       'blocking))))
 
 (defun delib-flow--waiting-for-warning-state-phrasing (item)
   "Return warning when waiting-for ITEM lacks waiting-state phrasing."
@@ -1525,14 +1977,16 @@ PRIORITY controls display order."
          (string-trim (or (delib-flow--reference-note-title item) "")))
     (delib-flow--make-artifact-warning
      'reference-note-missing-title
-     "Does not produce a usable note title for deterministic filing.")))
+     "Does not produce a usable note title for deterministic filing."
+     'blocking)))
 
 (defun delib-flow--reference-note-warning-unsupported-type (item)
   "Return warning when reference-note ITEM uses an unsupported note type."
   (unless (memq (plist-get item :note-type) '(general-pkm project-support))
     (delib-flow--make-artifact-warning
      'reference-note-unsupported-type
-     "Uses a note type that the current filing path does not recognize.")))
+     "Uses a note type that the current filing path does not recognize."
+     'blocking)))
 
 (defun delib-flow--reference-note-warning-template-title (item)
   "Return warning when reference-note ITEM template omits `${title}`."
@@ -1540,7 +1994,8 @@ PRIORITY controls display order."
                           (delib-flow--reference-note-template item))
     (delib-flow--make-artifact-warning
      'reference-note-template-title
-     "Configured note template does not include `${title}`, so note-title filing readiness is weak.")))
+     "Configured note template does not include `${title}`, so note-title filing readiness is weak."
+     'blocking)))
 
 (defun delib-flow--reference-note-warning-general-reuse (item)
   "Return warning when general PKM reference-note ITEM lacks reuse justification."
@@ -1555,7 +2010,8 @@ PRIORITY controls display order."
              (not (delib-flow--matched-project-title package)))
     (delib-flow--make-artifact-warning
      'reference-note-project-context
-     "Project-support note is missing matched-project context needed for support-note filing.")))
+     "Project-support note is missing matched-project context needed for support-note filing."
+     'blocking)))
 
 (defun delib-flow--reference-note-warnings (item package)
   "Return structured warning list for reference-note ITEM in PACKAGE."
@@ -1594,18 +2050,132 @@ PRIORITY controls display order."
         :tags tags
         :text title))
 
+(defconst delib-flow--action-line-verbs
+  '("send" "write" "reply" "schedule" "confirm" "share" "draft" "update"
+    "call" "ask" "prepare" "file" "create" "summarize" "review")
+  "Verbs treated as concrete action starters in source evidence lines.")
+
+(defun delib-flow--source-body-lines (package)
+  "Return trimmed non-empty source body lines from PACKAGE."
+  (seq-filter
+   (lambda (line)
+     (not (string-empty-p line)))
+   (mapcar #'string-trim
+           (split-string
+            (delib-flow--source-body-text
+             (plist-get (plist-get package :source) :content))
+            "\n"))))
+
+(defun delib-flow--normalize-source-evidence-line (line)
+  "Return LINE normalized for draft-artifact reuse."
+  (let ((normalized (string-trim (or line ""))))
+    (setq normalized
+          (replace-regexp-in-string
+           "\\`[-+*][[:space:]]*" "" normalized))
+    (setq normalized
+          (replace-regexp-in-string
+           "\\`\\(?:[[:digit:]]+\\.\\|[[:alpha:]]+[:]\\)[[:space:]]*"
+           "" normalized))
+    (string-trim-right normalized "[[:space:].:;,-]+")))
+
+(defun delib-flow--action-evidence-line-p (line)
+  "Return non-nil when LINE looks like a concrete next action."
+  (when-let ((verb (delib-flow--artifact-leading-word line)))
+    (member verb delib-flow--action-line-verbs)))
+
+(defun delib-flow--source-action-line (package)
+  "Return best action-like source line from PACKAGE, or nil."
+  (seq-find
+   #'delib-flow--action-evidence-line-p
+   (mapcar #'delib-flow--normalize-source-evidence-line
+           (delib-flow--source-body-lines package))))
+
+(defun delib-flow--normalize-waiting-for-line (line)
+  "Return LINE normalized to explicit waiting-for phrasing."
+  (let ((normalized (delib-flow--normalize-source-evidence-line line)))
+    (cond
+     ((string-prefix-p "waiting for" (downcase normalized))
+      (concat "Waiting for "
+              (string-trim
+               (substring normalized (length "waiting for")))))
+     ((string-match-p "\\`[Aa]waiting\\b" normalized)
+      (replace-regexp-in-string
+       "\\`[Aa]waiting\\b" "Waiting for" normalized t t))
+     (t nil))))
+
+(defun delib-flow--source-waiting-for-line (package)
+  "Return best waiting-for line from PACKAGE source text, or nil."
+  (seq-find #'identity
+            (mapcar #'delib-flow--normalize-waiting-for-line
+                    (delib-flow--source-body-lines package))))
+
+(defun delib-flow--source-reference-note-type (package)
+  "Return preferred source-note type for PACKAGE."
+  (if (delib-flow--matched-project-title package)
+      'project-support
+    'general-pkm))
+
+(defun delib-flow--candidate-evidence-lines (candidate)
+  "Return normalized non-empty evidence lines from retained CANDIDATE."
+  (when-let ((file (plist-get candidate :file)))
+    (seq-filter
+     (lambda (line)
+       (and (not (string-empty-p line))
+            (not (string-match-p "\\`#\\+" line))
+            (not (string-match-p "\\`\\*+ " line))))
+     (mapcar #'delib-flow--normalize-source-evidence-line
+             (split-string (delib-flow--zk-note-text file) "\n")))))
+
+(defun delib-flow--candidate-action-line (candidate)
+  "Return best action-like evidence line from retained CANDIDATE."
+  (seq-find #'delib-flow--action-evidence-line-p
+            (delib-flow--candidate-evidence-lines candidate)))
+
+(defun delib-flow--candidate-waiting-line (candidate)
+  "Return best waiting-for evidence line from retained CANDIDATE."
+  (seq-find #'identity
+            (mapcar #'delib-flow--normalize-waiting-for-line
+                    (delib-flow--candidate-evidence-lines candidate))))
+
+(defun delib-flow--candidate-note-focus-line-p (line)
+  "Return non-nil when LINE looks note-worthy for a support note title."
+  (string-match-p
+   "\\b\\(constraint\\|blocker\\|blocked\\|decision\\|decided\\|agreed\\|deadline\\|due\\|prefer\\|preference\\|requested\\|request\\)\\b"
+   (downcase line)))
+
+(defun delib-flow--candidate-note-focus-line (candidate)
+  "Return best raw focus line from retained CANDIDATE, or nil."
+  (when-let ((file (plist-get candidate :file)))
+    (seq-find
+     #'delib-flow--candidate-note-focus-line-p
+     (seq-filter
+      (lambda (line)
+        (and (not (string-empty-p line))
+             (not (string-match-p "\\`#\\+" line))
+             (not (string-match-p "\\`\\*+ " line))))
+      (mapcar #'string-trim
+              (split-string (delib-flow--zk-note-text file) "\n"))))))
+
+(defun delib-flow--candidate-note-focus (candidate)
+  "Return best support-note focus text from retained CANDIDATE."
+  (or (when-let ((line (delib-flow--candidate-note-focus-line candidate)))
+        (string-trim-right line "[[:space:].:;,-]+"))
+      (plist-get candidate :title)))
+
 (defun delib-flow--source-title-action (package)
   "Return a draft action derived from PACKAGE source title."
   (delib-flow--make-draft-action
-   (format "Clarify the next step for %s"
-           (delib-flow--source-title package))
+   (or (delib-flow--source-action-line package)
+       (format "Write follow-up note for %s"
+               (delib-flow--source-title package)))
    'source))
 
 (defun delib-flow--retained-candidate-action (candidate)
   "Return a draft action derived from retained CANDIDATE."
   (delib-flow--make-draft-action
-   (format "Review %s for follow-up context"
-           (plist-get candidate :title))
+   (or (delib-flow--candidate-action-line candidate)
+       (format "Summarize %s into project notes"
+               (plist-get candidate :title)))
    'retained-context))
 
 (defun delib-flow--retained-candidate-actions (package)
@@ -1613,38 +2183,51 @@ PRIORITY controls display order."
   (mapcar #'delib-flow--retained-candidate-action
           (delib-flow--retained-candidates package)))
 
+(defun delib-flow--waiting-for-owner-label (package)
+  "Return owner label for waiting-for drafts derived from PACKAGE."
+  (or (car (delib-flow--package-contact-emails package))
+      "project owner"))
+
 (defun delib-flow--source-title-waiting-for (package)
   "Return a waiting-for item derived from PACKAGE source title."
   (delib-flow--make-draft-waiting-for
-   (format "Waiting for a concrete response about %s"
-           (delib-flow--source-title package))
+   (or (delib-flow--source-waiting-for-line package)
+       (format "Waiting for confirmation from %s on %s"
+               (delib-flow--waiting-for-owner-label package)
+               (delib-flow--source-title package)))
    'source))
 
-(defun delib-flow--retained-candidate-waiting-for (candidate)
-  "Return a waiting-for item derived from retained CANDIDATE."
+(defun delib-flow--retained-candidate-waiting-for (candidate package)
+  "Return a waiting-for item derived from retained CANDIDATE in PACKAGE."
   (delib-flow--make-draft-waiting-for
-   (format "Waiting for confirmation from %s"
-           (plist-get candidate :title))
+   (or (delib-flow--candidate-waiting-line candidate)
+       (format "Waiting for confirmation from %s on %s"
+               (delib-flow--waiting-for-owner-label package)
+               (plist-get candidate :title)))
    'retained-context))
 
 (defun delib-flow--retained-candidate-waiting-fors (package)
   "Return retained-candidate waiting-for items for PACKAGE."
-  (mapcar #'delib-flow--retained-candidate-waiting-for
+  (mapcar (lambda (candidate)
+            (delib-flow--retained-candidate-waiting-for candidate package))
           (delib-flow--retained-candidates package)))
 
 (defun delib-flow--source-title-reference-note (package)
   "Return a general reference note derived from PACKAGE source title."
   (delib-flow--make-draft-reference-note
-   (format "Create general PKM note for %s"
-           (delib-flow--source-title package))
+   (if (eq (delib-flow--source-reference-note-type package) 'project-support)
+       (format "Create project support note from %s"
+               (delib-flow--source-title package))
+     (format "Create general PKM note for %s"
+             (delib-flow--source-title package)))
    'source
-   'general-pkm))
+   (delib-flow--source-reference-note-type package)))
 
 (defun delib-flow--retained-candidate-reference-note (candidate)
   "Return a support-note item derived from retained CANDIDATE."
   (delib-flow--make-draft-reference-note
    (format "Create project support note from %s"
-           (plist-get candidate :title))
+           (delib-flow--candidate-note-focus candidate))
    'retained-context
    'project-support))
 
@@ -1662,6 +2245,9 @@ PRIORITY controls display order."
     (list :candidate-count (length actions)
           :warning-count (delib-flow--item-warning-total actions)
           :warning-item-count (delib-flow--items-with-warnings-count actions)
+          :blocking-warning-count (delib-flow--item-blocking-warning-total actions)
+          :blocking-warning-item-count
+          (delib-flow--items-with-blocking-warnings-count actions)
           :actions actions)))
 
 (defun delib-flow--extract-waiting-for-result (package)
@@ -1673,6 +2259,9 @@ PRIORITY controls display order."
     (list :candidate-count (length items)
           :warning-count (delib-flow--item-warning-total items)
           :warning-item-count (delib-flow--items-with-warnings-count items)
+          :blocking-warning-count (delib-flow--item-blocking-warning-total items)
+          :blocking-warning-item-count
+          (delib-flow--items-with-blocking-warnings-count items)
           :waiting-fors items)))
 
 (defun delib-flow--suggest-reference-notes-result (package)
@@ -1686,6 +2275,9 @@ PRIORITY controls display order."
     (list :candidate-count (length items)
           :warning-count (delib-flow--item-warning-total items)
           :warning-item-count (delib-flow--items-with-warnings-count items)
+          :blocking-warning-count (delib-flow--item-blocking-warning-total items)
+          :blocking-warning-item-count
+          (delib-flow--items-with-blocking-warnings-count items)
           :reference-notes items)))
 
 (defun delib-flow--project-proposal-tags (package)
@@ -1744,18 +2336,22 @@ PRIORITY controls display order."
 
 (defun delib-flow--decide-cloud-pass-result (package)
   "Return raw cloud-routing decision result for PACKAGE."
-  (let* ((model (delib-flow--cloud-model-choice package))
+  (let* ((target-stage (delib-flow--cloud-target-stage-choice package))
+         (model (delib-flow--cloud-model-choice package))
          (provider (delib-flow--cloud-provider-name model))
          (policy (delib-flow--cloud-provider-policy provider)))
     (unless (delib-flow--cloud-policy-enabled-p policy)
       (error "Cloud routing is disabled for provider %s" provider))
     (list :route 'cloud
+          :target-stage target-stage
           :selected-model model
           :selected-provider provider
           :policy-profile (delib-flow--cloud-policy-profile policy)
           :cloud-switch-pending t
           :sanitization-status 'required
-          :reason "Cloud routing is pending sanitized package preparation.")))
+          :reason
+          (format "Cloud routing is pending sanitized package preparation for %s."
+                  (delib-flow--stage-label target-stage)))))
 
 (defun delib-flow--sanitize-basic-cloud-text (text)
   "Return basic deterministic sanitization for TEXT."
@@ -2491,24 +3087,46 @@ PRIORITY controls display order."
 
 (defun delib-flow--run-cloud-stage-action (run)
   "Return the run-cloud-stage action for RUN."
-  (when (or (eq (plist-get (delib-flow--run-routing run) :sanitization-status)
-                'approved)
-            (delib-flow--stage-executed-p run 'run-cloud-stage))
+  (when (and (not (delib-flow--cloud-failure-active-p run))
+             (or (eq (plist-get (delib-flow--run-routing run) :sanitization-status)
+                     'approved)
+                 (delib-flow--stage-executed-p run 'run-cloud-stage)))
+    (let* ((target-stage
+            (delib-flow--cloud-target-stage
+             (delib-flow--run-routing run)))
+           (target-label
+            (delib-flow--stage-label target-stage))
+           (base-label
+            (if (delib-flow--stage-executed-p run 'run-cloud-stage)
+                "Retry Run Cloud Stage"
+              "Run Cloud Stage")))
     (delib-flow--make-action
      'run-cloud-stage
-     (if (delib-flow--stage-executed-p run 'run-cloud-stage)
-         "Retry Run Cloud Stage"
-       "Run Cloud Stage")
+     (if (eq target-stage 'run-cloud-stage)
+         base-label
+       (format "%s (%s)" base-label target-label))
      'available
      nil
      #'delib-flow-action-run-cloud-stage
+     87))))
+
+(defun delib-flow--resolve-cloud-failure-action (run)
+  "Return the resolve-cloud-failure action for RUN."
+  (when (delib-flow--cloud-failure-active-p run)
+    (delib-flow--make-action
+     'resolve-cloud-failure
+     "Resolve Cloud Failure"
+     'available
+     nil
+     #'delib-flow-action-resolve-cloud-failure
      87)))
 
 (defun delib-flow--approve-candidate-reintegration-action (run)
   "Return the approve-candidate-reintegration action for RUN."
-  (when (or (eq (plist-get (delib-flow--run-routing run) :reintegration-status)
-                'pending-review)
-            (delib-flow--stage-executed-p run 'approve-candidate-reintegration))
+  (when (and (not (delib-flow--cloud-failure-active-p run))
+             (or (eq (plist-get (delib-flow--run-routing run) :reintegration-status)
+                     'pending-review)
+                 (delib-flow--stage-executed-p run 'approve-candidate-reintegration)))
     (delib-flow--make-action
      'approve-candidate-reintegration
      (if (delib-flow--stage-executed-p run 'approve-candidate-reintegration)
@@ -2563,10 +3181,23 @@ PRIORITY controls display order."
   (when (delib-flow--approved-items-ready-p run)
     (delib-flow--make-action
      'file-approved-outputs
-     "File Approved Outputs"
+     (if (plist-get (plist-get run :filing) :conflicts)
+         "Retry File Approved Outputs"
+       "File Approved Outputs")
      'available
      nil
      #'delib-flow-action-file-approved-outputs
+     89)))
+
+(defun delib-flow--resolve-filing-conflict-action (run)
+  "Return the resolve-filing-conflict action for RUN."
+  (when (plist-get (plist-get run :filing) :conflicts)
+    (delib-flow--make-action
+     'resolve-filing-conflict
+     "Resolve Filing Conflict"
+     'available
+     nil
+     #'delib-flow-action-resolve-filing-conflict
      89)))
 
 (defun delib-flow--placeholder-stage-action (id label priority)
@@ -2593,10 +3224,12 @@ PRIORITY controls display order."
      (delib-flow--sanitize-for-cloud-action run)
      (delib-flow--approve-cloud-send-action run)
      (delib-flow--run-cloud-stage-action run)
+     (delib-flow--resolve-cloud-failure-action run)
      (delib-flow--approve-candidate-reintegration-action run)
      (delib-flow--integrate-into-source-action run)
      (delib-flow--reject-draft-filing-artifact-action run)
      (delib-flow--select-approved-filing-actions-action run)
+     (delib-flow--resolve-filing-conflict-action run)
      (delib-flow--file-approved-outputs-action run))))
 
 (defun delib-flow--match-status (run)
@@ -2633,10 +3266,12 @@ PRIORITY controls display order."
        (delib-flow--sanitize-for-cloud-action run)
        (delib-flow--approve-cloud-send-action run)
        (delib-flow--run-cloud-stage-action run)
+       (delib-flow--resolve-cloud-failure-action run)
        (delib-flow--approve-candidate-reintegration-action run)
        (delib-flow--integrate-into-source-action run)
        (delib-flow--reject-draft-filing-artifact-action run)
        (delib-flow--select-approved-filing-actions-action run)
+       (delib-flow--resolve-filing-conflict-action run)
        (delib-flow--file-approved-outputs-action run))))))
 
 (defun delib-flow--base-actions (run)
@@ -3317,7 +3952,9 @@ PRIORITY controls display order."
 
 (defun delib-flow--pending-cloud-context-text (routing)
   "Return pending cloud-context text from ROUTING."
-  (format "Cloud pass selected. Model: %s. Provider: %s. Policy: %s. Sanitization status: %s."
+  (format "Cloud pass selected for %s. Model: %s. Provider: %s. Policy: %s. Sanitization status: %s."
+          (delib-flow--stage-label
+           (delib-flow--cloud-target-stage routing))
           (delib-flow--selected-cloud-model routing)
           (or (plist-get routing :selected-cloud-provider) "unconfigured")
           (or (plist-get routing :cloud-policy-profile)
@@ -3351,6 +3988,23 @@ PRIORITY controls display order."
   "Return cloud-returned context text from WORKING."
   (or (plist-get working :cloud-returned-context)
       "No cloud-returned context is available yet."))
+
+(defun delib-flow--cloud-failure-status (run)
+  "Return cloud-failure display status from RUN."
+  (if (delib-flow--cloud-failure-active-p run)
+      "requires operator review"
+    "not recorded"))
+
+(defun delib-flow--cloud-failure-text (run)
+  "Return cloud-failure display text from RUN."
+  (let* ((routing (delib-flow--run-routing run))
+         (stage-id (delib-flow--cloud-failure-stage routing))
+         (message (delib-flow--cloud-failure-message routing)))
+    (if (and stage-id message)
+        (format "- Failed stage: %s\n- Message: %s"
+                (delib-flow--stage-label stage-id)
+                message)
+      "No cloud failure is currently recorded.")))
 
 (defun delib-flow--inspect-context-pairs (source inspect-output)
   "Return curated inspect-context pairs for SOURCE and INSPECT-OUTPUT."
@@ -3404,7 +4058,8 @@ PRIORITY controls display order."
     ("Retrieved context" . ,(delib-flow--retrieved-context-status working))
     ("Filtered context" . ,(delib-flow--filtered-context-status working))
     ("Cloud-sanitized context" . ,(delib-flow--cloud-context-status run))
-    ("Cloud-returned context" . ,(delib-flow--cloud-returned-context-status working))))
+    ("Cloud-returned context" . ,(delib-flow--cloud-returned-context-status working))
+    ("Cloud failure" . ,(delib-flow--cloud-failure-status run))))
 
 (defun delib-flow--default-context-retrieved-line (working)
   "Return retrieved-context detail line from WORKING, if any."
@@ -3433,6 +4088,13 @@ PRIORITY controls display order."
   (when (plist-get working :cloud-returned-context)
     (format "- Cloud-returned summary: %s"
             (delib-flow--cloud-returned-context-text working))))
+
+(defun delib-flow--default-context-cloud-failure-line (run)
+  "Return cloud-failure detail line from RUN, if any."
+  (when (delib-flow--cloud-failure-active-p run)
+    (format "- Cloud failure: %s"
+            (replace-regexp-in-string "\n" "; "
+                                      (delib-flow--cloud-failure-text run)))))
 
 (defun delib-flow--retrieved-context-lines (working)
   "Return reviewable retrieved-candidate lines from WORKING."
@@ -3495,7 +4157,8 @@ PRIORITY controls display order."
          (delib-flow--default-context-retrieved-line working)
          (delib-flow--default-context-filtered-line working)
          (delib-flow--default-context-cloud-line run working)
-         (delib-flow--default-context-cloud-returned-line working))))
+         (delib-flow--default-context-cloud-returned-line working)
+         (delib-flow--default-context-cloud-failure-line run))))
 
 (defun delib-flow--current-context-stage-id (run)
   "Return the stage id currently driving top-level context for RUN."
@@ -3510,6 +4173,12 @@ PRIORITY controls display order."
   "Return non-nil when project-match review should drive top-level context for RUN."
   (and (eq (delib-flow--current-context-stage-id run) 'match-project)
        (delib-flow--match-review-pending-p run)))
+
+(defun delib-flow--cloud-routing-review-active-p (run)
+  "Return non-nil when RUN should surface cloud routing review."
+  (or (plist-get (delib-flow--run-routing run) :cloud-switch-pending)
+      (plist-get (delib-flow--run-routing run) :cloud-target-stage)
+      (delib-flow--stage-executed-p run 'decide-cloud-pass)))
 
 (defun delib-flow--default-context-text (run working)
   "Return default curated context text for RUN and WORKING."
@@ -3613,9 +4282,17 @@ PRIORITY controls display order."
                ""))
      (format "\n\n*** Operator notes\n%s"
              (delib-flow--render-editable-block run 'operator-notes))
+     (if (delib-flow--cloud-routing-review-active-p run)
+         (format "\n\n*** Cloud routing review\n%s"
+                 (delib-flow--render-editable-block run 'cloud-routing-review))
+       "")
      (if (delib-flow--manual-project-selection-active-p run)
          (format "\n\n*** Manual project selection\n%s"
                  (delib-flow--render-editable-block run 'manual-project-selection))
+       "")
+     (if (delib-flow--cloud-failure-active-p run)
+         (format "\n\n*** Cloud failure review\n%s"
+                 (delib-flow--render-editable-block run 'cloud-failure-review))
        ""))))
 
 (defun delib-flow--render-current-result-section (run)
@@ -3632,14 +4309,24 @@ PRIORITY controls display order."
     (concat
      (delib-flow--render-source-section run)
      "\n"
-     (format "*** Accepted working context\n%s\n- Inspect review state: %s\n- Match review state: %s\n- Retrieved candidate count: %s\n- Filtered context: %s\n- Cloud-sanitized context: %s\n\n**** Reviewed cloud package\n%s\n"
+     (format "*** Accepted working context\n%s\n- Inspect review state: %s\n- Match review state: %s\n- Retrieved candidate count: %s\n- Filtered context: %s\n- Cloud target stage: %s\n- Cloud-sanitized context: %s\n- Cloud failure: %s\n\n**** Cloud routing review\n%s\n\n**** Reviewed cloud package\n%s\n%s"
              (delib-flow--accepted-working-context-text run)
              (delib-flow--review-record-status inspect-review)
              (delib-flow--review-record-status match-review)
              (length (or (plist-get working :retrieved-candidates) nil))
              (delib-flow--filtered-context-status working)
+             (delib-flow--stage-label
+              (delib-flow--cloud-target-stage
+               (delib-flow--run-routing run)))
              (delib-flow--cloud-context-status run)
-             (delib-flow--render-editable-block run 'cloud-package-review))
+             (delib-flow--cloud-failure-status run)
+             (delib-flow--render-editable-block run 'cloud-routing-review)
+             (delib-flow--render-editable-block run 'cloud-package-review)
+             (if (delib-flow--cloud-failure-active-p run)
+                 (format "\n**** Cloud failure review\n%s\n"
+                         (delib-flow--render-editable-block
+                          run 'cloud-failure-review))
+               ""))
      (delib-flow--latest-stage-input-text run)
      "\n"
      (delib-flow--latest-stage-raw-output-text run)
@@ -3660,10 +4347,19 @@ PRIORITY controls display order."
   "Return non-nil when RUN should surface filing selection review."
   (delib-flow--draft-items-ready-p run))
 
+(defun delib-flow--filing-conflict-resolution-active-p (run)
+  "Return non-nil when RUN should surface conflict resolution review."
+  (plist-get (plist-get run :filing) :conflicts))
+
 (defun delib-flow--filing-selection-block-text (run)
   "Return editable filing-selection text from RUN."
   (delib-flow--editable-block-text
    (delib-flow--editable-block run 'filing-selection-review)))
+
+(defun delib-flow--filing-conflict-resolution-block-text (run)
+  "Return editable filing-conflict-resolution text from RUN."
+  (delib-flow--editable-block-text
+   (delib-flow--editable-block run 'filing-conflict-resolution)))
 
 (defun delib-flow--draft-item-preview-line (item)
   "Return preview line for draft ITEM."
@@ -3673,14 +4369,23 @@ PRIORITY controls display order."
 
 (defun delib-flow--draft-item-warning-lines (item)
   "Return indented warning lines for draft ITEM."
-  (mapcar (lambda (message)
-            (format "  Warning: %s" message))
-          (delib-flow--draft-item-warning-messages item)))
+  (mapcar
+   (lambda (warning)
+     (format "  %s: %s"
+             (if (delib-flow--blocking-artifact-warning-p warning)
+                 "Blocking"
+               "Warning")
+             (plist-get warning :message)))
+   (delib-flow--draft-item-warnings item)))
 
 (defun delib-flow--draft-item-preview-lines (item)
   "Return preview lines for draft ITEM including warnings."
-  (cons (delib-flow--draft-item-preview-line item)
-        (delib-flow--draft-item-warning-lines item)))
+  (append
+   (list (delib-flow--draft-item-preview-line item)
+         (format "  Status: %s"
+                 (delib-flow--draft-item-readiness-text item)))
+   (delib-flow--draft-item-warning-lines item)
+   (delib-flow--draft-item-remediation-lines item)))
 
 (defun delib-flow--draft-item-keyword (item)
   "Return Org keyword prefix for draft ITEM."
@@ -3700,16 +4405,25 @@ PRIORITY controls display order."
 (defun delib-flow--draft-item-warning-summary (items)
   "Return warning summary line for draft ITEMS."
   (let ((warning-count (delib-flow--item-warning-total items))
-        (warning-item-count (delib-flow--items-with-warnings-count items)))
-    (format "- Quality warnings: %s across %s artifact(s)."
+        (warning-item-count (delib-flow--items-with-warnings-count items))
+        (blocking-count (delib-flow--item-blocking-warning-total items))
+        (blocking-item-count (delib-flow--items-with-blocking-warnings-count items)))
+    (format "- Quality warnings: %s across %s artifact(s).\n- Blocking warnings: %s across %s artifact(s)."
             warning-count
-            warning-item-count)))
+            warning-item-count
+            blocking-count
+            blocking-item-count)))
 
 (defun delib-flow--draft-item-status (run)
   "Return filing preview status text for RUN."
-  (if (plist-get (plist-get run :filing) :draft-items)
-      "Draft filing artifacts are available."
-    "No filing preview is available yet."))
+  (let ((filing (plist-get run :filing)))
+    (cond
+     ((plist-get filing :selection-blocking-warnings)
+      "Draft filing artifacts are available, and the latest approval attempt is blocked pending artifact fixes.")
+     ((plist-get filing :draft-items)
+      "Draft filing artifacts are available.")
+     (t
+      "No filing preview is available yet."))))
 
 (defun delib-flow--draft-item-text (run)
   "Return filing preview body text for RUN."
@@ -3733,6 +4447,47 @@ PRIORITY controls display order."
     (if items
         (delib-flow--draft-item-preview-text items)
       "No approved artifacts are available yet.")))
+
+(defun delib-flow--selection-block-status (run)
+  "Return blocked-approval status text for RUN."
+  (if (plist-get (plist-get run :filing) :selection-blocking-warnings)
+      "The latest filing approval attempt is blocked."
+    "No blocked approval state is currently recorded."))
+
+(defun delib-flow--selection-block-text (run)
+  "Return blocked-approval detail text for RUN."
+  (let* ((filing (plist-get run :filing))
+         (warnings (plist-get filing :selection-blocking-warnings))
+         (item (plist-get filing :selection-blocked-item))
+         (selection (plist-get filing :selection-blocked-selection))
+         (notes (plist-get filing :selection-blocked-notes))
+         (draft-items (plist-get filing :draft-items))
+         (ready-indexes
+          (delib-flow--draft-item-selection-indexes
+           draft-items
+           #'delib-flow--draft-item-ready-p)))
+    (if warnings
+        (concat
+         (format "- Operator selection: %s\n"
+                 (or selection "none"))
+         (format "- Operator notes: %s\n"
+                 (if (delib-flow--non-empty-string-p notes) notes "none"))
+         (format "- Ready alternative selections: %s\n"
+                 (delib-flow--selection-index-list ready-indexes))
+         "- Resolution: approve a different ready artifact, fix the blocking warnings, or reject this artifact before retrying approval.\n"
+         (if item
+             (concat "- Blocked artifact:\n"
+                     (delib-flow--draft-item-preview-text (list item))
+                     "\n")
+           "")
+         (mapconcat
+          (lambda (warning)
+            (format "- Blocking warning: %s\n  Fix: %s"
+                    (plist-get warning :message)
+                    (delib-flow--draft-item-warning-remediation warning)))
+          warnings
+          "\n"))
+      "No blocked approval state is currently recorded.")))
 
 (defun delib-flow--rejected-item-status (run)
   "Return rejected-artifact status text for RUN."
@@ -3787,13 +4542,21 @@ PRIORITY controls display order."
 
 (defun delib-flow--render-filing-preview-section (_run)
   "Return Org text for the Filing preview section."
-  (format "** Preview status\n%s\n\n** Draft artifacts\n%s\n\n%s** Approved artifacts\n%s\n\n** Rejected artifacts\n%s\n\n** Filing conflicts\n%s\n\n** Filed target locations\n%s\n"
+  (format "** Preview status\n%s\n\n** Draft artifacts\n%s\n\n** Approval blocks\n%s\n\n%s%s** Approved artifacts\n%s\n\n** Rejected artifacts\n%s\n\n** Filing conflicts\n%s\n\n** Filed target locations\n%s\n"
           (delib-flow--draft-item-status _run)
           (delib-flow--draft-item-text _run)
+          (format "%s\n%s"
+                  (delib-flow--selection-block-status _run)
+                  (delib-flow--selection-block-text _run))
           (if (delib-flow--filing-selection-active-p _run)
               (format "** Artifact selection\n%s\n\n"
                       (delib-flow--render-editable-block
                        _run 'filing-selection-review))
+            "")
+          (if (delib-flow--filing-conflict-resolution-active-p _run)
+              (format "** Conflict resolution\n%s\n\n"
+                      (delib-flow--render-editable-block
+                       _run 'filing-conflict-resolution))
             "")
           (delib-flow--approved-item-text _run)
           (delib-flow--rejected-item-text _run)
@@ -4057,20 +4820,88 @@ PRIORITY controls display order."
   "Return sanitized cloud stage package from PACKAGE."
   (plist-get (plist-get package :working-context) :cloud-sanitized-context))
 
+(defun delib-flow--cloud-target-stage-id-from-package (package)
+  "Return selected rerouted cloud target stage from PACKAGE."
+  (delib-flow--cloud-target-stage (plist-get package :routing)))
+
 (defun delib-flow--cloud-stage-result (package)
   "Return raw cloud-stage result for PACKAGE."
-  (let ((sanitized-package (delib-flow--cloud-stage-package package)))
-    (list :selected-model (delib-flow--cloud-model-choice package)
+  (let* ((sanitized-package (delib-flow--cloud-stage-package package))
+         (target-stage (delib-flow--cloud-target-stage-id-from-package package)))
+    (list :target-stage target-stage
+          :selected-model (delib-flow--cloud-model-choice package)
           :cloud-output
-          (format "Cloud output for reviewed package.\n%s"
+          (format "Cloud output for rerouted stage %s.\nPrompt: %s\n\n%s"
+                  (delib-flow--stage-label target-stage)
+                  (or (delib-flow--stage-prompt-id target-stage) "none")
                   sanitized-package)
           :cloud-switch-pending nil
           :sanitization-status 'returned
-          :reason "Cloud output is ready for local review and reintegration.")))
+          :reason
+          (format "Cloud output for %s is ready for local review and reintegration."
+                  (delib-flow--stage-label target-stage)))))
 
 (defun delib-flow--execute-run-cloud-stage (package)
   "Return raw cloud-stage output for PACKAGE."
   (delib-flow--cloud-stage-result package))
+
+(defun delib-flow--retry-cloud-failure-resolution-p (resolution)
+  "Return non-nil when RESOLUTION retries cloud execution."
+  (or (string-empty-p (or resolution ""))
+      (string-equal (delib-flow--cloud-failure-resolution-keyword resolution)
+                    "RETRY-CLOUD")))
+
+(defun delib-flow--use-local-cloud-failure-resolution-p (resolution)
+  "Return non-nil when RESOLUTION selects local fallback."
+  (string-equal (delib-flow--cloud-failure-resolution-keyword resolution)
+                "USE-LOCAL"))
+
+(defun delib-flow--skip-cloud-failure-resolution-p (resolution)
+  "Return non-nil when RESOLUTION skips the cloud branch."
+  (string-equal (delib-flow--cloud-failure-resolution-keyword resolution)
+                "SKIP-CLOUD"))
+
+(defun delib-flow--abort-cloud-failure-resolution-p (resolution)
+  "Return non-nil when RESOLUTION aborts the run."
+  (string-equal (delib-flow--cloud-failure-resolution-keyword resolution)
+                "ABORT"))
+
+(defun delib-flow--resolve-cloud-failure-result (package)
+  "Return raw cloud-failure resolution result for PACKAGE."
+  (let* ((routing (plist-get package :routing))
+         (resolution (delib-flow--cloud-failure-resolution-value package))
+         (notes (delib-flow--cloud-failure-resolution-notes package))
+         (retry-p (delib-flow--retry-cloud-failure-resolution-p resolution))
+         (use-local-p (delib-flow--use-local-cloud-failure-resolution-p resolution))
+         (skip-cloud-p (delib-flow--skip-cloud-failure-resolution-p resolution))
+         (abort-p (delib-flow--abort-cloud-failure-resolution-p resolution)))
+    (unless (and (delib-flow--cloud-failure-stage routing)
+                 (delib-flow--cloud-failure-message routing))
+      (error "Resolve Cloud Failure requires a recorded cloud failure"))
+    (unless (or retry-p use-local-p skip-cloud-p abort-p)
+      (error "Cloud failure resolution must be one of RETRY-CLOUD, USE-LOCAL, SKIP-CLOUD, or ABORT"))
+    (list :resolution (if (delib-flow--non-empty-string-p resolution)
+                          (delib-flow--cloud-failure-resolution-keyword resolution)
+                        "RETRY-CLOUD")
+          :operator-notes notes
+          :retry-cloud-p retry-p
+          :abort-p abort-p
+          :fallback-mode (cond
+                          (use-local-p 'use-local)
+                          (skip-cloud-p 'skip-cloud)
+                          (t nil))
+          :reintegration-status (when (or use-local-p skip-cloud-p)
+                                  'approved)
+          :reason
+          (cond
+           (use-local-p
+            "Operator selected local fallback after cloud failure. Continue with local reintegration only.")
+           (skip-cloud-p
+            "Operator explicitly skipped the cloud branch after failure. Continue locally without cloud output.")
+           (abort-p
+            "Operator aborted the run after reviewing the cloud failure.")
+           (t
+            "Cloud failure remains recoverable. Retry cloud execution when ready.")))))
 
 (defun delib-flow--approve-candidate-reintegration-result (_package)
   "Return raw reintegration approval result for _PACKAGE."
@@ -4128,6 +4959,29 @@ PRIORITY controls display order."
       (list item)
     nil))
 
+(defun delib-flow--selected-filing-item-blocking-warnings (package)
+  "Return blocking warnings on the operator-selected filing item from PACKAGE."
+  (if-let ((item (delib-flow--selected-filing-item package)))
+      (delib-flow--draft-item-blocking-warnings item)
+    nil))
+
+(defun delib-flow--ready-filing-selection-indexes (package)
+  "Return ready filing-selection indexes from PACKAGE."
+  (delib-flow--draft-item-selection-indexes
+   (delib-flow--draft-items package)
+   #'delib-flow--draft-item-ready-p))
+
+(defun delib-flow--blocked-filing-selection-indexes (package)
+  "Return blocked filing-selection indexes from PACKAGE."
+  (delib-flow--draft-item-selection-indexes
+   (delib-flow--draft-items package)
+   (lambda (item)
+     (not (delib-flow--draft-item-ready-p item)))))
+
+(defun delib-flow--selected-filing-item-approval-blocked-p (package)
+  "Return non-nil when the selected filing item in PACKAGE has blocking warnings."
+  (not (null (delib-flow--selected-filing-item-blocking-warnings package))))
+
 (defun delib-flow--remaining-draft-items (package)
   "Return unapproved draft filing items from PACKAGE."
   (if-let ((selected (delib-flow--selected-filing-item package)))
@@ -4142,26 +4996,157 @@ PRIORITY controls display order."
       (list item)
     nil))
 
+(defun delib-flow--approved-filing-item (package)
+  "Return the current approved filing item from PACKAGE."
+  (car (delib-flow--approved-items package)))
+
+(defun delib-flow--rename-note-resolution-p (resolution)
+  "Return non-nil when RESOLUTION requests note retargeting."
+  (string-equal (delib-flow--filing-conflict-resolution-keyword resolution)
+                "RENAME-NOTE"))
+
+(defun delib-flow--reword-item-resolution-p (resolution)
+  "Return non-nil when RESOLUTION requests project-child rewording."
+  (string-equal (delib-flow--filing-conflict-resolution-keyword resolution)
+                "REWORD-ITEM"))
+
+(defun delib-flow--retitle-project-resolution-p (resolution)
+  "Return non-nil when RESOLUTION requests project-title retargeting."
+  (string-equal (delib-flow--filing-conflict-resolution-keyword resolution)
+                "RETITLE-PROJECT"))
+
+(defun delib-flow--reject-conflict-resolution-p (resolution)
+  "Return non-nil when RESOLUTION rejects the approved artifact."
+  (string-equal (delib-flow--filing-conflict-resolution-keyword resolution)
+                "REJECT"))
+
+(defun delib-flow--retry-conflict-resolution-p (resolution)
+  "Return non-nil when RESOLUTION keeps the approved artifact for retry."
+  (or (string-empty-p (or resolution ""))
+      (string-equal (delib-flow--filing-conflict-resolution-keyword resolution)
+                    "RETRY")))
+
+(defun delib-flow--resolved-approved-item (package)
+  "Return approved item from PACKAGE after conflict resolution."
+  (let* ((resolution (delib-flow--filing-conflict-resolution-value package))
+         (item (delib-flow--approved-filing-item package)))
+    (cond
+     ((delib-flow--rename-note-resolution-p resolution)
+      (unless item
+        (error "Rename-note resolution requires an approved artifact"))
+      (unless (eq (plist-get item :kind) 'reference-note)
+        (error "Rename-note resolution is only valid for approved reference notes"))
+      (let ((new-title (delib-flow--filing-conflict-resolution-new-title package)))
+        (unless (delib-flow--non-empty-string-p new-title)
+          (error "Rename-note resolution requires a New title value"))
+        (delib-flow--reference-note-item-with-title item new-title)))
+     ((delib-flow--reword-item-resolution-p resolution)
+      (unless item
+        (error "Reword-item resolution requires an approved artifact"))
+      (unless (memq (plist-get item :kind) '(next-action waiting-for))
+        (error "Reword-item resolution is only valid for approved project child artifacts"))
+      (let ((new-text (delib-flow--filing-conflict-resolution-new-text package)))
+        (unless (delib-flow--non-empty-string-p new-text)
+          (error "Reword-item resolution requires a New text value"))
+        (delib-flow--project-child-item-with-text item new-text)))
+     ((delib-flow--retitle-project-resolution-p resolution)
+      (unless item
+        (error "Retitle-project resolution requires an approved artifact"))
+      (unless (eq (plist-get item :kind) 'project)
+        (error "Retitle-project resolution is only valid for approved project artifacts"))
+      (let ((new-title (delib-flow--filing-conflict-resolution-new-title package)))
+        (unless (delib-flow--non-empty-string-p new-title)
+          (error "Retitle-project resolution requires a New title value"))
+        (delib-flow--project-item-with-title item new-title)))
+     (t
+      item))))
+
+(defun delib-flow--resolve-filing-conflict-result (package)
+  "Return raw conflict-resolution result for PACKAGE."
+  (let* ((resolution (delib-flow--filing-conflict-resolution-value package))
+         (notes (delib-flow--filing-conflict-resolution-notes package))
+         (approved-item (delib-flow--approved-filing-item package))
+         (resolved-item (delib-flow--resolved-approved-item package))
+         (rejected-p (delib-flow--reject-conflict-resolution-p resolution))
+         (retry-p (delib-flow--retry-conflict-resolution-p resolution))
+         (rename-p (delib-flow--rename-note-resolution-p resolution))
+         (reword-p (delib-flow--reword-item-resolution-p resolution))
+         (retitle-p (delib-flow--retitle-project-resolution-p resolution)))
+    (unless (plist-get (plist-get package :filing) :conflicts)
+      (error "Resolve Filing Conflict requires a recorded filing conflict"))
+    (unless (or rejected-p retry-p rename-p reword-p retitle-p)
+      (error "Conflict resolution must be one of RETRY, REJECT, RENAME-NOTE, REWORD-ITEM, or RETITLE-PROJECT"))
+    (list :resolution (if (delib-flow--non-empty-string-p resolution)
+                          (delib-flow--filing-conflict-resolution-keyword resolution)
+                        "RETRY")
+          :operator-notes notes
+          :resolved-approved-item (unless rejected-p resolved-item)
+          :rejected-items (if rejected-p (list approved-item) nil)
+          :approved-count (if rejected-p 0 (if resolved-item 1 0))
+          :rejected-count (if rejected-p 1 0)
+          :renamed-p rename-p
+          :retry-p retry-p
+          :reason
+          (cond
+           (rejected-p
+            "Removed the approved artifact from the filing queue after conflict review.")
+           (rename-p
+            "Retargeted the approved note by updating its deterministic title. Retry filing when ready.")
+           (reword-p
+            "Retargeted the approved project child by updating its heading text. Retry filing when ready.")
+           (retitle-p
+            "Retargeted the approved project by updating its deterministic title. Retry filing when ready.")
+           (t
+            "Cleared recorded conflict state while keeping the approved artifact available for retry after target correction.")))))
+
 (defun delib-flow--select-approved-filing-actions-result (package)
   "Return raw filing-selection result for PACKAGE."
   (let* ((selection (delib-flow--filing-selection-value package))
          (notes (delib-flow--filing-selection-notes package))
-         (selected-items (delib-flow--selected-filing-items package))
-         (remaining-items (delib-flow--remaining-draft-items package)))
+         (selected-item (delib-flow--selected-filing-item package))
+         (blocking-warnings (delib-flow--selected-filing-item-blocking-warnings package))
+         (ready-indexes (delib-flow--ready-filing-selection-indexes package))
+         (blocked-indexes (delib-flow--blocked-filing-selection-indexes package))
+         (approval-blocked-p (not (null blocking-warnings)))
+         (selected-items (unless approval-blocked-p
+                           (delib-flow--selected-filing-items package)))
+         (remaining-items (if approval-blocked-p
+                              (delib-flow--draft-items package)
+                            (delib-flow--remaining-draft-items package))))
     (list :approved-items selected-items
+          :approval-blocked-p approval-blocked-p
+          :blocking-warnings blocking-warnings
+          :ready-selection-indexes ready-indexes
+          :blocked-selection-indexes blocked-indexes
           :remaining-draft-items remaining-items
           :selected-count (length selected-items)
           :remaining-draft-count (length remaining-items)
           :operator-selection selection
           :operator-notes notes
+          :blocked-item selected-item
+          :blocked-item-preview
+          (and selected-item
+               approval-blocked-p
+               (delib-flow--draft-item-preview-text (list selected-item)))
           :selected-preview (and selected-items
                                  (delib-flow--draft-item-preview-text
                                   selected-items))
-          :reason "Approved the operator-selected filing artifact for deterministic filing review.")))
+          :reason
+          (if approval-blocked-p
+              "Selected filing artifact still has blocking warnings and cannot be approved yet. Approve a different ready artifact, fix the blocking warnings, or reject this artifact before retrying approval."
+            "Approved the operator-selected filing artifact for deterministic filing review."))))
 
 (defun delib-flow--execute-select-approved-filing-actions (package)
   "Return raw filing-selection output for PACKAGE."
   (delib-flow--select-approved-filing-actions-result package))
+
+(defun delib-flow--execute-resolve-filing-conflict (package)
+  "Return raw conflict-resolution output for PACKAGE."
+  (delib-flow--resolve-filing-conflict-result package))
+
+(defun delib-flow--execute-resolve-cloud-failure (package)
+  "Return raw cloud-failure resolution output for PACKAGE."
+  (delib-flow--resolve-cloud-failure-result package))
 
 (defun delib-flow--reject-draft-filing-artifact-result (package)
   "Return raw filing-rejection result for PACKAGE."
@@ -4650,9 +5635,11 @@ PRIORITY controls display order."
 
 (defun delib-flow--normalize-proposal-warning-summary (raw-output)
   "Return normalized warning summary text from proposal RAW-OUTPUT."
-  (format "- Warning count: %s\n- Artifacts with warnings: %s"
+  (format "- Warning count: %s\n- Artifacts with warnings: %s\n- Blocking warning count: %s\n- Artifacts with blocking warnings: %s"
           (or (plist-get raw-output :warning-count) 0)
-          (or (plist-get raw-output :warning-item-count) 0)))
+          (or (plist-get raw-output :warning-item-count) 0)
+          (or (plist-get raw-output :blocking-warning-count) 0)
+          (or (plist-get raw-output :blocking-warning-item-count) 0)))
 
 (defun delib-flow--normalize-extract-actions-output (raw-output)
   "Return normalized extract-actions text from RAW-OUTPUT."
@@ -4680,8 +5667,9 @@ PRIORITY controls display order."
 
 (defun delib-flow--normalize-decide-cloud-pass-output (raw-output)
   "Return normalized cloud-routing text from RAW-OUTPUT."
-  (format "- Route: %s\n- Selected model: %s\n- Provider: %s\n- Policy profile: %s\n- Sanitization status: %s\n- Reason: %s"
+  (format "- Route: %s\n- Target stage: %s\n- Selected model: %s\n- Provider: %s\n- Policy profile: %s\n- Sanitization status: %s\n- Reason: %s"
           (plist-get raw-output :route)
+          (plist-get raw-output :target-stage)
           (plist-get raw-output :selected-model)
           (plist-get raw-output :selected-provider)
           (plist-get raw-output :policy-profile)
@@ -4704,11 +5692,22 @@ PRIORITY controls display order."
 
 (defun delib-flow--normalize-run-cloud-stage-output (raw-output)
   "Return normalized cloud-stage text from RAW-OUTPUT."
-  (format "- Selected model: %s\n- Sanitization status: %s\n- Reason: %s\n%s"
+  (format "- Target stage: %s\n- Selected model: %s\n- Sanitization status: %s\n- Reason: %s\n%s"
+          (plist-get raw-output :target-stage)
           (plist-get raw-output :selected-model)
           (plist-get raw-output :sanitization-status)
           (plist-get raw-output :reason)
           (plist-get raw-output :cloud-output)))
+
+(defun delib-flow--normalize-resolve-cloud-failure-output (raw-output)
+  "Return normalized cloud-failure resolution text from RAW-OUTPUT."
+  (format "- Resolution: %s\n- Fallback mode: %s\n- Reintegration status: %s\n- Operator notes: %s\n- Abort run: %s\n- Reason: %s"
+          (plist-get raw-output :resolution)
+          (or (plist-get raw-output :fallback-mode) "none")
+          (or (plist-get raw-output :reintegration-status) "not-set")
+          (or (plist-get raw-output :operator-notes) "none")
+          (if (plist-get raw-output :abort-p) "yes" "no")
+          (plist-get raw-output :reason)))
 
 (defun delib-flow--normalize-approve-candidate-reintegration-output (raw-output)
   "Return normalized reintegration-approval text from RAW-OUTPUT."
@@ -4727,14 +5726,48 @@ PRIORITY controls display order."
 
 (defun delib-flow--normalize-select-approved-filing-actions-output (raw-output)
   "Return normalized filing-selection text from RAW-OUTPUT."
-  (format "- Selected artifact count: %s\n- Remaining draft artifact count: %s\n- Operator selection: %s\n- Operator notes: %s\n- Reason: %s\n%s"
+  (format "- Selected artifact count: %s\n- Remaining draft artifact count: %s\n- Approval blocked: %s\n- Ready selections: %s\n- Blocked selections: %s\n- Operator selection: %s\n- Operator notes: %s\n- Reason: %s\n%s%s%s"
           (plist-get raw-output :selected-count)
           (plist-get raw-output :remaining-draft-count)
+          (if (plist-get raw-output :approval-blocked-p) "yes" "no")
+          (delib-flow--selection-index-list
+           (plist-get raw-output :ready-selection-indexes))
+          (delib-flow--selection-index-list
+           (plist-get raw-output :blocked-selection-indexes))
           (or (plist-get raw-output :operator-selection) "none")
           (or (plist-get raw-output :operator-notes) "none")
           (plist-get raw-output :reason)
+          (if (plist-get raw-output :blocked-item-preview)
+              (concat "- Blocked artifact preview:\n"
+                      (plist-get raw-output :blocked-item-preview)
+                      "\n")
+            "")
+          (if (plist-get raw-output :blocking-warnings)
+              (concat
+               (mapconcat
+                (lambda (warning)
+                  (format "- Blocking warning: %s\n  Fix: %s"
+                          (plist-get warning :message)
+                          (delib-flow--draft-item-warning-remediation warning)))
+               (plist-get raw-output :blocking-warnings)
+                "\n")
+               "\n")
+            "")
           (or (plist-get raw-output :selected-preview)
               "No filing artifacts were selected.")))
+
+(defun delib-flow--normalize-resolve-filing-conflict-output (raw-output)
+  "Return normalized conflict-resolution text from RAW-OUTPUT."
+  (format "- Resolution: %s\n- Approved artifact count: %s\n- Rejected artifact count: %s\n- Operator notes: %s\n- Reason: %s\n%s"
+          (plist-get raw-output :resolution)
+          (plist-get raw-output :approved-count)
+          (plist-get raw-output :rejected-count)
+          (or (plist-get raw-output :operator-notes) "none")
+          (plist-get raw-output :reason)
+          (if (plist-get raw-output :resolved-approved-item)
+              (delib-flow--draft-item-preview-text
+               (list (plist-get raw-output :resolved-approved-item)))
+            "No approved artifact remains after conflict resolution.")))
 
 (defun delib-flow--normalize-reject-draft-filing-artifact-output (raw-output)
   "Return normalized filing-rejection text from RAW-OUTPUT."
@@ -4781,7 +5814,9 @@ PRIORITY controls display order."
   (if (eq (plist-get entry :status) 'completed)
       (delib-flow--completed-stage-decision
        (plist-get entry :stage-id))
-    "Review stage failure and choose whether to retry or abort."))
+    (if (eq (plist-get entry :stage-id) 'run-cloud-stage)
+        "Review cloud failure and choose whether to retry cloud, use local fallback, skip cloud, or abort."
+      "Review stage failure and choose whether to retry or abort.")))
 
 (defun delib-flow--apply-inspect-source-entry (run entry)
   "Return RUN updated from completed inspect-source ENTRY."
@@ -4845,13 +5880,14 @@ PRIORITY controls display order."
       (plist-put
        run :working-context
        (plist-put working :project-proposal (plist-get entry :raw-output)))
-     :filing
-     (plist-put
-       (plist-put
+      :filing
+      (plist-put
+       (delib-flow--clear-filing-selection-block-state
         (plist-put
-         (plist-put filing :draft-items draft-items)
-         :approved-items nil)
-        :rejected-items nil)
+         (plist-put
+          (plist-put filing :draft-items draft-items)
+          :approved-items nil)
+         :rejected-items nil))
        :preview-text (delib-flow--draft-item-preview-text draft-items))))))
 
 (defun delib-flow--apply-extract-actions-entry (run entry)
@@ -4860,13 +5896,14 @@ PRIORITY controls display order."
          (draft-items (plist-get (plist-get entry :raw-output) :actions)))
     (delib-flow--seed-filing-selection-block
      (plist-put
-     run :filing
-     (plist-put
-       (plist-put
+      run :filing
+      (plist-put
+       (delib-flow--clear-filing-selection-block-state
         (plist-put
-         (plist-put filing :draft-items draft-items)
-         :approved-items nil)
-        :rejected-items nil)
+         (plist-put
+          (plist-put filing :draft-items draft-items)
+          :approved-items nil)
+         :rejected-items nil))
        :preview-text (delib-flow--draft-item-preview-text draft-items))))))
 
 (defun delib-flow--apply-extract-waiting-for-entry (run entry)
@@ -4875,13 +5912,14 @@ PRIORITY controls display order."
          (draft-items (plist-get (plist-get entry :raw-output) :waiting-fors)))
     (delib-flow--seed-filing-selection-block
      (plist-put
-     run :filing
-     (plist-put
-       (plist-put
+      run :filing
+      (plist-put
+       (delib-flow--clear-filing-selection-block-state
         (plist-put
-         (plist-put filing :draft-items draft-items)
-         :approved-items nil)
-        :rejected-items nil)
+         (plist-put
+          (plist-put filing :draft-items draft-items)
+          :approved-items nil)
+         :rejected-items nil))
        :preview-text (delib-flow--draft-item-preview-text draft-items))))))
 
 (defun delib-flow--apply-suggest-reference-notes-entry (run entry)
@@ -4891,13 +5929,14 @@ PRIORITY controls display order."
           (plist-get (plist-get entry :raw-output) :reference-notes)))
     (delib-flow--seed-filing-selection-block
      (plist-put
-     run :filing
-     (plist-put
-       (plist-put
+      run :filing
+      (plist-put
+       (delib-flow--clear-filing-selection-block-state
         (plist-put
-         (plist-put filing :draft-items draft-items)
-         :approved-items nil)
-        :rejected-items nil)
+         (plist-put
+          (plist-put filing :draft-items draft-items)
+          :approved-items nil)
+         :rejected-items nil))
        :preview-text (delib-flow--draft-item-preview-text draft-items))))))
 
 (defun delib-flow--apply-decide-cloud-pass-entry (run entry)
@@ -4905,27 +5944,35 @@ PRIORITY controls display order."
   (let* ((routing (delib-flow--run-routing run))
          (raw (plist-get entry :raw-output))
          (updated-routing
-          (plist-put
-           (plist-put
-            (plist-put
-             (plist-put routing :cloud-switch-pending
-                        (plist-get raw :cloud-switch-pending))
-             :sanitization-status
-             (plist-get raw :sanitization-status))
-            :cloud-policy-profile
-            (plist-get raw :policy-profile))
-           :selected-cloud-provider
-           (plist-get raw :selected-provider))))
-    (plist-put
-     run :routing
-     (plist-put updated-routing
-                :selected-cloud-model
-                (plist-get raw :selected-model)))))
+          (let ((cleared-routing
+                 (delib-flow--clear-cloud-failure-state routing)))
+            (setq cleared-routing
+                  (plist-put cleared-routing :cloud-switch-pending
+                             (plist-get raw :cloud-switch-pending)))
+            (setq cleared-routing
+                  (plist-put cleared-routing :cloud-target-stage
+                             (plist-get raw :target-stage)))
+            (setq cleared-routing
+                  (plist-put cleared-routing :sanitization-status
+                             (plist-get raw :sanitization-status)))
+            (setq cleared-routing
+                  (plist-put cleared-routing :cloud-policy-profile
+                             (plist-get raw :policy-profile)))
+            (setq cleared-routing
+                  (plist-put cleared-routing :selected-cloud-provider
+                             (plist-get raw :selected-provider)))
+            (plist-put cleared-routing :selected-cloud-model
+                       (plist-get raw :selected-model)))))
+    (delib-flow--seed-cloud-routing-review-block
+     (plist-put
+      run :routing
+      updated-routing))))
 
 (defun delib-flow--apply-sanitize-for-cloud-entry (run entry)
   "Return RUN updated from completed sanitize-for-cloud ENTRY."
   (let* ((working (delib-flow--run-working-context run))
-         (routing (delib-flow--run-routing run))
+         (routing (delib-flow--clear-cloud-failure-state
+                   (delib-flow--run-routing run)))
          (raw (plist-get entry :raw-output))
          (sanitized-package (plist-get raw :sanitized-package))
          (block (delib-flow--editable-block run 'cloud-package-review))
@@ -4954,7 +6001,8 @@ PRIORITY controls display order."
 (defun delib-flow--apply-approve-cloud-send-entry (run entry)
   "Return RUN updated from completed approve-cloud-send ENTRY."
   (let* ((working (delib-flow--run-working-context run))
-         (routing (delib-flow--run-routing run))
+         (routing (delib-flow--clear-cloud-failure-state
+                   (delib-flow--run-routing run)))
          (raw (plist-get entry :raw-output)))
     (plist-put
      (plist-put
@@ -4971,7 +6019,8 @@ PRIORITY controls display order."
 (defun delib-flow--apply-run-cloud-stage-entry (run entry)
   "Return RUN updated from completed run-cloud-stage ENTRY."
   (let* ((working (delib-flow--run-working-context run))
-         (routing (delib-flow--run-routing run))
+         (routing (delib-flow--clear-cloud-failure-state
+                   (delib-flow--run-routing run)))
          (raw (plist-get entry :raw-output)))
     (plist-put
      (plist-put
@@ -4984,8 +6033,52 @@ PRIORITY controls display order."
        (plist-put routing :cloud-switch-pending
                   (plist-get raw :cloud-switch-pending))
        :sanitization-status
-       (plist-get raw :sanitization-status))
+      (plist-get raw :sanitization-status))
       :reintegration-status 'pending-review))))
+
+(defun delib-flow--apply-run-cloud-stage-failure-entry (run entry)
+  "Return RUN updated from failed run-cloud-stage ENTRY."
+  (let* ((working (delib-flow--run-working-context run))
+         (routing (delib-flow--run-routing run))
+         (updated-run
+          (plist-put
+           (plist-put
+            run :working-context
+            (plist-put working :cloud-returned-context nil))
+           :routing
+           (plist-put
+            (plist-put
+             (plist-put routing :cloud-failure-stage 'run-cloud-stage)
+             :cloud-failure-message
+             (plist-get entry :normalized-output))
+            :reintegration-status nil))))
+    (delib-flow--seed-cloud-failure-review-block updated-run)))
+
+(defun delib-flow--apply-resolve-cloud-failure-entry (run entry)
+  "Return RUN updated from completed resolve-cloud-failure ENTRY."
+  (let* ((working (delib-flow--run-working-context run))
+         (raw (plist-get entry :raw-output))
+         (routing
+          (plist-put
+           (plist-put
+            (delib-flow--clear-cloud-failure-state
+             (delib-flow--run-routing run))
+            :cloud-fallback-mode
+            (plist-get raw :fallback-mode))
+           :reintegration-status
+           (plist-get raw :reintegration-status)))
+         (updated-run
+          (plist-put
+           (plist-put
+            run :working-context
+            (plist-put working :cloud-returned-context nil))
+           :routing routing)))
+    (if (plist-get raw :abort-p)
+        (let* ((aborted-run (delib-flow--mark-run-aborted updated-run))
+               (session (delib-flow--run-session aborted-run)))
+          (plist-put aborted-run :session
+                     (plist-put session :current-decision "Run aborted.")))
+      updated-run)))
 
 (defun delib-flow--apply-approve-candidate-reintegration-entry (run entry)
   "Return RUN updated from completed reintegration-approval ENTRY."
@@ -4999,17 +6092,25 @@ PRIORITY controls display order."
 (defun delib-flow--apply-integrate-into-source-entry (run entry)
   "Return RUN updated from completed integrate-into-source ENTRY."
   (let* ((working (delib-flow--run-working-context run))
+         (routing
+          (plist-put
+           (plist-put
+            (plist-put (delib-flow--run-routing run) :cloud-failure-stage nil)
+            :cloud-failure-message nil)
+           :cloud-fallback-mode nil))
          (filing (plist-get run :filing)))
     (delib-flow--seed-filing-selection-block
      (plist-put
-     (plist-put
-      run :working-context
-      (plist-put working :retained-context
-                 (plist-get (plist-get entry :raw-output) :integrated-context)))
-     :filing
       (plist-put
-       (plist-put filing :approved-items nil)
-       :rejected-items nil)))))
+       (plist-put run :routing routing)
+       :working-context
+       (plist-put working :retained-context
+                  (plist-get (plist-get entry :raw-output) :integrated-context)))
+      :filing
+      (delib-flow--clear-filing-selection-block-state
+       (plist-put
+        (plist-put filing :approved-items nil)
+        :rejected-items nil))))))
 
 (defun delib-flow--apply-reject-draft-filing-artifact-entry (run entry)
   "Return RUN updated from completed filing-rejection ENTRY."
@@ -5023,45 +6124,82 @@ PRIORITY controls display order."
      (plist-put
       run :filing
       (plist-put
-       (plist-put
+       (delib-flow--clear-filing-selection-block-state
         (plist-put
-         (plist-put filing :draft-items remaining-items)
-         :approved-items (plist-get filing :approved-items))
-        :rejected-items updated-rejected)
+         (plist-put
+          (plist-put filing :draft-items remaining-items)
+          :approved-items (plist-get filing :approved-items))
+         :rejected-items updated-rejected))
        :preview-text (delib-flow--draft-item-preview-text remaining-items))))))
 
 (defun delib-flow--apply-select-approved-filing-actions-entry (run entry)
   "Return RUN updated from completed filing-selection ENTRY."
   (let* ((filing (plist-get run :filing))
          (raw (plist-get entry :raw-output))
-         (remaining-items (plist-get raw :remaining-draft-items)))
+         (remaining-items (plist-get raw :remaining-draft-items))
+         (updated-filing
+          (plist-put
+           (plist-put
+            (plist-put filing :draft-items remaining-items)
+            :rejected-items (plist-get filing :rejected-items))
+           :preview-text (delib-flow--draft-item-preview-text remaining-items))))
     (delib-flow--seed-filing-selection-block
      (plist-put
       run :filing
-      (plist-put
-       (plist-put
-        (plist-put
-         (plist-put filing :draft-items remaining-items)
-         :rejected-items (plist-get filing :rejected-items))
-        :approved-items (plist-get raw :approved-items))
-       :preview-text (delib-flow--draft-item-preview-text remaining-items))))))
+      (if (plist-get raw :approval-blocked-p)
+          (plist-put
+           (plist-put
+            (plist-put
+             (plist-put
+              (plist-put updated-filing :approved-items nil)
+              :selection-blocked-item
+              (plist-get raw :blocked-item))
+             :selection-blocking-warnings
+             (plist-get raw :blocking-warnings))
+            :selection-blocked-selection
+            (plist-get raw :operator-selection))
+           :selection-blocked-notes
+           (plist-get raw :operator-notes))
+          (delib-flow--clear-filing-selection-block-state
+           (plist-put updated-filing
+                      :approved-items (plist-get raw :approved-items))))))))
 
 (defun delib-flow--apply-file-approved-outputs-entry (run entry)
   "Return RUN updated from completed file-approved-outputs ENTRY."
   (let* ((filing (plist-get run :filing))
          (raw (plist-get entry :raw-output))
          (conflicts (plist-get raw :conflicts)))
-    (plist-put
-     run :filing
-     (if conflicts
-         (plist-put filing :conflicts conflicts)
+    (if conflicts
+        (delib-flow--seed-filing-conflict-resolution-block
+         (plist-put run :filing
+                    (plist-put filing :conflicts conflicts)))
+      (plist-put
+       run :filing
        (plist-put
         (plist-put
-         (plist-put filing :approved-items nil)
+         (delib-flow--clear-filing-selection-block-state
+          (plist-put filing :approved-items nil))
          :conflicts nil)
         :target-locations
         (append (plist-get filing :target-locations)
                 (plist-get raw :target-locations)))))))
+
+(defun delib-flow--apply-resolve-filing-conflict-entry (run entry)
+  "Return RUN updated from completed resolve-filing-conflict ENTRY."
+  (let* ((filing (plist-get run :filing))
+         (raw (plist-get entry :raw-output))
+         (resolved (plist-get raw :resolved-approved-item))
+         (updated-rejected
+          (append (plist-get filing :rejected-items)
+                  (plist-get raw :rejected-items))))
+    (plist-put
+     run :filing
+     (plist-put
+      (plist-put
+       (plist-put
+        filing :approved-items (if resolved (list resolved) nil))
+       :rejected-items updated-rejected)
+      :conflicts nil))))
 
 (defun delib-flow--review-record-from-entry (record entry)
   "Return accepted-result RECORD updated from completed stage ENTRY."
@@ -5179,6 +6317,53 @@ PRIORITY controls display order."
            block
            (delib-flow--filing-selection-template items))))
     (delib-flow--set-editable-block run 'filing-selection-review updated-block)))
+
+(defun delib-flow--seed-filing-conflict-resolution-block (run)
+  "Return RUN with conflict-resolution block populated from current filing state."
+  (let* ((block (delib-flow--editable-block run 'filing-conflict-resolution))
+         (updated-block
+          (delib-flow--set-editable-block-text
+           block
+           (delib-flow--filing-conflict-resolution-template run))))
+    (delib-flow--set-editable-block run 'filing-conflict-resolution updated-block)))
+
+(defun delib-flow--seed-cloud-failure-review-block (run)
+  "Return RUN with cloud-failure review block populated from current routing state."
+  (let* ((block (delib-flow--editable-block run 'cloud-failure-review))
+         (updated-block
+          (delib-flow--set-editable-block-text
+           block
+           (delib-flow--cloud-failure-review-template run))))
+    (delib-flow--set-editable-block run 'cloud-failure-review updated-block)))
+
+(defun delib-flow--seed-cloud-routing-review-block (run)
+  "Return RUN with cloud-routing review block populated from current routing state."
+  (let* ((block (delib-flow--editable-block run 'cloud-routing-review))
+         (updated-block
+          (delib-flow--set-editable-block-text
+           block
+           (delib-flow--cloud-routing-review-template run))))
+    (delib-flow--set-editable-block run 'cloud-routing-review updated-block)))
+
+(defun delib-flow--clear-filing-selection-block-state (filing)
+  "Return FILING with blocked approval state cleared."
+  (plist-put
+   (plist-put
+    (plist-put
+     (plist-put filing :selection-blocked-item nil)
+     :selection-blocking-warnings nil)
+    :selection-blocked-selection nil)
+   :selection-blocked-notes nil))
+
+(defun delib-flow--clear-cloud-failure-state (routing)
+  "Return ROUTING with recorded cloud failure and fallback state cleared."
+  (plist-put
+   (plist-put
+    (plist-put
+     (plist-put routing :cloud-failure-stage nil)
+     :cloud-failure-message nil)
+    :cloud-fallback-mode nil)
+   :reintegration-status nil))
 
 (defun delib-flow--set-latest-stage-entry (run stage-id update-fn)
   "Return RUN with latest STAGE-ID history entry updated by UPDATE-FN."
@@ -5330,7 +6515,9 @@ PRIORITY controls display order."
                       (delib-flow--next-decision-for-entry entry)))))
     (if (eq (plist-get entry :status) 'completed)
         (delib-flow--apply-completed-stage-entry updated-run entry)
-      updated-run)))
+      (if (eq (plist-get entry :stage-id) 'run-cloud-stage)
+          (delib-flow--apply-run-cloud-stage-failure-entry updated-run entry)
+        updated-run))))
 
 (defun delib-flow--finalize-stage-run (run entry)
   "Return finalized RUN after applying stage ENTRY and audit updates."
@@ -5383,7 +6570,8 @@ PRIORITY controls display order."
   "Create a new run state from SOURCE-SNAPSHOT."
   (let ((session (delib-flow--initial-session-state)))
     (delib-flow--seed-actions
-     (list :source source-snapshot
+     (delib-flow--seed-cloud-routing-review-block
+      (list :source source-snapshot
          :working-context
          (list :source-snapshot source-snapshot
                :inspect-output nil
@@ -5394,7 +6582,7 @@ PRIORITY controls display order."
                :retained-context nil
                :cloud-sanitized-context nil
                :cloud-returned-context nil
-               :editable-block-ids '(context-main operator-notes manual-project-selection filing-selection-review inspect-source-review cloud-package-review))
+               :editable-block-ids '(context-main operator-notes manual-project-selection filing-selection-review filing-conflict-resolution inspect-source-review cloud-package-review cloud-routing-review cloud-failure-review))
          :stage-history
          (list :entries nil
                :latest-stage nil
@@ -5406,8 +6594,12 @@ PRIORITY controls display order."
                :default-cloud-model delib-flow-default-cloud-model
                :stage-models nil
                :cloud-switch-pending nil
+               :cloud-target-stage nil
                :selected-cloud-provider nil
                :cloud-policy-profile nil
+               :cloud-failure-stage nil
+               :cloud-failure-message nil
+               :cloud-fallback-mode nil
                :sanitization-status nil
                :reintegration-status nil)
          :filing
@@ -5415,6 +6607,10 @@ PRIORITY controls display order."
                :approved-items nil
                :rejected-items nil
                :preview-text nil
+               :selection-blocked-item nil
+               :selection-blocking-warnings nil
+               :selection-blocked-selection nil
+               :selection-blocked-notes nil
                :conflicts nil
                :target-locations nil)
          :audit
@@ -5422,7 +6618,7 @@ PRIORITY controls display order."
          :session
          session
          :ui
-         (delib-flow--initial-ui-state)))))
+         (delib-flow--initial-ui-state))))))
 
 (defun delib-flow--section-content (section run)
   "Return Org text for SECTION using RUN state."
@@ -5879,6 +7075,24 @@ When ANCHOR-SECTION is non-nil, move point to that top-level section."
            'run-cloud-stage)))
   (delib-flow--rerender-active-run-buffer))
 
+(defun delib-flow-action-resolve-cloud-failure ()
+  "Execute the resolve-cloud-failure stage for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--run-stage-locally
+          (delib-flow--sync-run-from-control-buffer delib-flow--active-run)
+          'resolve-cloud-failure)))
+  (if (eq (plist-get (delib-flow--run-session delib-flow--active-run) :status)
+          'aborted)
+      (let ((buffer (delib-flow--control-buffer)))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))
+        (delib-flow--teardown-active-run))
+    (delib-flow--rerender-active-run-buffer)))
+
 (defun delib-flow-action-approve-candidate-reintegration ()
   "Execute the approve-candidate-reintegration stage for the active run."
   (interactive)
@@ -5937,6 +7151,18 @@ When ANCHOR-SECTION is non-nil, move point to that top-level section."
          (delib-flow--run-stage-locally
           (delib-flow--sync-run-from-control-buffer delib-flow--active-run)
           'file-approved-outputs)))
+  (delib-flow--rerender-active-run-buffer))
+
+(defun delib-flow-action-resolve-filing-conflict ()
+  "Execute the resolve-filing-conflict stage for the active run."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--run-stage-locally
+          (delib-flow--sync-run-from-control-buffer delib-flow--active-run)
+          'resolve-filing-conflict)))
   (delib-flow--rerender-active-run-buffer))
 
 (defun delib-flow-action-stage-placeholder ()
