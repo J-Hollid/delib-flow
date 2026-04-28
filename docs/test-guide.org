@@ -1,0 +1,734 @@
+#+title: delib-flow local test and debug guide
+
+* Purpose
+
+This guide explains how to test =delib-flow= locally using the built-in debug
+framework and the live control buffer. It is written for manual verification
+passes where you want to:
+
+- exercise the full workflow end to end with deterministic dummy data
+- stop at known stage boundaries and inspect packages, outputs, and state
+- reproduce branch-heavy cases like manual project override, cloud failure, and
+  filing conflict without hand-seeding state
+- compare current behavior against a fresh replay baseline after code changes
+- inspect the persisted audit trail alongside the in-memory run state
+
+The guide focuses on the Milestone 15 workflow that now exists in code rather
+than on the implementation plan.
+
+* What The Debug Framework Gives You
+
+The current debug surface consists of:
+
+- built-in scenarios with disposable temp fixtures for source, projects, ZK, and
+  audit files
+- deterministic checkpoints you can replay to directly
+- named walkthrough targets that map scenarios to useful verification paths
+- a control-buffer keymap for inspection, comparison, audit navigation, helper
+  presets, walkthrough stepping, and restart
+- latest-stage inspection and replay comparison buffers
+- contextual helper presets for active review blocks
+
+This means you can test most workflow branches without manually editing source
+fixtures, creating temporary notes, or trying to reconstruct state by hand.
+
+* Prerequisites
+
+Before using the debug/test framework, make sure:
+
+- Emacs can load =delib-flow.el=
+- you are comfortable invoking interactive commands with =M-x=
+- you know that debug scenarios use temporary fixtures and are intended for
+  verification rather than normal production filing
+
+For real runs against your own files, the usual configuration still matters:
+
+- =delib-flow-my-projects-file=
+- =delib-flow-zk-root=
+- =delib-flow-prompt-library-file=
+- =delib-flow-example-structures-file=
+- =delib-flow-audit-log-file=
+- =delib-flow-audit-payload-policy=
+- =delib-flow-audit-redaction-profile=
+
+The built-in debug scenarios temporarily replace the file-backed environment
+with disposable fixtures, then clean them up when the run is aborted.
+
+* Mental Model
+
+There are two ways to test the system:
+
+1. Real-run verification
+
+   Start from an actual Org heading and run the real workflow against your local
+   files and audit configuration. Use this when you want to validate the
+   workflow against your real source material.
+
+2. Debug-scenario verification
+
+   Start from a built-in scenario and checkpoint. Use this when you want
+   deterministic local testing of specific phases or branches without preparing
+   external data by hand.
+
+For most code-level validation and branch debugging, start with debug scenarios.
+For final confidence on real data shape and actual file integration, use a real
+run afterward.
+
+* Control Buffer Commands
+
+The main control-buffer commands for testing are:
+
+- =g=: refresh the control buffer
+- =j=: jump to the active run subtree in the audit log
+- =J=: jump to the latest recorded stage subtree in the audit log
+- =D=: open latest-stage debug inspection
+- =C=: open debug comparison against fresh replay and previous attempt
+- =W=: open the walkthrough guide
+- =H=: apply a valid debug helper preset for the active review block
+- =N=: advance the active walkthrough to its next checkpoint
+- =R=: restart the active walkthrough from its baseline checkpoint
+- =RET= or =a=: execute the action at point
+- =A=: approve the current inspect or project-match result when applicable
+- =r=: retry the current inspect or project-match stage when applicable
+- =q=: abort the run
+- =?=: open control-buffer help
+
+Testing is fastest when you treat these as a loop:
+
+- use =W= to orient yourself
+- use =D= to inspect what the latest stage actually produced
+- use =C= to understand divergence
+- use =j= and =J= to confirm audit persistence
+- use =H= when a seeded manual review block should be exercised
+- use =N= or =R= to move through the walkthrough path
+
+* Starting A Debug Run
+
+There are two main entry points.
+
+** Start From A Named Walkthrough
+
+Run:
+
+#+begin_example
+M-x delib-flow-debug-start-walkthrough
+#+end_example
+
+Then choose a walkthrough target.
+
+This is the best starting point when you want the system to choose a sensible
+scenario and baseline checkpoint for you.
+
+** Start From A Scenario And Checkpoint Directly
+
+Run:
+
+#+begin_example
+M-x delib-flow-debug-start-scenario
+#+end_example
+
+Then choose:
+
+- a scenario
+- a checkpoint
+
+This is better when you want to jump directly into a specific state without
+using the higher-level walkthrough abstraction.
+
+* Built-In Scenarios
+
+The current built-in scenarios are:
+
+** =alpha-followup=
+
+Purpose:
+Exercise the main matched-project path with source inspection, project match,
+reference discovery/filtering, artifact drafting, cloud routing, cloud failure,
+and filing readiness.
+
+Supported checkpoints:
+
+- =source=
+- =inspect-reviewed=
+- =project-reviewed=
+- =context-ready=
+- =artifact-ready=
+- =cloud-ready=
+- =cloud-failure-ready=
+- =filing-ready=
+
+** =manual-project-override=
+
+Purpose:
+Exercise the ambiguous project path that stops for explicit manual selection.
+
+Supported checkpoints:
+
+- =source=
+- =inspect-reviewed=
+- =project-reviewed=
+- =manual-project-ready=
+
+** =filing-conflict=
+
+Purpose:
+Exercise deterministic filing conflict detection and conflict review.
+
+Supported checkpoints:
+
+- =source=
+- =inspect-reviewed=
+- =project-reviewed=
+- =context-ready=
+- =artifact-ready=
+- =filing-ready=
+- =filing-conflict-ready=
+
+* Checkpoints
+
+Checkpoints are named stable workflow states used for deterministic replay.
+
+- =source=: only the source snapshot is present
+- =inspect-reviewed=: Inspect Source has been run and accepted
+- =project-reviewed=: Match Project has been run and accepted
+- =manual-project-ready=: the manual project selection block is ready
+- =context-ready=: reference discovery/filtering state is ready
+- =artifact-ready=: draft artifacts exist and can be inspected
+- =cloud-ready=: cloud review/sanitization/send state is prepared
+- =cloud-failure-ready=: cloud failure handling state is prepared
+- =filing-conflict-ready=: filing conflict review state is prepared
+- =filing-ready=: integrated context and filing-review state are prepared
+
+These are not generic savepoints for arbitrary graph movement. They are
+deterministic debug replay boundaries.
+
+* Walkthrough Targets
+
+The named walkthrough targets are:
+
+- =full-run=
+- =project-review=
+- =manual-project=
+- =artifact-drafting=
+- =cloud-failure=
+- =filing-conflict=
+
+Each walkthrough target defines:
+
+- the underlying scenario
+- the starting checkpoint
+- the ordered stage/checkpoint path
+- checkpoint-specific verification expectations
+
+Use =W= at any point to see the current target, current checkpoint, next
+checkpoint, and the built-in expectation text.
+
+* Standard Verification Loop
+
+This is the default loop to use during local testing.
+
+1. Start a walkthrough target with =M-x delib-flow-debug-start-walkthrough=.
+2. Read the active expectation in the walkthrough guide with =W=.
+3. Inspect the latest stage with =D=.
+4. Confirm audit persistence with =j= and =J=.
+5. If the stage involves a manual review block, use =H= to seed a valid test
+   decision or edit the block manually if you want a custom case.
+6. If you changed code or retried behavior, use =C= to compare against a fresh
+   deterministic replay and the prior attempt.
+7. Use =N= to advance when the current expectation is satisfied.
+8. Use =R= to restart the current walkthrough target from its baseline.
+9. Abort with =q= when done so temporary fixtures are cleaned up.
+
+This loop is faster than repeatedly restarting scenarios by hand and gives you
+both behavior inspection and persisted audit confirmation at each step.
+
+* What To Inspect At Each Surface
+
+** Walkthrough Guide (=W=)
+
+Use this to answer:
+
+- what walkthrough target is active
+- what checkpoint you are currently at
+- what the next checkpoint is
+- what the current verification expectation is
+- which next actions are likely relevant
+
+This is the orientation view, not the payload view.
+
+** Latest-Stage Inspection (=D=)
+
+Use this to answer:
+
+- what stage just ran
+- what prompt/package was assembled
+- what normalized output was produced
+- what raw output was captured
+- what state changed across the latest stage
+- what stage-specific diagnostics explain the result
+
+This is the most important surface when the question is:
+
+"What exactly happened at this stage?"
+
+The inspection buffer includes stage-specific diagnostics for:
+
+- project matching
+- cloud routing/failure
+- filing and conflict handling
+
+** Comparison View (=C=)
+
+Use this to answer:
+
+- how the active run differs from a fresh replay of the same scenario/checkpoint
+- how the latest stage differs from its previous attempt
+
+This is the right view after:
+
+- a code change
+- a retry
+- a helper-applied review edit
+- any suspected regression that changes state unexpectedly
+
+** Audit Navigation (=j= / =J=)
+
+Use this to answer:
+
+- whether the persisted audit log matches what the control buffer shows
+- whether the latest stage record is written where you expect
+- whether policy-driven audit retention/redaction is behaving correctly
+
+=j= is for the run subtree.
+
+=J= is for the most recent stage subtree.
+
+Use both when verifying audit shape, attempt numbering, cloud transport context,
+or filing output locations.
+
+* Using Helper Presets (=H=)
+
+The helper command is meant to speed up manual branch verification. It seeds a
+valid review-block template for the currently active review context.
+
+It does not replace normal workflow semantics. It only reduces manual typing for
+repeatable testing.
+
+** Manual Project Context
+
+When the manual project selection block is active, =H= can currently seed:
+
+- choose the first candidate
+- reject all candidates
+
+Use this to test:
+
+- whether the candidate list is seeded correctly
+- whether manual selection acceptance changes working context correctly
+- whether reject-all behavior stays valid
+
+** Cloud Failure Context
+
+When cloud failure resolution is active, =H= can currently seed:
+
+- retry cloud
+- use local
+- skip cloud
+- abort run
+
+Use this to test:
+
+- direct cloud retry behavior
+- local fallback routing
+- explicit cloud skip handling
+- abort behavior and audit finalization
+
+** Filing Selection Context
+
+When filing selection review is active, =H= can currently seed:
+
+- select the first ready artifact
+- select the first blocked artifact
+
+Use the blocked selection path when you want to verify warning and readiness
+handling rather than only the happy path.
+
+** Filing Conflict Context
+
+When filing conflict resolution is active, =H= can currently seed:
+
+- retry conflict
+- reject conflict
+- a smart stage-appropriate fix based on the approved item kind
+
+The smart fix becomes one of:
+
+- rename note
+- retitle project
+- reword item
+
+Use this to verify conflict review behavior without drafting the conflict block
+manually each time.
+
+* Suggested Verification Passes
+
+Below are the recommended manual passes for the current framework.
+
+** Pass 1: Full Local Path
+
+Start:
+
+#+begin_example
+M-x delib-flow-debug-start-walkthrough RET full-run RET
+#+end_example
+
+Goal:
+Verify the main deterministic local path from source snapshot to filing-ready
+state.
+
+Suggested loop:
+
+1. At =source=, confirm there is no completed stage history yet.
+2. Press =N= to move to =inspect-reviewed=.
+3. Use =D= to inspect source classification and assembled prompt/package.
+4. Use =N= to move to =project-reviewed=.
+5. Use =D= to verify the selected project is =Alpha Project=.
+6. Use =N= to move to =context-ready=.
+7. Use =D= to inspect retained reference material and context narrowing.
+8. Use =N= to move to =artifact-ready=.
+9. Use =D= to inspect draft artifacts, warning metadata, and readiness markers.
+10. Use =N= to move to =filing-ready=.
+11. Use =D= and =j= / =J= to confirm integrated context plus filing review state.
+
+What to watch for:
+
+- stage labels and current-result summaries should track the actual latest stage
+- accepted inspect/project review state should be visible and stable
+- retained context should become narrower and more structured as stages advance
+- filing preview should reflect artifact state, readiness, and approval flow
+
+** Pass 2: Manual Project Override
+
+Start:
+
+#+begin_example
+M-x delib-flow-debug-start-walkthrough RET manual-project RET
+#+end_example
+
+Goal:
+Verify ambiguous project handling and manual override.
+
+Suggested loop:
+
+1. Use =W= to confirm you are at =manual-project-ready=.
+2. Inspect with =D= to confirm project matching did not auto-resolve.
+3. Use =H= and choose the first candidate.
+4. Review the seeded block in the control buffer.
+5. Execute the relevant next action.
+6. Use =C= if needed to compare the changed state against the baseline.
+7. Restart with =R= and repeat using reject-all.
+
+What to watch for:
+
+- candidate titles should be seeded correctly
+- the manual review block should stay readable and valid
+- selecting a candidate should update project context cleanly
+- reject-all should remain a legitimate path rather than a malformed block
+
+** Pass 3: Artifact Drafting
+
+Start:
+
+#+begin_example
+M-x delib-flow-debug-start-walkthrough RET artifact-drafting RET
+#+end_example
+
+Goal:
+Inspect the quality of draft actions before filing or cloud execution.
+
+Suggested loop:
+
+1. Use =D= at =artifact-ready=.
+2. Inspect draft items, warning counts, warning text, and readiness state.
+3. Use =C= after any code change to see whether only expected drafting fields
+   changed.
+4. Confirm the filing preview and current-result sections tell a consistent
+   story.
+
+What to watch for:
+
+- vague or weak action wording
+- warning severity drift
+- changes to readiness that do not match artifact content
+- unexpected changes to unrelated workflow state
+
+** Pass 4: Cloud Failure Branch
+
+Start:
+
+#+begin_example
+M-x delib-flow-debug-start-walkthrough RET cloud-failure RET
+#+end_example
+
+Goal:
+Verify rerouted cloud failure recording and recovery behavior.
+
+Suggested loop:
+
+1. Use =D= at =cloud-ready= to inspect the reviewed cloud package.
+2. Press =N= to move to =cloud-failure-ready=.
+3. Use =D= to inspect the cloud failure diagnostics.
+4. Use =j= / =J= to confirm audit capture of the failure and transport context.
+5. Use =H= to seed =retry cloud=, then execute the recovery action.
+6. Restart with =R=.
+7. Repeat with =use local= and =skip cloud=.
+8. Repeat with =abort run= to verify abort and cleanup semantics.
+
+What to watch for:
+
+- the failure should be foregrounded as the target stage, not only the generic
+  cloud wrapper
+- audit should reflect the correct target stage and attempt numbering
+- retry and restart should remain distinct
+- local fallback should not look like cloud success
+
+** Pass 5: Filing Conflict Branch
+
+Start:
+
+#+begin_example
+M-x delib-flow-debug-start-walkthrough RET filing-conflict RET
+#+end_example
+
+Goal:
+Verify deterministic conflict detection and resolution.
+
+Suggested loop:
+
+1. Use =D= at =filing-ready= to inspect the approved artifact and filing state.
+2. Press =N= to move to =filing-conflict-ready=.
+3. Use =D= to inspect conflict diagnostics.
+4. Use =j= / =J= to inspect the persisted conflict record.
+5. Use =H= to apply the smart conflict fix.
+6. Execute the relevant next action.
+7. Restart with =R= and repeat with =retry conflict= and =reject conflict=.
+
+What to watch for:
+
+- the seeded conflict block should match the approved item kind
+- smart rename/retitle/reword paths should populate the expected fields
+- retry should preserve the approved artifact semantics
+- reject should move the run into the appropriate non-retry path
+
+* Using Direct Scenario/Checkpoint Replay
+
+Sometimes you do not want the walkthrough abstraction. In that case, start
+directly from a scenario/checkpoint pair.
+
+Examples:
+
+Jump straight to artifact drafting:
+
+#+begin_example
+M-x delib-flow-debug-start-scenario RET alpha-followup RET artifact-ready RET
+#+end_example
+
+Jump straight to cloud failure:
+
+#+begin_example
+M-x delib-flow-debug-start-scenario RET alpha-followup RET cloud-failure-ready RET
+#+end_example
+
+Jump straight to filing conflict:
+
+#+begin_example
+M-x delib-flow-debug-start-scenario RET filing-conflict RET filing-conflict-ready RET
+#+end_example
+
+Use direct replay when:
+
+- you already know the exact branch state you want
+- you are iterating quickly on one phase
+- you do not need the walkthrough stepping path
+
+* Verifying Real Runs Against Your Own Data
+
+After the deterministic debug passes are green enough, run the workflow against
+an actual Org heading.
+
+Suggested approach:
+
+1. Open a real source heading.
+2. Start the normal workflow entry point you use for live runs.
+3. Use the same testing loop:
+   - =D= for stage payloads and outputs
+   - =C= when retries or code changes matter
+   - =j= / =J= for audit confirmation
+4. Compare the real-run behavior against what you saw in the deterministic debug
+   scenarios.
+
+What is different in real runs:
+
+- file paths and linked artifacts are your real ones
+- project candidates and retained material may be less predictable
+- audit policy may be your actual configured retention/redaction mode
+- filing writes and conflict conditions depend on your live data
+
+Use the deterministic debug runs first to verify control-flow behavior, then use
+real runs to verify integration realism.
+
+* Audit Verification Checklist
+
+During manual testing, audit verification should be explicit. At each important
+checkpoint, confirm:
+
+- the audit file path shown in the control buffer is the one you expect
+- the payload policy shown in the control buffer is the configured one
+- the redaction profile shown in the control buffer is the configured one
+- the latest recorded stage matches the actual latest stage
+- the recorded attempt number matches retries or superseded attempts
+- cloud-rerouted stages record transport context correctly
+- filing-related stages persist the target locations you expect
+
+Use =j= for run-level inspection and =J= for stage-level inspection.
+
+If audit behavior is part of the test, also inspect whether the stage subtree
+contains:
+
+- full payloads
+- redacted payloads
+- metadata-only placeholders
+
+depending on the current audit policy.
+
+* Comparison-Driven Regression Checks
+
+The comparison view is especially useful after code changes.
+
+Recommended use:
+
+1. Start a deterministic scenario/checkpoint.
+2. Observe behavior.
+3. Change code.
+4. Restart the target with =R= or replay directly.
+5. Use =C=.
+
+Questions =C= should help answer:
+
+- did only the intended working-context fields change
+- did routing/cloud state change unexpectedly
+- did filing state change unexpectedly
+- did the latest stage output change in a meaningful way
+- did audit metadata drift unexpectedly
+
+If the comparison is noisy, that is usually a sign to tighten either:
+
+- state updates
+- normalization behavior
+- debug snapshot summarization
+
+* Troubleshooting
+
+** No Active Run
+
+Symptom:
+Commands like =D=, =C=, =H=, =j=, or =J= error because no run is active.
+
+Fix:
+Start a walkthrough or scenario first.
+
+** No Active Debug Helper Context
+
+Symptom:
+=H= errors because there is no eligible review block.
+
+Fix:
+Move to a checkpoint where one of these review blocks is active:
+
+- manual project selection
+- cloud failure resolution
+- filing selection
+- filing conflict resolution
+
+** Unsupported Scenario/Checkpoint Combination
+
+Symptom:
+Starting a scenario directly errors because the checkpoint is unsupported.
+
+Fix:
+Choose a supported checkpoint for that scenario, or use a walkthrough target
+that already defines a valid pair.
+
+** Comparison Looks Different Than Expected
+
+Possible causes:
+
+- you edited the review block manually
+- you are comparing against a fresh replay baseline after a real code change
+- you retried a stage and now have a previous-attempt diff
+- the workflow legitimately changed more state than you expected
+
+Use =D= and =J= to understand whether the divergence is in:
+
+- package assembly
+- normalized output
+- audit persistence
+- state application
+
+** Audit Subtree Not Found
+
+Symptom:
+=j= or =J= errors saying the subtree is not present.
+
+Possible causes:
+
+- the audit log file is not configured
+- the stage has not been persisted yet
+- the run was restarted and you are looking for stale state
+
+Check the control buffer’s audit status section before assuming the jump command
+is wrong.
+
+* Recommended Manual Test Sequence
+
+If you want one concrete order of operations for a broad verification pass, use
+this:
+
+1. =full-run=
+2. =artifact-drafting=
+3. =manual-project=
+4. =cloud-failure=
+5. =filing-conflict=
+6. one real run against your own source heading
+
+This sequence moves from the mainline deterministic path to the branch-heavy
+cases and ends on real integration behavior.
+
+* What To Record During Manual Testing
+
+For each pass, record:
+
+- walkthrough target or scenario/checkpoint
+- what you expected
+- what stage actually became latest
+- whether =D= matched the expectation
+- whether =C= showed any unexpected divergence
+- whether audit persistence matched what the control buffer claimed
+- whether helper presets saved time or exposed rough edges
+- whether any stage still felt too manual or too opaque
+
+Those notes should tell you what the next Milestone 15 refinement needs to be.
+
+* Future Refinement Targets
+
+If a local pass still feels rough, the likely follow-up areas are:
+
+- more stage-specific helper presets
+- richer inspection diagnostics for one stage family
+- cleaner comparison summaries for noisy state buckets
+- additional walkthrough targets for a new branch path
+- better real-run entry guidance for file-backed verification
+
+The point of the current framework is not to eliminate all manual judgment. It
+is to make the workflow observable, repeatable, and debuggable enough that the
+remaining friction is obvious and concrete.

@@ -1793,12 +1793,125 @@ Execution order:
 5. Milestone 13: generic reviewed cloud rerouting
 - Generalize the cloud-path machinery so more reasoning stages can be routed
   through reviewed sanitization without bespoke stage-specific logic.
+- Status: completed.
+- Reviewed cloud execution now records the selected rerouted stage's raw and
+  normalized payload, and approved reintegration now applies that payload back
+  through the target stage's normal local state-update path.
+- Rerouted stages now also appear as first-class cloud stage-history records,
+  and rerouted cloud failures are now recorded against the actual target stage.
+- Approved reviewed cloud packages are now reusable for a direct retry of the
+  current rerouted cloud target, and the operator can also restart the cloud
+  path back at sanitization without supporting arbitrary cloud-step rewinding.
+- The current-result surface, failure-recovery copy, and control-buffer action
+  labels now foreground the rerouted cloud target stage while still keeping
+  `Run Cloud Stage` as the explicit reviewed transport and approval boundary.
+- The current implementation intentionally does not let operators promote
+  rerouted cloud stage entries into totally independent control-buffer stages;
+  direct retry and restart stay subordinate to the reviewed cloud corridor.
 - Keep provider-policy enforcement and explicit approval semantics fixed.
 
 6. Milestone 14: audit hygiene and prompt integration
+- Status: complete.
 - Add audit retention/redaction policy, improve audit navigation, and
   introduce more meaningful prompt-library-backed resolution where the current
   descriptor-only prompt contract is still thin.
+- Audit persistence is now policy-driven with explicit `full`, `redacted`, and
+  `metadata-only` payload modes, and the control buffer now surfaces the audit
+  file path, payload policy, redaction profile, and latest recorded stage.
+- Stage input packages now resolve prompt-library entries by `PROMPT_ID` when
+  available, surface example-structure availability, and now also carry a
+  rendered prompt payload instead of only a bare descriptor prompt id.
+- Stage input packages now also carry stage-aware structured prompt guidance,
+  including response schemas for source analysis, decision fields for project
+  matching, project-creation checklists, artifact-quality rules, and shared
+  contracts for cloud-corridor and filing-review stages.
+- Persisted audit stage records now include per-stage attempt numbers and
+  rerouted cloud transport-stage metadata to improve retry and cloud walkthrough
+  readability.
+- The control buffer now also surfaces audit-navigation readiness plus compact
+  latest-attempt summary text, and operators can jump directly to the active
+  run audit subtree or latest audit stage subtree from the control buffer.
+
+7. Milestone 15: debug framework for local verification
+- Status: in progress.
+- Build a dedicated debug/verification layer that makes it easy to run the
+  workflow end to end with dummy data, start from specific intermediate stages,
+  inspect stage packages and outputs, and capture diagnostics when behavior
+  diverges from expectation.
+- The goal of this milestone is not new production workflow behavior; it is to
+  reduce the friction of verifying existing behavior locally and make audit and
+  diagnosis loops fast enough to support stage-by-stage trust-building.
+- Planned scope:
+  1. Easy end-to-end fixture setup
+     - Helpers for creating disposable source inputs, temporary project files,
+       and temporary ZK roots from a small set of dummy scenarios.
+     - One-command local workflow startup against those fixtures.
+  2. Stage-entry setup and replay
+     - Helpers to seed run state at specific stage boundaries so a single stage
+       or approval path can be exercised without replaying the whole workflow.
+     - Explicit support for rerunning reviewed, cloud, and filing paths from
+       controlled checkpoints.
+  3. Package and output diagnostics
+     - Commands or summaries to inspect the exact stage input package, resolved
+       prompt contract, normalized output, and accepted output at each step.
+     - Fast surfacing of which context fields changed after a stage executes.
+  4. Audit and run navigation
+     - Direct jump paths from the control buffer to the active run’s audit
+       subtree and latest recorded stage.
+     - Compact summaries for retries, superseded attempts, rerouted cloud
+       stages, failures, and payload-retention mode.
+  5. Failure and divergence debugging
+     - Purpose-built diagnostics for “expected X, got Y” local verification,
+       such as showing blocking warnings, inferred source typing, project-match
+       candidates, filing target selection, and cloud-routing target state.
+  6. Verification-oriented docs
+     - A documented local walkthrough recipe for full-run and per-stage checks
+       using dummy data, including where to inspect state, prompt payloads, and
+       audit traces.
+- Acceptance criteria:
+  1. A local operator can launch at least one full dummy-data run with minimal
+     setup and inspect each resulting stage payload and audit checkpoint.
+  2. A local operator can start from at least one intermediate checkpoint for
+     each major phase: review, context retrieval, artifact drafting, cloud, and
+     filing.
+  3. The control/debug surfaces make it clear what changed after a stage and
+     where to look next when a result is surprising.
+  4. Tests cover the fixture/setup helpers and any persistent debug-state or
+     navigation behavior that becomes part of the runtime contract.
+- Current implementation slice:
+  - Built-in debug scenarios can now create disposable temp source/project/ZK
+    and audit fixtures, start a run directly into a chosen checkpoint, and tear
+    those fixtures down automatically when the run ends.
+  - The checkpointed path now covers `source`, `inspect-reviewed`,
+    `project-reviewed`, `manual-project-ready`, `context-ready`,
+    `artifact-ready`, `cloud-ready`, `cloud-failure-ready`,
+    `filing-ready`, and `filing-conflict-ready`.
+  - The control buffer now also exposes a latest-stage debug inspection command
+    for exact prompt/package/output inspection during local walkthroughs.
+  - The debug inspection now also summarizes tracked state changes across core
+    workflow domains and adds stage-specific diagnostics for project matching,
+    cloud routing, and filing.
+  - Scenario/checkpoint compatibility is now explicit so hard-branch replay
+    paths stay deterministic instead of depending on accidental fixture shape.
+  - The control buffer now also exposes a comparison view that can diff the
+    active run against a fresh replay of its originating debug
+    scenario/checkpoint and against the previous attempt of the latest stage.
+  - The control buffer now also exposes a walkthrough guide and starter flow
+    for named local verification targets so operators can enter full-run,
+    project-review, manual-project, artifact-drafting, cloud-failure, and
+    filing-conflict recipes without manually pairing scenarios to checkpoints.
+  - Active walkthrough targets can now advance to their next deterministic
+    checkpoint or restart from their baseline directly from the control buffer,
+    so common verification paths no longer require manual scenario relaunches
+    between steps.
+  - The walkthrough guide now also carries an explicit operator verification
+    loop plus checkpoint-specific expectations for each named target, so local
+    dummy-data passes have a built-in script for what to inspect and confirm at
+    each stage boundary.
+  - The control buffer now also exposes contextual helper presets for active
+    manual review blocks, so local verification can seed valid manual-project,
+    cloud-failure, filing-selection, and filing-conflict decisions without
+    manually drafting each template from scratch.
 
 Cross-cutting maintenance rules:
 
@@ -1811,10 +1924,12 @@ Cross-cutting maintenance rules:
 
 Current execution focus:
 
-- Milestone 13 is the active implementation target.
-- The next bounded slice is to generalize the reviewed cloud machinery beyond
-  the dedicated `Run Cloud Stage` path without weakening policy checks or
-  explicit approval boundaries.
+- Milestone 14 is complete.
+- Milestone 15 is the active implementation target.
+- The next bounded slice should come from actual manual dummy-data passes:
+  tighten any stage-specific helper or diagnostic flow that still feels too
+  manual once the current walkthrough, comparison, and helper-preset surfaces
+  are used end to end.
 
 * Milestone 1 code breakdown
 

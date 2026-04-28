@@ -68,8 +68,70 @@ This repository is being built incrementally from a design-first process.
   project-identifying terms in addition to the baseline email/URL/name pass
 - Reviewed cloud packages are now editable in the control buffer and must be explicitly approved before cloud execution
 - Cloud execution now updates working context with returned cloud output
+- Rerouted cloud execution now also preserves the selected target stage's
+  stage-specific payload so reintegration can apply it locally after review
+- Rerouted cloud execution now also appears in stage history as a first-class
+  cloud attempt for the selected target stage, with cloud failures recorded
+  against that target stage instead of only against `Run Cloud Stage`
+- After a reviewed cloud package has been approved once, the operator can now
+  retry the current rerouted cloud target directly from that approved package
+  or restart the cloud path back at sanitization without navigating arbitrary
+  cloud substep backtracking
+- The control buffer now foregrounds the rerouted cloud target stage in
+  current-result and failure-recovery surfaces while still keeping
+  `Run Cloud Stage` as the explicit reviewed transport boundary underneath
+- Audit logging now supports explicit payload-retention policy (`full`,
+  `redacted`, or `metadata-only`), surfaces that policy in the control buffer,
+  and records redaction metadata in the persisted audit log
+- Stage input packages now resolve prompt-library entries by stable
+  `PROMPT_ID` when configured, and also surface example-structure availability
+  instead of remaining fully descriptor-only
+- Resolved prompt content now also gets rendered into a stage-facing prompt
+  payload inside the input package, and persisted audit logs now show attempt
+  numbers plus cloud transport-stage context for easier manual walkthroughs
+- Stage input packages now also carry stage-aware structured prompt guidance
+  for source analysis, project decisions, project creation, artifact drafting,
+  cloud corridor review, and filing review so local dummy-data runs expose
+  more semantically useful prompt context than a single rendered blob
+- Audit status now also includes direct navigation readiness and latest-attempt
+  summary text, and the control buffer can jump straight to the active run or
+  latest stage subtree in the persisted audit log
+- Milestone 15 is now underway with built-in debug scenarios, checkpointed
+  replay for local verification, disposable temp fixture setup, and a latest-
+  stage inspection buffer for checking exact packages and outputs during manual
+  walkthroughs
+- The debug inspection buffer now also summarizes tracked state changes and
+  surfaces stage-specific diagnostics for project matching, cloud routing, and
+  filing so local walkthroughs can explain why a checkpoint looks the way it
+  does instead of only dumping raw payloads
+- The debug framework now also includes purpose-built branch checkpoints for
+  manual project override, cloud failure, and filing conflict states, with
+  scenario/checkpoint validation so those local verification paths stay
+  deterministic
+- The control buffer now also exposes a debug comparison view that can compare
+  the active run against a fresh replay of its originating debug checkpoint and
+  against the previous attempt of the latest stage
+- The control buffer now also exposes a walkthrough guide and starter flow so
+  local verification can jump into named targets like full-run, manual-project,
+  cloud-failure, and filing-conflict without remembering scenario/checkpoint
+  pairs by hand
+- Those walkthrough targets can now also advance to the next deterministic
+  checkpoint or restart from baseline directly from the control buffer, so
+  local verification does not need a manual scenario relaunch between steps
+- The walkthrough guide now also includes a standard verification loop plus
+  checkpoint-specific expectations for each named target, so local dummy-data
+  passes have a repeatable operator recipe instead of only navigation commands
+- The control buffer now also exposes contextual helper presets for active
+  manual review blocks, so local verification can seed valid manual-project,
+  cloud-failure, filing-selection, and filing-conflict decisions without
+  hand-authoring every review template from scratch
+- A dedicated local testing and debug operator guide now lives at
+  [[file:docs/test-guide.org][docs/test-guide.org]]
 - Cloud-returned output now requires explicit reintegration approval before local integration runs
 - Integration now updates retained context while preserving draft artifacts for filing review
+- Approved rerouted cloud results now unlock downstream workflow state as if
+  the selected target stage had completed locally, without weakening the
+  explicit send or reintegration review boundaries
 - Filing review now supports explicit approve/reject/defer review over draft
   artifacts while still promoting only one approved artifact at a time into
   deterministic filing

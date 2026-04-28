@@ -5,6 +5,92 @@ All notable repository changes should be recorded in this file.
 The format is intentionally simple for now: reverse-chronological headings with
 dated entries.
 
+* 2026-04-28
+
+- Added [[file:docs/test-guide.org][docs/test-guide.org]] as a dedicated local testing and debug
+  operator guide covering walkthrough targets, direct scenario/checkpoint
+  replay, inspection/comparison/audit commands, helper presets, and suggested
+  manual verification passes.
+- Continued Milestone 15 in `delib-flow.el`, `test/delib-flow-test.el`,
+  `README.org`, and `docs/implementation-plan.org` by adding contextual
+  helper presets for active manual review blocks so local verification can
+  seed valid manual-project, cloud-failure, filing-selection, and
+  filing-conflict decisions from the control buffer.
+- Continued Milestone 15 in `delib-flow.el`, `test/delib-flow-test.el`,
+  `README.org`, and `docs/implementation-plan.org` by adding an operator
+  verification loop plus checkpoint-specific expectations to the walkthrough
+  guide for named local verification targets.
+- Continued Milestone 15 in `delib-flow.el`, `test/delib-flow-test.el`,
+  `README.org`, and `docs/implementation-plan.org` by adding walkthrough
+  step and restart commands so named local verification targets can advance
+  between deterministic checkpoints from the control buffer.
+- Continued Milestone 15 in `delib-flow.el`, `test/delib-flow-test.el`,
+  `README.org`, and `docs/implementation-plan.org` by adding a walkthrough
+  guide and starter flow for named local verification targets in the control
+  buffer.
+- Continued Milestone 15 in `delib-flow.el`, `test/delib-flow-test.el`,
+  `README.org`, and `docs/implementation-plan.org` by adding a debug
+  comparison view that diffs the active run against a fresh replay of its
+  originating checkpoint and against the previous attempt of the latest stage.
+- Continued Milestone 15 in `delib-flow.el`, `test/delib-flow-test.el`,
+  `README.org`, and `docs/implementation-plan.org` by adding deterministic
+  debug checkpoints for manual-project override, cloud-failure, and
+  filing-conflict states, plus scenario/checkpoint compatibility validation.
+- Continued Milestone 15 in `delib-flow.el`, `test/delib-flow-test.el`,
+  `README.org`, and `docs/implementation-plan.org` by extending the debug
+  inspection buffer with tracked state-change summaries plus stage-specific
+  diagnostics for project matching, cloud routing, and filing.
+- Started Milestone 15 in `delib-flow.el`, `test/delib-flow-test.el`,
+  `README.org`, and `docs/implementation-plan.org` by adding built-in debug
+  scenarios, checkpointed replay into major workflow phases, disposable temp
+  fixture management, and a latest-stage inspection buffer for local manual
+  verification.
+- Completed Milestone 14 in `delib-flow.el`, `test/delib-flow-test.el`,
+  `README.org`, and `docs/implementation-plan.org` by adding direct audit-log
+  navigation from the control buffer, compact audit-navigation summary text,
+  and regression coverage for jumping to the active run and latest persisted
+  stage subtree.
+- Planned Milestone 15 in `docs/implementation-plan.org` and `README.org` as
+  a dedicated debug-framework phase for local verification, covering dummy-data
+  end-to-end setup, stage-entry setup/replay, package/output diagnostics, and
+  faster audit navigation for manual walkthroughs.
+- Continued Milestone 14 in `delib-flow.el`, `test/delib-flow-test.el`,
+  `README.org`, and `docs/implementation-plan.org` by adding stage-aware
+  structured prompt guidance to stage input packages so resolved prompt
+  content now carries semantic contracts for source analysis, project
+  decisions, project creation, artifact drafting, cloud review, and filing
+  review.
+- Continued Milestone 14 in `delib-flow.el` and `test/delib-flow-test.el` by
+  rendering resolved prompt-library/example content directly into stage input
+  packages and by making persisted audit logs easier to follow with attempt
+  numbers plus rerouted cloud transport-stage metadata.
+- Started Milestone 14 in `delib-flow.el`, `test/delib-flow-test.el`,
+  `README.org`, and `docs/implementation-plan.org` by adding policy-driven
+  audit payload retention/redaction, richer audit status visibility in the
+  control buffer, and prompt-library/example-structure resolution in stage
+  input packages.
+- Completed the remaining Milestone 13 UI/control decision in
+  `delib-flow.el`, `test/delib-flow-test.el`, `README.org`, and
+  `docs/implementation-plan.org`: the control buffer now foregrounds rerouted
+  cloud target stages in current-result and failure-recovery surfaces while
+  keeping `Run Cloud Stage` as the explicit reviewed transport boundary.
+- Continued the Milestone 13 generic cloud-rerouting pass in
+  `delib-flow.el` and `test/delib-flow-test.el`, adding direct retry of the
+  current rerouted cloud target from the approved reviewed package plus a
+  one-way `Restart Cloud Path` reset that returns the run to sanitization
+  without supporting arbitrary backtracking across cloud substeps.
+- Continued the Milestone 13 generic cloud-rerouting pass in
+  `delib-flow.el` and `test/delib-flow-test.el`, promoting rerouted cloud
+  target stages into first-class cloud stage-history records and recording
+  rerouted cloud failures against the actual target stage while keeping local
+  stage legality gated on explicit reintegration.
+- Continued the Milestone 13 generic cloud-rerouting pass in
+  `delib-flow.el`, `test/delib-flow-test.el`, `README.org`, and
+  `docs/implementation-plan.org`, so reviewed cloud execution now preserves
+  the selected rerouted stage's real payload and approved reintegration now
+  applies that payload through the target stage's normal local state-update
+  path before downstream filing review resumes.
+
 * 2026-04-27
 
 - Started the Milestone 13 generic cloud-rerouting pass in `delib-flow.el`
