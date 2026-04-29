@@ -105,6 +105,35 @@ Supported placeholders are `${title}', `${source-artifact}', and `${note-type}'.
      :zk-files nil
      :supported-checkpoints (source inspect-reviewed project-reviewed
                                     manual-project-ready))
+    (contact-disambiguates
+     :label "Contact disambiguates"
+     :source-title "Budget follow-up"
+     :source-content "* Budget follow-up\nFrom: alice@example.com\nSubject: Need updated budget numbers\n\nPlease send the revised budget and confirm whether the draft can go out today.\n"
+     :projects-content "* Alpha Project\n:PROPERTIES:\n:CONTACTS: alice@example.com\n:TAGS: alpha finance budget\n:END:\n** TODO Send revised budget\n* Beta Project\n:PROPERTIES:\n:CONTACTS: bob@example.com\n:TAGS: beta finance budget\n:END:\n** TODO Review legal terms\n"
+     :zk-files nil
+     :supported-checkpoints (source inspect-reviewed project-reviewed
+                                    context-ready artifact-ready cloud-ready
+                                    cloud-failure-ready filing-ready))
+    (linked-note-disambiguates
+     :label "Linked note disambiguates"
+     :source-title "Open questions from note review"
+     :source-content "* Open questions from note review\nNeed to reconcile the support note with the current project state.\nPlease review the open blockers and dependencies.\n[[file:notes/beta-brief.org][Beta brief]]\n"
+     :projects-content "* Alpha Project\n:PROPERTIES:\n:TAGS: alpha support\n:END:\nSee [[file:notes/alpha-plan.org][Alpha plan]]\n** TODO Review launch plan\n* Beta Project\n:PROPERTIES:\n:TAGS: beta support blockers\n:END:\nSee [[file:notes/beta-brief.org][Beta brief]]\n** TODO Reconcile support note\n"
+     :zk-files (("notes/beta-brief.org"
+                 . "#+title: Beta brief\n#+filetags: :beta:\n\n- Current blockers\n- Follow up with operations\n")
+                ("notes/alpha-plan.org"
+                 . "#+title: Alpha plan\n#+filetags: :alpha:\n\n- Launch plan draft\n"))
+     :supported-checkpoints (source inspect-reviewed project-reviewed
+                                    context-ready artifact-ready cloud-ready
+                                    cloud-failure-ready filing-ready))
+    (no-match-clean
+     :label "No-match clean"
+     :source-title "Housekeeping reminder"
+     :source-content "* Housekeeping reminder\nAgenda:\n- Clean up inbox rules.\n- Archive old receipts.\n- Refile travel paperwork.\n"
+     :projects-content "* Alpha Project\n* Beta Project\n"
+     :zk-files nil
+     :supported-checkpoints (source inspect-reviewed project-reviewed
+                                    manual-project-ready))
     (filing-conflict
      :label "Filing conflict"
      :source-title "Alpha Project kickoff"
@@ -3611,7 +3640,9 @@ PRIORITY controls display order."
 
 (defun delib-flow--filter-reference-material-action (run)
   "Return the filter-reference-material action for RUN."
-  (when (delib-flow--stage-executed-p run 'discover-reference-material)
+  (when (and (delib-flow--stage-executed-p run 'discover-reference-material)
+             (plist-get (delib-flow--run-working-context run)
+                        :retrieved-candidates))
     (delib-flow--make-action
      'filter-reference-material
      (if (delib-flow--stage-executed-p run 'filter-reference-material)
@@ -5559,16 +5590,37 @@ PRIORITY controls display order."
   "Return body preview display text for inspect OUTPUT."
   (or (plist-get output :body-preview) "No body preview"))
 
+(defun delib-flow--inspect-output-summary-text (output)
+  "Return summary display text for inspect OUTPUT."
+  (or (plist-get (plist-get output :analysis) :summary)
+      (plist-get output :reason)
+      "none"))
+
+(defun delib-flow--inspect-output-entities-text (output)
+  "Return entity display text for inspect OUTPUT."
+  (if-let ((entities (plist-get (plist-get output :analysis) :entities)))
+      (mapconcat #'identity entities ", ")
+    "none"))
+
+(defun delib-flow--inspect-output-signal-text (output)
+  "Return source-type signal display text for inspect OUTPUT."
+  (if-let ((signals (plist-get output :source-type-signals)))
+      (mapconcat #'identity signals ", ")
+    "none"))
+
 (defun delib-flow--inspect-result-pairs (output)
   "Return inspect result display pairs for OUTPUT."
   `(("Source type" . ,(plist-get output :source-type))
     ("Source type reason" . ,(or (plist-get output :source-type-reason) "nil"))
+    ("Source type signals" . ,(delib-flow--inspect-output-signal-text output))
     ("Title" . ,(or (plist-get output :title) "Untitled source"))
     ("Outline path" . ,(delib-flow--inspect-output-outline-path-text output))
     ("Body lines" . ,(plist-get output :body-line-count))
     ("Content words" . ,(plist-get output :content-word-count))
     ("Contact emails" . ,(delib-flow--inspect-output-contact-text output))
     ("Org file links" . ,(or (plist-get output :org-file-link-count) 0))
+    ("Entities" . ,(delib-flow--inspect-output-entities-text output))
+    ("Summary" . ,(delib-flow--inspect-output-summary-text output))
     ("Body preview" . ,(delib-flow--inspect-output-body-preview output))))
 
 (defun delib-flow--inspect-result-meaning-text ()
@@ -5804,9 +5856,12 @@ PRIORITY controls display order."
     ("Source file" . ,(or (plist-get source :file) "No file"))
     ("Proposed source type" . ,(plist-get inspect-output :source-type))
     ("Source type reason" . ,(or (plist-get inspect-output :source-type-reason) "nil"))
+    ("Source type signals" . ,(delib-flow--inspect-output-signal-text inspect-output))
     ("Contacts" . ,(if-let ((emails (plist-get inspect-output :contact-emails)))
                        (mapconcat #'identity emails ", ")
                      "none"))
+    ("Entities" . ,(delib-flow--inspect-output-entities-text inspect-output))
+    ("Summary" . ,(delib-flow--inspect-output-summary-text inspect-output))
     ("Body preview" . ,(or (plist-get inspect-output :body-preview) "No body preview"))))
 
 (defun delib-flow--inspect-context-correction-text (run)
@@ -7872,12 +7927,15 @@ KIND may be a symbol or a list of symbols."
   "Return RUN updated from completed filter ENTRY."
   (let* ((working (delib-flow--run-working-context run))
          (raw (plist-get entry :raw-output))
-         (retained (plist-get raw :retained-candidates)))
+         (retained (plist-get raw :retained-candidates))
+         (retained-context
+          (or (plist-get raw :retained-context)
+              (delib-flow--retained-context-lines retained))))
     (plist-put
      run :working-context
      (plist-put
      (plist-put working :filtered-context raw)
-      :retained-context (delib-flow--retained-context-lines retained)))))
+      :retained-context retained-context))))
 
 (defun delib-flow--apply-propose-new-project-entry (run entry)
   "Return RUN updated from completed propose-new-project ENTRY."
@@ -9053,6 +9111,12 @@ When ANCHOR-SECTION is non-nil, move point to that top-level section."
   (interactive)
   (unless delib-flow--active-run
     (user-error "No active delib-flow run"))
+  (unless (delib-flow--stage-executed-p delib-flow--active-run
+                                        'discover-reference-material)
+    (user-error "Reference discovery must run before filtering retained material"))
+  (unless (plist-get (delib-flow--run-working-context delib-flow--active-run)
+                     :retrieved-candidates)
+    (user-error "No discovered reference material is available to filter"))
   (setq delib-flow--active-run
         (delib-flow--seed-actions
          (delib-flow--run-stage-locally delib-flow--active-run

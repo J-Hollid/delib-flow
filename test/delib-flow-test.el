@@ -4,6 +4,37 @@
 (require 'org)
 (require 'delib-flow)
 
+(defvar jh/ollama-model nil)
+(defvar jh/ollama-url nil)
+
+(defconst delib-flow-test--local-test-config-file
+  (expand-file-name "../delib-flow-local-test-config.el"
+                    (file-name-directory (or load-file-name buffer-file-name)))
+  "Path to the repo-local local-LLM test config when available.")
+
+(defmacro delib-flow-test--with-local-test-config (&rest body)
+  "Load the repo-local local test config, then run BODY.
+
+Skip the test when the local config file is unavailable."
+  (declare (indent 0))
+  `(if (not (file-readable-p delib-flow-test--local-test-config-file))
+       (ert-skip "Local test config not available")
+     (let ((delib-flow-my-projects-file nil)
+           (delib-flow-zk-root nil)
+           (delib-flow-prompt-library-file nil)
+           (delib-flow-example-structures-file nil)
+           (delib-flow-audit-log-file nil)
+           (delib-flow-general-note-template nil)
+           (delib-flow-project-support-note-template nil)
+           (delib-flow-default-local-model nil)
+           (delib-flow-default-cloud-model nil)
+           (delib-flow-cloud-policy-profile nil)
+           (delib-flow-cloud-provider-policy-alist nil)
+           (delib-flow-local-stage-adapter #'delib-flow--default-local-stage-adapter)
+           (delib-flow-cloud-stage-adapter #'delib-flow--default-cloud-stage-adapter))
+       (load-file delib-flow-test--local-test-config-file)
+       ,@body)))
+
 (defmacro delib-flow-test--with-temp-org (&rest body)
   "Run BODY in a temporary Org buffer."
   `(with-temp-buffer
@@ -784,6 +815,69 @@ FILES is an alist of relative path to file content."
       (when delib-flow--active-run
         (delib-flow-abort-run)))))
 
+(ert-deftest delib-flow-debug-start-scenario-contact-disambiguates-replays-to-project-reviewed ()
+  (let ((delib-flow--active-run nil))
+    (unwind-protect
+        (progn
+          (delib-flow-debug-start-scenario 'contact-disambiguates
+                                           'project-reviewed)
+          (let* ((project-match
+                  (plist-get (delib-flow--run-working-context delib-flow--active-run)
+                             :project-match))
+                 (best-project (plist-get project-match :best-project)))
+            (should (eq 'match-project
+                        (plist-get (delib-flow--latest-stage-entry delib-flow--active-run)
+                                   :stage-id)))
+            (should (eq 'matched
+                        (plist-get project-match :match-status)))
+            (should (equal "Alpha Project"
+                           (plist-get best-project :title)))))
+      (when delib-flow--active-run
+        (delib-flow-abort-run)))))
+
+(ert-deftest delib-flow-debug-start-scenario-linked-note-disambiguates-replays-to-project-reviewed ()
+  (let ((delib-flow--active-run nil))
+    (unwind-protect
+        (progn
+          (delib-flow-debug-start-scenario 'linked-note-disambiguates
+                                           'project-reviewed)
+          (let* ((project-match
+                  (plist-get (delib-flow--run-working-context delib-flow--active-run)
+                             :project-match))
+                 (best-project (plist-get project-match :best-project)))
+            (should (eq 'match-project
+                        (plist-get (delib-flow--latest-stage-entry delib-flow--active-run)
+                                   :stage-id)))
+            (should (eq 'matched
+                        (plist-get project-match :match-status)))
+            (should (equal "Beta Project"
+                           (plist-get best-project :title)))))
+      (when delib-flow--active-run
+        (delib-flow-abort-run)))))
+
+(ert-deftest delib-flow-debug-start-scenario-no-match-clean-replays-to-manual-project-ready ()
+  (let ((delib-flow--active-run nil))
+    (unwind-protect
+        (progn
+          (delib-flow-debug-start-scenario 'no-match-clean
+                                           'manual-project-ready)
+          (let ((project-match
+                 (plist-get (delib-flow--run-working-context delib-flow--active-run)
+                            :project-match)))
+            (should (eq 'match-project
+                        (plist-get (delib-flow--latest-stage-entry delib-flow--active-run)
+                                   :stage-id)))
+            (should (eq 'no-match
+                        (plist-get project-match :match-status)))
+            (should (member 'manual-project-match
+                            (mapcar (lambda (action)
+                                      (plist-get action :id))
+                                    (plist-get (delib-flow--run-actions
+                                                delib-flow--active-run)
+                                               :items))))))
+      (when delib-flow--active-run
+        (delib-flow-abort-run)))))
+
 (ert-deftest delib-flow-debug-open-latest-stage-inspection-renders-cloud-failure-diagnostics ()
   (let ((delib-flow--active-run nil))
     (unwind-protect
@@ -918,9 +1012,27 @@ FILES is an alist of relative path to file content."
       (delib-flow--control-buffer-killed))
     (should (null delib-flow--active-run))))
 
+(ert-deftest delib-flow-control-help-renders-keybinding-help ()
+  (let ((buffer (save-window-excursion
+                  (delib-flow-control-help)
+                  (help-buffer))))
+    (with-current-buffer buffer
+      (goto-char (point-min))
+      (should (search-forward "DeliberateFlow control buffer" nil t))
+      (should (search-forward "g  Refresh control buffer" nil t))
+      (should (search-forward "?  Show this help" nil t)))))
+
 (ert-deftest delib-flow-refresh-buffer-errors-without-active-run ()
   (let ((delib-flow--active-run nil))
     (should-error (delib-flow-refresh-buffer))))
+
+(ert-deftest delib-flow-refresh-delegates-to-refresh-buffer ()
+  (let (called)
+    (cl-letf (((symbol-function 'delib-flow-refresh-buffer)
+               (lambda ()
+                 (setq called t))))
+      (delib-flow-refresh))
+    (should called)))
 
 (ert-deftest delib-flow-abort-run-errors-without-active-run ()
   (let ((delib-flow--active-run nil))
@@ -1294,9 +1406,393 @@ FILES is an alist of relative path to file content."
           (goto-char (point-min))
           (should (search-forward "** Relevant source context" nil t))
           (should (search-forward "** Source type correction" nil t))
-          (should-not (search-forward "#(" nil t)))
+          (should-not (search-forward "#(" nil t))))
       (when (buffer-live-p buffer)
-        (kill-buffer buffer)))))
+        (kill-buffer buffer))))
+
+(ert-deftest delib-flow-inspect-result-pairs-include-entities ()
+  (let* ((output '(:source-type email
+                   :source-type-reason "Headers present"
+                   :source-type-signals ("From:" "Subject:")
+                   :title "Example"
+                   :outline-path ("Example")
+                   :body-line-count 3
+                   :content-word-count 10
+                   :contact-emails ("alice@example.com")
+                   :org-file-link-count 1
+                   :body-preview "Preview"
+                   :analysis (:entities ("Bob")
+                              :summary "Summary text")))
+         (pairs (delib-flow--inspect-result-pairs output))
+         (context-pairs (delib-flow--inspect-context-pairs
+                         '(:title "Example" :file "/tmp/example.org")
+                         output)))
+    (should (equal "Bob" (cdr (assoc "Entities" pairs))))
+    (should (equal "Bob" (cdr (assoc "Entities" context-pairs))))))
+
+(ert-deftest delib-flow-inspect-output-entities-text-falls-back-to-none ()
+  (should (equal "none"
+                 (delib-flow--inspect-output-entities-text
+                  '(:analysis nil)))))
+
+(ert-deftest delib-flow-local-test-inspect-raw-output-filters-hallucinated-emails-and-keeps-person-entity ()
+  (delib-flow-test--with-local-test-config
+    (delib-flow-test--with-temp-file-var
+        source-file "delib-flow-source" ".org"
+        "* Alpha Project kickoff\nFrom: alice@example.com\nSubject: Alpha Project kickoff\n\nNext steps:\n- Draft kickoff follow-up\n- Prepare timeline update\nWaiting for Bob to confirm the launch date.\n[[file:notes/alpha-brief.org][Alpha brief]]\n"
+      (let* ((package (list :source
+                            (list :title "Alpha Project kickoff"
+                                  :file source-file
+                                  :content (with-temp-buffer
+                                             (insert-file-contents source-file)
+                                             (buffer-string))
+                                  :outline-path '("Alpha Project kickoff"))))
+             (parsed '((source_type . "email")
+                       (source_type_reason . "Headers present")
+                       (source_type_signals "From:" "Subject:")
+                       (title . "Alpha Project kickoff")
+                       (outline_path "Alpha Project kickoff")
+                       (contact_emails "alice@example.com" "bob@example.com")
+                       (org_file_links "file:notes/alpha-brief.org")
+                       (summary . "Waiting on Bob.")
+                       (entities)
+                       (blockers "Waiting for Bob to confirm the launch date.")))
+             (raw (delib-flow-local-test--inspect-raw-output package parsed)))
+        (should (equal 'email (plist-get raw :source-type)))
+        (should (equal '("alice@example.com")
+                       (plist-get raw :contact-emails)))
+        (should (member "Bob"
+                        (plist-get (plist-get raw :analysis) :entities)))))))
+
+(ert-deftest delib-flow-local-test-inspect-raw-output-rejects-hallucinated-email-headers ()
+  (delib-flow-test--with-local-test-config
+    (delib-flow-test--with-temp-file-var
+        source-file "delib-flow-source" ".org"
+        "* Open questions from note review\nNeed to reconcile the support note with the current project state.\nPlease review the open blockers and dependencies.\n[[file:notes/beta-brief.org][Beta brief]]\n"
+      (let* ((package (list :source
+                            (list :title "Open questions from note review"
+                                  :file source-file
+                                  :content (with-temp-buffer
+                                             (insert-file-contents source-file)
+                                             (buffer-string))
+                                  :outline-path '("Open questions from note review"))))
+             (parsed '((source_type . "email")
+                       (source_type_reason . "presence of email-style headers and forwarded-message markers")
+                       (source_type_signals "From:" "To:" "Subject:")
+                       (title . "Open questions from note review")
+                       (outline_path "Open questions from note review")
+                       (org_file_links "file:notes/beta-brief.org")
+                       (summary . "Review blockers and dependencies.")
+                       (questions "open questions")
+                       (blockers "open blockers")))
+             (raw (delib-flow-local-test--inspect-raw-output package parsed)))
+        (should (eq 'meeting-note (plist-get raw :source-type)))
+        (should-not (member "From:" (plist-get raw :source-type-signals)))
+        (should (member "explicit questions" (plist-get raw :source-type-signals)))
+        (should (member "linked reference note" (plist-get raw :source-type-signals)))
+        (should-not (string-match-p "email-style headers"
+                                    (or (plist-get raw :source-type-reason) "")))))))
+
+(ert-deftest delib-flow-local-test-canonicalize-org-file-links-strips-file-scheme-and-dedupes ()
+  (delib-flow-test--with-local-test-config
+    (let* ((base-dir "/tmp/")
+           (links '("file:notes/alpha-brief.org"
+                    "notes/alpha-brief.org"
+                    "/tmp/notes/alpha-brief.org"))
+           (canonical
+            (delib-flow-local-test--canonicalize-org-file-links links base-dir)))
+      (should (equal '("/tmp/notes/alpha-brief.org") canonical)))))
+
+(ert-deftest delib-flow-local-test-ollama-json-unwraps-nested-envelope ()
+  (delib-flow-test--with-local-test-config
+    (let ((jh/ollama-model "llama3")
+          (jh/ollama-url "http://localhost:11434/api/generate"))
+      (cl-letf (((symbol-function 'delib-flow-local-test--http-post-json)
+                 (lambda (_payload)
+                   "{\"model\":\"llama3\",\"response\":\"{\\\"source_type\\\":\\\"email\\\",\\\"entities\\\":[\\\"Bob\\\"]}\"}")))
+        (let ((parsed (delib-flow-local-test--ollama-json "prompt" 'inspect-source)))
+          (should (equal "email"
+                         (delib-flow-local-test--json-value parsed 'source_type)))
+          (should (equal '("Bob")
+                         (delib-flow-local-test--string-list
+                          (delib-flow-local-test--json-value
+                           parsed
+                           'entities)))))))))
+
+(ert-deftest delib-flow-local-test-match-prompt-explicitly-prefers-ambiguity-over-forced-match ()
+  (delib-flow-test--with-local-test-config
+    (let* ((inspect-output
+            '(:contact-emails nil
+              :org-file-links nil
+              :analysis (:entities ("Alpha" "Beta")
+                         :summary "Could belong to Alpha or Beta.")))
+           (package
+            (list :source
+                  (list :title "Completely Different Topic"
+                        :content "* Completely Different Topic\nAgenda:\n- Clarify whether this belongs to Alpha or Beta work.\n")
+                  :working-context
+                  (list :inspect-output inspect-output)))
+           (prompt (delib-flow-local-test--match-prompt package)))
+      (should (string-match-p "Prefer ambiguity over a forced match" prompt))
+      (should (string-match-p "only overlap is generic wording" prompt)))))
+
+(ert-deftest delib-flow-local-test-match-raw-output-downgrades-weak-split-evidence-to-ambiguous ()
+  (delib-flow-test--with-local-test-config
+    (delib-flow-test--with-temp-project-file
+        "* Alpha Project\n* Beta Project\n"
+      (let* ((inspect-output
+              '(:contact-emails nil
+                :org-file-links nil
+                :analysis (:entities nil
+                           :summary "Could belong to Alpha or Beta work.")))
+             (package
+              (list :source
+                    (list :title "Completely Different Topic"
+                          :content "* Completely Different Topic\nAgenda:\n- Clarify whether this belongs to Alpha or Beta work.\n")
+                    :working-context
+                    (list :inspect-output inspect-output)))
+             (parsed '((match_status . "matched")
+                       (best_project_title . "Alpha Project")
+                       (candidate_titles "Alpha Project" "Beta Project")
+                       (reason . "Matched on alpha mention.")))
+             (raw (delib-flow-local-test--match-raw-output package parsed)))
+        (should (eq 'ambiguous (plist-get raw :match-status)))
+        (should-not (plist-get raw :best-project))
+        (should (= 2 (length (plist-get raw :candidates))))))))
+
+(ert-deftest delib-flow-local-test-match-raw-output-keeps-match-when-contact-evidence-is-strong ()
+  (delib-flow-test--with-local-test-config
+    (delib-flow-test--with-temp-project-file
+        "* Alpha Project\nContact alice@example.com\n* Beta Project\nContact bob@example.com\n"
+      (let* ((inspect-output
+              '(:contact-emails ("alice@example.com")
+                :org-file-links nil
+                :analysis (:entities nil
+                           :summary "Follow up with alice@example.com.")))
+             (package
+              (list :source
+                    (list :title "Kickoff sync"
+                          :content "* Kickoff sync\nPlease follow up with alice@example.com\n")
+                    :working-context
+                    (list :inspect-output inspect-output)))
+             (parsed '((match_status . "matched")
+                       (best_project_title . "Alpha Project")
+                       (candidate_titles "Alpha Project")
+                       (reason . "Contact overlap with alice@example.com.")))
+             (raw (delib-flow-local-test--match-raw-output package parsed)))
+        (should (eq 'matched (plist-get raw :match-status)))
+        (should
+         (equal "Alpha Project"
+                (plist-get (plist-get raw :best-project) :title)))))))
+
+(ert-deftest delib-flow-local-test-match-raw-output-promotes-ambiguous-to-match-on-unique-contact-overlap ()
+  (delib-flow-test--with-local-test-config
+    (delib-flow-test--with-temp-project-file
+        "* Alpha Project\nContact alice@example.com\n* Beta Project\nContact bob@example.com\n"
+      (let* ((inspect-output
+              '(:contact-emails ("alice@example.com")
+                :org-file-links nil
+                :analysis (:entities nil
+                           :summary "Budget follow-up for alice@example.com.")))
+             (package
+              (list :source
+                    (list :title "Budget follow-up"
+                          :content "* Budget follow-up\nPlease reply to alice@example.com\n")
+                    :working-context
+                    (list :inspect-output inspect-output)))
+             (parsed '((match_status . "ambiguous")
+                       (best_project_title . "")
+                       (candidate_titles "Alpha Project" "Beta Project")
+                       (reason . "Both projects remain plausible.")))
+             (raw (delib-flow-local-test--match-raw-output package parsed)))
+        (should (eq 'matched (plist-get raw :match-status)))
+        (should
+         (equal "Alpha Project"
+                (plist-get (plist-get raw :best-project) :title)))))))
+
+(ert-deftest delib-flow-local-test-match-raw-output-promotes-ambiguous-to-match-on-unique-linked-note-overlap ()
+  (delib-flow-test--with-local-test-config
+    (delib-flow-test--with-temp-zk-root
+        '(("notes/beta-brief.org" . "#+title: Beta Brief\nLinked support note.\n"))
+      (let ((linked-file (expand-file-name "notes/beta-brief.org" delib-flow-zk-root)))
+        (delib-flow-test--with-temp-project-file
+            (format "* Alpha Project\nSee [[file:%s][Alpha support]]\n* Beta Project\nSee [[file:%s][Beta brief]]\n"
+                    (expand-file-name "notes/alpha-brief.org" delib-flow-zk-root)
+                    linked-file)
+          (let* ((inspect-output
+                  `(:contact-emails nil
+                    :org-file-links (,linked-file)
+                    :analysis (:entities nil
+                               :summary "Open questions from note review. References beta-brief.")))
+                 (package
+                  (list :source
+                        (list :title "Open questions from note review"
+                              :content (format "* Open questions from note review\nSee [[file:%s][Beta brief]]\n"
+                                               linked-file))
+                        :working-context
+                        (list :inspect-output inspect-output)))
+                 (parsed '((match_status . "ambiguous")
+                           (best_project_title . "")
+                           (candidate_titles "Alpha Project" "Beta Project")
+                           (reason . "A linked note may be relevant, but the text is otherwise generic.")))
+                 (raw (delib-flow-local-test--match-raw-output package parsed)))
+            (should (eq 'matched (plist-get raw :match-status)))
+            (should
+             (equal "Beta Project"
+                    (plist-get (plist-get raw :best-project) :title)))))))))
+
+(ert-deftest delib-flow-local-test-match-raw-output-converts-generic-ambiguous-to-no-match ()
+  (delib-flow-test--with-local-test-config
+    (delib-flow-test--with-temp-project-file
+        "* Alpha Project\nContact alice@example.com\n* Beta Project\nContact bob@example.com\n"
+      (let* ((inspect-output
+              '(:contact-emails nil
+                :org-file-links nil
+                :analysis (:entities nil
+                           :summary "Housekeeping reminder about chores and groceries.")))
+             (package
+              (list :source
+                    (list :title "Housekeeping reminder"
+                          :content "* Housekeeping reminder\n- Tidy up the desk\n- Buy groceries\n")
+                    :working-context
+                    (list :inspect-output inspect-output)))
+             (parsed '((match_status . "ambiguous")
+                       (best_project_title . "")
+                       (candidate_titles "Alpha Project" "Beta Project")
+                       (reason . "The note is generic and does not clearly identify a project.")))
+             (raw (delib-flow-local-test--match-raw-output package parsed)))
+        (should (eq 'no-match (plist-get raw :match-status)))
+        (should-not (plist-get raw :best-project))
+        (should-not (plist-get raw :candidates))))))
+
+(ert-deftest delib-flow-local-test-discover-prompt-requires-exact-candidate-titles ()
+  (delib-flow-test--with-local-test-config
+    (delib-flow-test--with-temp-zk-root
+        '(("beta-brief.org" . "#+title: Beta brief\nNeed to reconcile blockers.\n"))
+      (delib-flow-test--with-temp-project-file
+          "* Beta Project\n[[file:beta-brief.org][Beta brief]]\n"
+        (let* ((run (delib-flow--initialize-run
+                     (list :title "Open questions from note review"
+                           :content "* Open questions from note review\nNeed to reconcile blockers.\n[[file:beta-brief.org][Beta brief]]\n")))
+               (inspected (delib-flow-test--accept-inspect
+                           (delib-flow--run-stage-locally run 'inspect-source)))
+               (matched (delib-flow-test--accept-match
+                         (delib-flow--run-stage-locally inspected 'match-project)))
+               (package (delib-flow--stage-input-package matched
+                                                         'discover-reference-material))
+               (prompt (delib-flow-local-test--discover-prompt package)))
+          (should (string-match-p "Use only exact titles from the provided candidate list" prompt))
+          (should (string-match-p "Do not return the source title, project title" prompt))
+          (should (string-match-p "Do not return candidate objects, note metadata objects, markdown fences, or explanatory prose" prompt))
+          (should (string-match-p "Invalid example: \\[{" prompt))
+          (should (string-match-p "If nothing is relevant, return an empty `candidate_titles` list" prompt))
+          (should (string-match-p "Do not reproduce source summary fields, UI fields, cloud fields, or package metadata" prompt))
+          (should (string-match-p "\"matched_project_title\"" prompt))
+          (should-not (string-match-p "editable-blocks" prompt))
+          (should-not (string-match-p "cloud-routing-review" prompt)))))))
+
+(ert-deftest delib-flow-local-test-discover-raw-output-recovers-array-object-titles ()
+  (delib-flow-test--with-local-test-config
+    (let* ((package '(:source (:title "Open questions from note review")))
+           (base-candidate
+            '(:title "Beta brief"
+              :file "/tmp/notes/beta-brief.org"
+              :score 4
+              :reasons ("title-overlap=1 (+3)" "text-overlap=1 (+1)")))
+           (parsed '(((title . "Beta brief")
+                      (reasons "linked-note-overlap" "explicit title cue"))))
+           raw candidate)
+      (cl-letf (((symbol-function 'delib-flow--discover-reference-material-result)
+                 (lambda (_package)
+                   (list :search-terms '("beta" "brief")
+                         :candidate-count 1
+                         :candidates (list (copy-tree base-candidate))))))
+      (setq raw (delib-flow-local-test--discover-raw-output package parsed))
+      (setq candidate (car (plist-get raw :candidates))))
+      (should (equal 1 (plist-get raw :candidate-count)))
+      (should (equal "Beta brief" (plist-get candidate :title)))
+      (should (equal '("linked-note-overlap" "explicit title cue")
+                     (plist-get candidate :reasons))))))
+
+(ert-deftest delib-flow-local-test-discover-raw-output-recovers-nested-note-objects ()
+  (delib-flow-test--with-local-test-config
+    (let* ((package '(:source (:title "Open questions from note review")))
+           (base-candidate
+            '(:title "Beta brief"
+              :file "/tmp/notes/beta-brief.org"
+              :score 4
+              :reasons ("title-overlap=1 (+3)" "text-overlap=1 (+1)")))
+           (parsed '((notes
+                      .
+                      [((title . "Beta brief")
+                        (reasons "title-overlap=1 (+3)" "text-overlap=1 (+1)"))])
+                     (reason . "Recovered from note objects.")))
+           raw candidate)
+      (cl-letf (((symbol-function 'delib-flow--discover-reference-material-result)
+                 (lambda (_package)
+                   (list :search-terms '("beta" "brief")
+                         :candidate-count 1
+                         :candidates (list (copy-tree base-candidate))))))
+        (setq raw (delib-flow-local-test--discover-raw-output package parsed))
+        (setq candidate (car (plist-get raw :candidates))))
+      (should (equal 1 (plist-get raw :candidate-count)))
+      (should (equal "Beta brief" (plist-get candidate :title)))
+      (should (equal '("title-overlap=1 (+3)" "text-overlap=1 (+1)")
+                     (plist-get candidate :reasons))))))
+
+(ert-deftest delib-flow-local-test-discover-raw-output-falls-back-to-top-candidate-only ()
+  (delib-flow-test--with-local-test-config
+    (delib-flow-test--with-temp-zk-root
+        '(("alpha.org" . "#+title: Alpha Project Notes\nKickoff agenda and blockers.\n")
+          ("gamma.org" . "#+title: Alpha Constraints\nProject constraint detail.\n"))
+      (delib-flow-test--with-temp-project-file
+          "* Alpha Project\n"
+        (let* ((run (delib-flow--initialize-run
+                     (list :title "Alpha Project kickoff"
+                           :content "* Alpha Project kickoff\nAgenda\n")))
+               (inspected (delib-flow-test--accept-inspect
+                           (delib-flow--run-stage-locally run 'inspect-source)))
+               (matched (delib-flow-test--accept-match
+                         (delib-flow--run-stage-locally inspected 'match-project)))
+               (package (delib-flow--stage-input-package matched
+                                                         'discover-reference-material))
+               (base (delib-flow--discover-reference-material-result package))
+               (base-candidates (plist-get base :candidates))
+               (parsed '((candidate_titles "Alpha Project kickoff")
+                         (reason . "Using the source title instead of a candidate title.")))
+               (raw (delib-flow-local-test--discover-raw-output package parsed)))
+          (should (> (length base-candidates) 1))
+          (should (equal 1 (plist-get raw :candidate-count)))
+          (should (equal (plist-get (car base-candidates) :title)
+                         (plist-get (car (plist-get raw :candidates)) :title)))
+          (should (string-match-p "did not name valid candidate titles"
+                                  (plist-get raw :reason))))))))
+
+(ert-deftest delib-flow-local-test-discover-salvaged-parsed-recovers-titles-from-raw-text ()
+  (delib-flow-test--with-local-test-config
+    (let* ((package '(:source (:title "Open questions from note review")))
+           (base-candidate
+            '(:title "Beta brief"
+              :file "/tmp/notes/beta-brief.org"
+              :score 4
+              :reasons ("title-overlap=1 (+3)" "text-overlap=1 (+1)")))
+           (delib-flow-local-test--last-ollama-response
+            "Here is a valid JSON object:\n\n```json\n{\"notes\":[{\"title\":\"Beta brief\",\"score\":4}],\"ui\":{\"editable_blocks\":[{\"context-main\": ...}]}}\n```")
+           (delib-flow-local-test--last-ollama-json-fragment
+            "{\"notes\":[{\"title\":\"Beta brief\",\"score\":4}],\"ui\":{\"editable_blocks\":[{\"context-main\": ...}]}}")
+           (delib-flow-local-test--last-ollama-parse-error
+            '(json-readtable-error 46))
+           salvaged)
+      (cl-letf (((symbol-function 'delib-flow--discover-reference-material-result)
+                 (lambda (_package)
+                   (list :search-terms '("beta" "brief")
+                         :candidate-count 1
+                         :candidates (list (copy-tree base-candidate))))))
+        (setq salvaged (delib-flow-local-test--discover-salvaged-parsed package)))
+      (should (equal '("Beta brief")
+                     (delib-flow-local-test--json-value salvaged 'candidate_titles)))
+      (should (string-match-p "Recovered discovery candidate titles"
+                              (delib-flow-local-test--json-value salvaged 'reason))))))
 
 (ert-deftest delib-flow-accept-inspect-source-updates-review-state-and-actions ()
   (let* ((run (delib-flow--initialize-run
@@ -2260,6 +2756,38 @@ FILES is an alist of relative path to file content."
         (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
           (kill-buffer (get-buffer delib-flow-control-buffer-name)))))))
 
+(ert-deftest delib-flow-filter-reference-material-action-hidden-without-discovery-candidates ()
+  (delib-flow-test--with-temp-zk-root
+      '(("misc.org" . "#+title: Chores\nGroceries and laundry.\n"))
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Housekeeping reminder"
+                       :content "* Housekeeping reminder\nGroceries and chores\n")))
+           (inspected (delib-flow--run-stage-locally run 'inspect-source))
+           (discovered
+            (delib-flow--run-stage-locally inspected
+                                           'discover-reference-material))
+           (actions (plist-get (delib-flow--run-actions
+                                (delib-flow--seed-actions discovered))
+                               :items)))
+      (should-not (member 'filter-reference-material
+                          (mapcar (lambda (action)
+                                    (plist-get action :id))
+                                  actions))))))
+
+(ert-deftest delib-flow-filter-reference-material-command-errors-without-discovery-candidates ()
+  (delib-flow-test--with-temp-zk-root
+      '(("misc.org" . "#+title: Chores\nGroceries and laundry.\n"))
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Housekeeping reminder"
+                       :content "* Housekeeping reminder\nGroceries and chores\n")))
+           (inspected (delib-flow--run-stage-locally run 'inspect-source))
+           (discovered
+            (delib-flow--run-stage-locally inspected
+                                           'discover-reference-material))
+           (delib-flow--active-run discovered))
+      (should-error (delib-flow-action-filter-reference-material)
+                    :type 'user-error))))
+
 (ert-deftest delib-flow-filter-reference-material-annotates-fallback-retention ()
   (let* ((candidate-a (list :title "Top candidate"
                             :score 1
@@ -2333,6 +2861,246 @@ FILES is an alist of relative path to file content."
                          (plist-get (car (plist-get filtered :rejected-candidates))
                                     :filter-reasons))))
       (delete-file file))))
+
+(ert-deftest delib-flow-local-test-filter-prompt-requests-retained-context ()
+  (delib-flow-test--with-local-test-config
+    (let* ((candidate (list :title "Beta brief"
+                            :file (make-temp-file "delib-flow-note" nil ".org"
+                                                  "#+title: Beta brief\nNeed to reconcile blockers.\n")
+                            :score 4
+                            :reasons '("title-overlap=1 (+3)")))
+           (package
+            (list :source (list :title "Open questions from note review")
+                  :working-context
+                  (list :retrieved-candidates (list candidate)
+                        :review-results
+                        (list
+                         (cons 'inspect-source
+                               (list :accepted-output
+                                     (list :title "Open questions from note review"
+                                           :source-type 'meeting-note
+                                           :body-preview "Need to reconcile the support note with the current project state."
+                                           :analysis
+                                           (list :summary "Need to reconcile blockers."
+                                                 :blockers '("Open blockers")
+                                                 :questions '("What remains open?")
+                                                 :contacts nil
+                                                 :entities '("Beta"))
+                                           :org-file-links '("/tmp/notes/beta-brief.org"))))
+                         (cons 'match-project
+                               (list :accepted-output
+                                     (list :best-project
+                                           (list :title "Beta Project"))))))))
+           (prompt (delib-flow-local-test--filter-prompt package)))
+      (unwind-protect
+          (progn
+            (should (string-match-p "\"retained_context\": \"short multi-line context text\"" prompt))
+            (should (string-match-p "The primary goal is to produce `retained_context`" prompt))
+            (should (string-match-p "\"preview\"" prompt))
+            (should (string-match-p "\"summary\":\"Need to reconcile blockers.\"" prompt))
+            (should (string-match-p "\"body_preview\":\"Need to reconcile the support note with the current project state.\"" prompt))
+            (should (string-match-p "\"blockers\":\\[\"Open blockers\"\\]" prompt))
+            (should (string-match-p "\"questions\":\\[\"What remains open\\?\"\\]" prompt))
+            (should (string-match-p "Synthesize source-side need with the retained note evidence" prompt))
+            (should (string-match-p "Do not copy example wording unless the same substance is supported" prompt))
+            (should (string-match-p "Relevant note: Candidate title here - short preview grounded in the note" prompt))
+            (should (string-match-p "Do not return the source title or project title in `retained_titles`" prompt)))
+        (delete-file (plist-get candidate :file))))))
+
+(ert-deftest delib-flow-local-test-filter-raw-output-prefers-retained-context ()
+  (delib-flow-test--with-local-test-config
+    (let ((file (make-temp-file "delib-flow-note" nil ".org"
+                                "#+title: Beta brief\nNeed to reconcile blockers.\n")))
+      (unwind-protect
+          (let* ((candidate (list :title "Beta brief"
+                                  :file file
+                                  :score 4
+                                  :reasons '("title-overlap=1 (+3)" "text-overlap=1 (+1)")))
+                 (package (list :working-context
+                                (list :retrieved-candidates (list candidate))))
+                 (parsed '((retained_titles "Beta brief")
+                           (items
+                            (((title . "Beta brief")
+                              (reasons "linked note mentions blockers"))))
+                           (retained_context
+                            . "- Beta brief: reconcile blockers before next step.\n- Open dependency remains.")
+                           (reason . "keeps blocker context for downstream extraction")))
+                 (raw (delib-flow-local-test--filter-raw-output package parsed)))
+            (should (equal "- Beta brief: reconcile blockers before next step.\n- Open dependency remains."
+                           (plist-get raw :retained-context)))
+            (should (equal 1 (plist-get raw :retained-count))))
+        (delete-file file)))))
+
+(ert-deftest delib-flow-local-test-filter-raw-output-enriches-thin-context ()
+  (delib-flow-test--with-local-test-config
+    (let ((file (make-temp-file "delib-flow-note" nil ".org"
+                                "#+title: Beta brief\nCurrent blockers\nFollow up with operations\n")))
+      (unwind-protect
+          (let* ((candidate (list :title "Beta brief"
+                                  :file file
+                                  :score 4
+                                  :reasons '("title-overlap=1 (+3)" "text-overlap=1 (+1)")))
+                 (package
+                  (list :source (list :title "Open questions from note review")
+                        :working-context
+                        (list :retrieved-candidates (list candidate)
+                              :review-results
+                              (list
+                               (cons 'inspect-source
+                                     (list :accepted-output
+                                           (list :title "Open questions from note review"
+                                                 :source-type 'meeting-note
+                                                 :body-preview "Need to reconcile the support note with the current project state."
+                                                 :analysis
+                                                 (list :summary ""
+                                                       :blockers '("Review blockers and dependencies")
+                                                       :questions nil
+                                                       :contacts nil
+                                                       :entities '("Beta"))
+                                                 :org-file-links '("/tmp/notes/beta-brief.org"))))
+                               (cons 'match-project
+                                     (list :accepted-output
+                                           (list :best-project
+                                                 (list :title "Beta Project"))))))))
+                 (parsed '((retained_titles "Beta brief")
+                           (items
+                            (((title . "Beta brief")
+                              (reasons "linked note mentions blockers"))))
+                           (retained_context
+                            . "- Current blockers - Follow up with operations")
+                           (reason . "keeps blocker context for downstream extraction")))
+                 (raw (delib-flow-local-test--filter-raw-output package parsed))
+                 (context (plist-get raw :retained-context)))
+            (should (string-match-p "Need to reconcile the support note with the current project state" context))
+            (should (string-match-p "Review blockers and dependencies" context))
+            (should (string-match-p "Relevant note: Beta brief" context)))
+        (delete-file file)))))
+
+(ert-deftest delib-flow-local-test-filter-raw-output-replaces-mismatched-note-context ()
+  (delib-flow-test--with-local-test-config
+    (let ((file (make-temp-file "delib-flow-note" nil ".org"
+                                "#+title: Alpha brief\nKickoff context\n")))
+      (unwind-protect
+          (let* ((candidate (list :title "Alpha brief"
+                                  :file file
+                                  :score 5
+                                  :reasons '("title-overlap=1 (+3)" "text-overlap=2 (+2)")))
+                 (package
+                  (list :source (list :title "Alpha Project kickoff")
+                        :working-context
+                        (list :retrieved-candidates (list candidate)
+                              :review-results
+                              (list
+                               (cons 'inspect-source
+                                     (list :accepted-output
+                                           (list :title "Alpha Project kickoff"
+                                                 :source-type 'email
+                                                 :body-preview "Next steps include drafting a follow-up and preparing a timeline update."
+                                                 :analysis
+                                                 (list :summary "Waiting for Bob to confirm the launch date."
+                                                       :blockers '("waiting on confirmation from Bob")
+                                                       :questions nil
+                                                       :contacts '("alice@example.com")
+                                                       :entities '("Bob"))
+                                                 :org-file-links '("/tmp/notes/alpha-brief.org"))))
+                               (cons 'match-project
+                                     (list :accepted-output
+                                           (list :best-project
+                                                 (list :title "Alpha Project"))))))))
+                 (parsed '((retained_titles "Alpha brief")
+                           (items
+                            (((title . "Alpha brief")
+                              (reasons "title overlap"))))
+                           (retained_context
+                            . "- Relevant note: Beta brief - Current blockers and follow-up points.\n- Need to reconcile the support note with the current project state.")
+                           (reason . "bad copied example text")))
+                 (raw (delib-flow-local-test--filter-raw-output package parsed))
+                 (context (plist-get raw :retained-context)))
+            (should (string-match-p "Relevant note: Alpha brief" context))
+            (should-not (string-match-p "Beta brief" context))
+            (should (string-match-p "Waiting for Bob to confirm the launch date" context)))
+        (delete-file file)))))
+
+(ert-deftest delib-flow-local-test-filter-raw-output-replaces-compressed-incomplete-context ()
+  (delib-flow-test--with-local-test-config
+    (let ((file (make-temp-file "delib-flow-note" nil ".org"
+                                "#+title: Beta brief\nCurrent blockers\nFollow up with operations\n")))
+      (unwind-protect
+          (let* ((candidate (list :title "Beta brief"
+                                  :file file
+                                  :score 4
+                                  :reasons '("title-overlap=1 (+3)" "text-overlap=1 (+1)")))
+                 (package
+                  (list :source (list :title "Open questions from note review")
+                        :working-context
+                        (list :retrieved-candidates (list candidate)
+                              :review-results
+                              (list
+                               (cons 'inspect-source
+                                     (list :accepted-output
+                                           (list :title "Open questions from note review"
+                                                 :source-type 'meeting-note
+                                                 :body-preview "Need to reconcile the support note with the current project state."
+                                                 :analysis
+                                                 (list :summary "Reconcile support note with current project state, review open blockers and dependencies."
+                                                       :blockers '("open blockers")
+                                                       :questions '("Open questions")
+                                                       :contacts nil
+                                                       :entities nil)
+                                                 :org-file-links '("/tmp/notes/beta-brief.org"))))
+                               (cons 'match-project
+                                     (list :accepted-output
+                                           (list :best-project
+                                                 (list :title "Beta Project"))))))))
+                 (parsed '((retained_titles "Beta brief")
+                           (items
+                            (((title . "Beta brief")
+                              (reasons "linked note mentions blockers"))))
+                           (retained_context
+                            . "- Current need: reconcile the support note with the current project state. - Open dependency: follow up with operations.")
+                           (reason . "compressed but incomplete")))
+                 (raw (delib-flow-local-test--filter-raw-output package parsed))
+                 (context (plist-get raw :retained-context)))
+            (should (string-match-p "\n- Open blockers or dependencies:" context))
+            (should (string-match-p "\n- Relevant note: Beta brief" context)))
+        (delete-file file)))))
+
+(ert-deftest delib-flow-local-test-filter-raw-output-rejects-non-candidate-retained-titles ()
+  (delib-flow-test--with-local-test-config
+    (let ((file (make-temp-file "delib-flow-note" nil ".org"
+                                "#+title: Beta brief\nNeed to reconcile blockers.\n")))
+      (unwind-protect
+          (let* ((candidate (list :title "Beta brief"
+                                  :file file
+                                  :score 4
+                                  :reasons '("title-overlap=1 (+3)" "text-overlap=1 (+1)")))
+                 (package (list :working-context
+                                (list :retrieved-candidates (list candidate))))
+                 (parsed '((retained_titles "Open questions from note review")
+                           (items
+                            (((title . "Beta brief")
+                              (reasons "linked note mentions blockers"))))
+                           (retained_context
+                            . "- Beta brief: reconcile blockers before next step.")
+                           (reason . "keeps blocker context for downstream extraction")))
+                 (raw (delib-flow-local-test--filter-raw-output package parsed)))
+            (should (equal 1 (plist-get raw :retained-count)))
+            (should (equal "Beta brief"
+                           (plist-get (car (plist-get raw :retained-candidates))
+                                      :title))))
+        (delete-file file)))))
+
+(ert-deftest delib-flow-apply-filter-entry-prefers-raw-retained-context ()
+  (let* ((run (list :working-context (list :filtered-context nil :retained-context nil)))
+         (entry (list :raw-output
+                      (list :retained-candidates
+                            (list (list :title "Beta brief"))
+                            :retained-context
+                            "- Beta brief: reconcile blockers before next step.")))
+         (updated (delib-flow--apply-filter-entry run entry)))
+    (should (equal "- Beta brief: reconcile blockers before next step."
+                   (plist-get (plist-get updated :working-context)
+                              :retained-context)))))
 
 (ert-deftest delib-flow-extract-actions-updates-stage-history-and-filing ()
   (delib-flow-test--with-temp-zk-root

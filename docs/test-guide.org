@@ -169,6 +169,209 @@ Supported checkpoints:
 - =project-reviewed=
 - =manual-project-ready=
 
+** =contact-disambiguates=
+
+Purpose:
+Exercise a weak-title source where project contact metadata should still produce
+a confident match.
+
+Supported checkpoints:
+
+- =source=
+- =inspect-reviewed=
+- =project-reviewed=
+- =context-ready=
+- =artifact-ready=
+- =cloud-ready=
+- =cloud-failure-ready=
+- =filing-ready=
+
+** =linked-note-disambiguates=
+
+Purpose:
+Exercise a weak-title source where a referenced Org note should push the match
+toward the correct project.
+
+Supported checkpoints:
+
+- =source=
+- =inspect-reviewed=
+- =project-reviewed=
+- =context-ready=
+- =artifact-ready=
+- =cloud-ready=
+- =cloud-failure-ready=
+- =filing-ready=
+
+** =no-match-clean=
+
+Purpose:
+Exercise a source that should remain unmatched and fall through to manual
+selection rather than forcing a weak project decision.
+
+Supported checkpoints:
+
+- =source=
+- =inspect-reviewed=
+- =project-reviewed=
+- =manual-project-ready=
+
+* Local LLM Strategy
+
+This section is the handoff-oriented strategy for stage-by-stage hardening of
+the local LLM path.
+
+Use it when:
+
+- you are testing one stage at a time rather than replaying the full
+  deterministic walkthrough
+- you want to resume a previous Codex hardening session
+- you want the logs to be the main artifact for operator review
+
+** Session Bootstrap
+
+Use the one-shot bootstrap:
+
+#+begin_example
+M-x load-file RET /home/j-holliday/.emacs.d/site-lisp/delib-flow/scripts/load-delib-flow-local-llm-session.el RET
+#+end_example
+
+That path:
+
+- loads =delib-flow-local-test-config.el=
+- clears the local LLM log
+- clears the audit log
+- starts Ollama if needed
+- runs the readiness check
+
+Useful helpers during a session:
+
+- =M-x delib-flow-local-test-start-debug-scenario=
+- =M-x delib-flow-local-test-open-llm-log=
+- =M-x delib-flow-local-test-open-ollama-buffer=
+
+Primary evidence files:
+
+- local LLM log: =/tmp/delib-flow-local-llm-log.org=
+- audit logs: debug scenarios use temp audit files, not a fixed
+  =/tmp/delib-flow-audit.org=
+
+** Operator Loop
+
+For local-LLM hardening, prefer this loop:
+
+1. Start a debug scenario at the checkpoint just before the stage under test.
+2. Run only the next stage manually.
+3. Inspect the control-buffer output.
+4. Inspect the latest stage block in =/tmp/delib-flow-local-llm-log.org=.
+5. Judge:
+   - was the stage output structurally valid
+   - was the reasoning/operator-facing text useful
+   - did the stage preserve the downstream-useful information
+6. Rerun only when the output is weak or malformed.
+
+The local-LLM path is expected to require operator review. The goal is not to
+eliminate all variance. The goal is to make failure shapes bounded, legible,
+and recoverable.
+
+** Recommended Stage Order
+
+Use this order when hardening progressively:
+
+1. =inspect-source=
+2. =match-project=
+3. =discover-reference-material=
+4. =filter-reference-material=
+5. =extract-actions=
+6. =extract-waiting-for=
+7. =suggest-reference-notes=
+8. =integrate-into-source=
+
+The reason for this order is simple: each stage should receive acceptable
+upstream context before you start judging its own quality.
+
+** Recommended Scenario Order
+
+Use these scenarios repeatedly while moving from stage to stage:
+
+1. =alpha-followup=
+   Baseline matched-project path with straightforward source cues.
+2. =manual-project-override=
+   Ambiguity calibration path.
+3. =contact-disambiguates=
+   Weak wording, strong direct contact cue.
+4. =linked-note-disambiguates=
+   Weak wording, strong linked-note cue.
+5. =no-match-clean=
+   Clean no-match path.
+
+After those are stable, move to a real heading from your own notes.
+
+** What To Check Per Stage
+
+For =inspect-source=:
+
+- source type should be defensible from literal cues
+- contacts must be literal/high-trust
+- entities should preserve person/project signals without junk
+- links should be canonicalized
+- summary should keep the material that matters downstream
+
+For =match-project=:
+
+- avoid forced matches on generic overlap
+- choose =ambiguous= when evidence is split
+- choose =no-match= when evidence is generic
+- allow unique contact or linked-note evidence to tip to =matched=
+
+For =discover-reference-material=:
+
+- prefer clean =candidate_titles= output
+- retrieve the obviously relevant note near the top
+- avoid broad package/UI echoing
+- keep failure bounded when the model drifts
+
+For =filter-reference-material=:
+
+- preserve concrete downstream-useful context, not just note titles
+- keep blockers, questions, dependencies, and note relevance when present
+- drop noise rather than collapsing to vague summaries
+- degrade clearly when there are no candidates
+- do not offer or run the filter stage when discovery returned no candidates
+
+** Current Progress Snapshot
+
+As of the current local-LLM hardening pass:
+
+- =inspect-source= is in good shape for the current testing goal
+  - hardened against hallucinated email-header classification
+  - uses deterministic counts where appropriate
+  - keeps richer summary/entity/link/contact signals
+- =match-project= is in good shape for the current testing goal
+  - stress scenarios cover ambiguity, no-match, contact disambiguation, and
+    linked-note disambiguation
+- =discover-reference-material= is in good shape structurally
+  - compact prompt reduced schema drift substantially
+  - the model is now usually returning clean =candidate_titles=
+- =filter-reference-material= is now in a usable state for the current testing
+  goal
+  - it produces explicit =retained_context= instead of title-only retention
+  - compressed or contaminated contexts are now replaced by richer grounded
+    fallback context
+  - no-candidate runs are now blocked at the action/command level
+- the next stage to harden is =extract-actions=
+
+If another Codex session picks this up, start at:
+
+1. load the local-LLM bootstrap
+2. optionally rerun a quick confidence pass on =filter-reference-material= for
+   - =linked-note-disambiguates=
+   - =contact-disambiguates=
+   - =alpha-followup=
+3. move next to =extract-actions=
+4. check that extracted actions preserve every concrete next step from the
+   source and retained context
+
 ** =filing-conflict=
 
 Purpose:
@@ -222,6 +425,20 @@ Each walkthrough target defines:
 
 Use =W= at any point to see the current target, current checkpoint, next
 checkpoint, and the built-in expectation text.
+
+* Suggested Stress Order
+
+For local-LLM project-match stress testing, this is a useful progression:
+
+1. =manual-project-override=
+   Expect =ambiguous=. The model should not force a winner.
+2. =no-match-clean=
+   Expect =no-match=. The model should avoid inventing a weak project connection.
+3. =contact-disambiguates=
+   Expect =matched=. Contact overlap should be strong enough to break ambiguity.
+4. =linked-note-disambiguates=
+   Expect =matched=. Linked-note context should tip the decision even when the
+   source title is weak.
 
 * Standard Verification Loop
 

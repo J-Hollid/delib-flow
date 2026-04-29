@@ -387,6 +387,37 @@ There is also a repo-local manual testing bootstrap in
 That file is intended for live local testing and shows a fuller configuration
 example, including adapter wiring and audit logging.
 
+For one-shot local LLM session setup, use
+[[file:scripts/load-delib-flow-local-llm-session.el][scripts/load-delib-flow-local-llm-session.el]].
+That bootstrap loads your local test config, clears the audit and LLM logs,
+starts Ollama if needed, and runs the readiness check.
+
+Current local-LLM manual-test status:
+
+- =inspect-source= has been hardened for messy real notes, including stricter
+  source-type recovery, literal email enforcement, entity surfacing, and
+  richer analysis fields.
+- =match-project= has been hardened against overmatching, with explicit support
+  for ambiguity, no-match, unique contact disambiguation, and unique linked
+  note disambiguation.
+- =discover-reference-material= now uses a compact prompt and is currently
+  behaving reliably in the built-in stress scenarios, with clean
+  =candidate_titles= output instead of broad package echoing.
+- =filter-reference-material= now produces retained working context rather than
+  title-only retention, includes guards against no-candidate runs, and is in a
+  usable state for downstream testing.
+- The next local-LLM hardening target is =extract-actions=.
+
+If you are resuming a local-LLM hardening session, the detailed stage-by-stage
+test strategy and current progress snapshot are documented in
+[[file:docs/test-guide.org][docs/test-guide.org]].
+
+For deterministic scenario testing with the built-in debug fixtures, use the
+repo-tracked bootstrap in
+[[file:scripts/load-delib-flow-debug-session.el][scripts/load-delib-flow-debug-session.el]].
+That path does not require your real projects file or ZK because the scenarios
+create disposable temp fixtures automatically.
+
 Suggested setup order:
 
 1. Set `delib-flow-my-projects-file`.
