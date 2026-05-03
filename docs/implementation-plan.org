@@ -87,8 +87,250 @@ intend to implement.
 - The current codebase now includes a stable control-buffer foundation plus
   seventeen executable stage implementations with stage-history persistence and
   stage-dependent next actions.
+- A dedicated control-buffer redesign is now planned before additional
+  interaction complexity is added. The redesign focuses on cockpit readability,
+  operator decision speed, filing clarity, and alignment with established Emacs
+  special-buffer interaction patterns.
+- Control-buffer redesign phases 1 through 3 are now implemented:
+  cockpit information hierarchy, section/action navigation, and shortlist-based
+  selection surfaces for manual project and filing choice.
+- Control-buffer redesign phase 4 is now implemented:
+  the filing workspace foregrounds exact staged insert previews, keeps target
+  consequences local to the filing area, and distinguishes staged-unsaved
+  buffers from already saved output.
+- Control-buffer redesign phase 5 is now implemented:
+  the cockpit now advertises itself as a special operational surface, uses a
+  tighter special-buffer key foundation, and wires standard revert behavior to
+  delib-flow refresh while preserving the existing editable review islands.
 - This plan should be kept in sync with changes in scope or implementation
   order.
+
+* Control-buffer redesign roadmap
+
+This roadmap translates the updated design direction in
+[[file:design.org][design.org]] into a concrete implementation sequence. It should land before
+further large UI additions so the operator interaction model does not become
+more fragmented.
+
+This roadmap now also treats terminal and mobile friendliness as a first-class
+constraint. The package should remain comfortable to operate from terminal
+Emacs over SSH on a narrow viewport, not just from a wide desktop frame.
+
+** Goals
+
+- Reduce operator scanning cost in the main workflow buffer.
+- Keep the most important state and consequence information visible together.
+- Reduce repeated scroll-jump-scroll loops during project review and filing.
+- Shift selection-heavy states toward completion and tabular presentation.
+- Preserve the existing workflow semantics while improving the interaction
+  model.
+- Make the cockpit usable from narrow terminal sessions with bounded vertical
+  space and limited keyboard reach.
+- Keep action discovery available at all times through local menus and
+  lightweight help.
+
+** Non-goals
+
+- Reopening stage semantics or workflow ordering.
+- Replacing the audit system.
+- Turning the package into a multi-buffer dashboard for every task.
+- Removing all inline editing; some focused edit surfaces should remain.
+
+** Phase 6: Mobile cockpit foundation
+
+Scope:
+
+- Add an explicit narrow-screen operating model to the cockpit.
+- Introduce bounded summary rendering for long result and context surfaces.
+- Add a focus-mode toggle that hides non-essential sections during active work.
+- Add terminal-specific readability defaults modeled after `command-deck`:
+  conservative header-line usage, line wrapping policy, and reduced visual
+  churn.
+
+Acceptance criteria:
+
+- The first screen in terminal Emacs shows current state, recommendation, and
+  immediate consequence without long scrolling.
+- The operator can enter a focus mode that keeps only the active decision loop
+  visible.
+- Long sections degrade into bounded excerpts with an explicit expand action
+  instead of flooding the viewport.
+
+** Phase 7: Recommendation and quick-action layer
+
+Scope:
+
+- Split top-of-buffer action surfacing into `Recommended next pass`,
+  `Quick actions`, and `More actions`.
+- Add per-stage recommendation logic explaining why the current next pass is
+  preferred.
+- Add stable short action descriptions suitable for narrow screens.
+
+Acceptance criteria:
+
+- The cockpit always shows one recommended next pass when one is defensibly
+  available.
+- The operator can act on the most likely next step without scanning the full
+  action list.
+- The same run still exposes the broader legal action list for expert use.
+
+** Phase 8: Context menus and control hints
+
+Scope:
+
+- Add section-local context menus for the main work areas.
+- Add an always-available control-hints surface.
+- Add explicit blocked-state explainers and local “what can I do here?” help.
+
+Acceptance criteria:
+
+- The operator can discover local actions from the current section without
+  scanning the entire cockpit.
+- Help output includes global controls, local controls, recommendation, and
+  current blocked reasons.
+- Context-menu interaction remains practical in terminal Emacs.
+
+** Phase 9: Mobile filing workspace
+
+Scope:
+
+- Tighten the filing loop for one-viewport operation on narrow screens.
+- Surface selected artifact, target, template, staged preview, and save state
+  together.
+- Add explicit peek actions for staged targets and retained note context.
+
+Acceptance criteria:
+
+- Filing decisions can be made from one compact workspace without repeated
+  top-to-bottom scrolling.
+- The operator can always tell what is staged, where it goes, and whether it
+  is saved.
+- Filing preview remains truthful for both project entries and note captures.
+
+** Phase 10: Resume and recovery ergonomics
+
+Scope:
+
+- Add “resume where I left off” behavior after refresh and rerender.
+- Surface the last meaningful workflow change and the current blocked reason in
+  a compact form.
+- Add explicit commands to jump to the active decision loop and to the most
+  recent consequence preview.
+
+Acceptance criteria:
+
+- Refresh reduces orientation loss rather than increasing it.
+- The operator can quickly recover after distraction, reconnection, or rerender.
+- The cockpit can reestablish the active work loop in a terminal session
+  without rescanning old material.
+
+** Phase 1: Cockpit information architecture
+
+Scope:
+
+- Redesign the top-of-buffer into a compact decision strip.
+- Reorder the primary viewport around recommendation, current selection,
+  current result, and immediate consequence preview.
+- Demote draft backlog, stage history, audit, and debug surfaces below the
+  active work area.
+- Define clearer default expansion and collapse rules.
+
+Acceptance criteria:
+
+- One screen answers stage, blockage, recommendation, active selection, and
+  filing target questions without scrolling.
+- The filing area keeps actions and target preview visible together.
+- Rerender preserves local context more often than forcing broad top-level
+  relocation.
+
+** Phase 2: Navigation and action model
+
+Scope:
+
+- Add explicit section navigation commands and stable next/previous movement.
+- Add button-first interaction for actionable items.
+- Keep global keybindings minimal and section-local behavior more prominent.
+- Improve inline help so the relevant action model is visible where it is used.
+
+Acceptance criteria:
+
+- The operator can move through sections and actions without scanning for
+  headings manually.
+- Action invocation works cleanly through =RET= and button navigation.
+- Help output matches the actual dominant control flow instead of listing every
+  possible command as equal.
+
+** Phase 3: Selection UI redesign
+
+Scope:
+
+- Replace prose-heavy comparison surfaces with tabular or row-oriented
+  selection views where appropriate.
+- Make manual project choice and filing-artifact choice first-class chooser
+  experiences.
+- Keep free-text selection blocks only as fallback paths.
+
+Acceptance criteria:
+
+- Manual project selection is easier through completion or a compact candidate
+  list than through direct block editing.
+- Filing-artifact choice is readable as a shortlist instead of a long prose
+  review.
+- Selection commands preserve and immediately refresh downstream legality.
+
+** Phase 4: Filing workspace redesign
+
+Scope:
+
+- Reframe filing around current artifact, local actions, target preview, and
+  staged content preview.
+- Ensure consequence-heavy actions open predictable sibling previews.
+- Clarify the distinction between staged-unsaved output and already saved
+  output.
+
+Acceptance criteria:
+
+- The active filing decision can be completed from one local area of the
+  cockpit.
+- The operator can inspect staged output before saving.
+- Filed history, conflicts, and backlog remain available without crowding the
+  main filing loop.
+
+** Phase 5: Mode and rendering foundation
+
+Scope:
+
+- Evaluate moving the primary control surface toward =special-mode=-style
+  behavior while preserving the section/folding capabilities that still matter.
+- Isolate section-local rendering and behavior more explicitly.
+- Reduce the number of states that depend on large editable document regions.
+
+Acceptance criteria:
+
+- The control buffer behaves like a generated operational interface first and a
+  text document second.
+- Read-only versus editable ownership is easier to reason about in both code
+  and tests.
+- The rendering model becomes simpler to extend without reintroducing layout
+  friction.
+
+** Test and validation additions
+
+Each redesign phase should add or update tests for:
+
+- point preservation and rerender anchoring
+- section expansion policy
+- button and action dispatch behavior
+- chooser refresh behavior after selection
+- staged-preview visibility and target truthfulness
+- window/display behavior for consequence previews where deterministic enough
+
+** Documentation deliverables before code
+
+- Keep [[file:design.org][design.org]] as the UI intent contract.
+- Keep this implementation roadmap in sync with sequencing and status.
+- Update [[file:README.org][README.org]] when user-facing control behavior changes.
+- Update [[file:test-guide.org][test-guide.org]] whenever manual verification steps or control keys change.
 
 * Milestone 1 outcome
 
@@ -1939,12 +2181,12 @@ implementation record.
 
 ** File responsibilities
 
-- [delib-flow.el](/home/j-holliday/.emacs.d/site-lisp/delib-flow/delib-flow.el:1)
+- `delib-flow.el`
   should continue to hold the Milestone 1 runtime, state helpers, rendering,
   lifecycle commands, and action dispatch.
-- [test/delib-flow-test.el](/home/j-holliday/.emacs.d/site-lisp/delib-flow/test/delib-flow-test.el:1)
+- `test/delib-flow-test.el`
   should grow into the main Milestone 1 contract test file.
-- [docs/implementation-plan.org](/home/j-holliday/.emacs.d/site-lisp/delib-flow/docs/implementation-plan.org:1)
+- `docs/implementation-plan.org`
   is the planning source of truth for task order and accepted contracts.
 
 ** Task sequence
@@ -2107,8 +2349,8 @@ Scope limits:
   `delib-flow-start` coherent under the new state shape.
 
 Target files:
-- [delib-flow.el](/home/j-holliday/.emacs.d/site-lisp/delib-flow/delib-flow.el:1)
-- [test/delib-flow-test.el](/home/j-holliday/.emacs.d/site-lisp/delib-flow/test/delib-flow-test.el:1)
+- `delib-flow.el`
+- `test/delib-flow-test.el`
 
 Planned changes in `delib-flow.el`:
 
@@ -2248,3 +2490,157 @@ Recommended implementation order inside Slice A:
   than the architectural sequence alone would suggest.
 - If validation commands are not introduced early, later work may accumulate in
   ways that are expensive to split back down under the complexity ceiling.
+* Artifact Enrichment Roadmap
+
+This roadmap formalizes the redesign away from a filing-centric artifact loop toward a shared model of:
+
+1. find candidates
+2. select one candidate
+3. enrich the selected candidate
+4. review or regenerate only that selected candidate
+5. file or execute the selected enriched candidate
+
+** Goals
+
+- reduce prompt breadth by drafting one selected artifact at a time
+- make regeneration local and predictable
+- let retrieval support one selected artifact instead of a whole batch
+- simplify filing into a final staging step
+- unify the operator model across actions, waiting-fors, notes, and projects
+
+** Non-Goals
+
+- removing current stages immediately
+- breaking compatibility with existing field-test flows in one step
+- redesigning every prompt at once before the state model exists
+
+** Phase 1: State Foundation
+
+Introduce a shared state split between candidate lists and selected drafts.
+
+Required outcomes:
+
+- add family-specific candidate state
+- add family-specific selected draft state
+- stop depending on filing state alone to carry selected draft meaning
+- preserve compatibility by deriving transitional filing previews from the new state where needed
+
+Acceptance criteria:
+
+- a selected note draft can exist without being an approved filing item
+- rerunning a finder stage does not implicitly behave like rerunning a selected draft stage
+
+** Phase 2: Reference Note Pilot
+
+Reference notes become the first full implementation of the new model.
+
+Required outcomes:
+
+- `Suggest Reference Notes` behaves as a finder stage
+- note selection becomes explicit
+- add a selected-note drafting stage
+- add selected-note regeneration
+- make filing consume the drafted selected note rather than drafting at filing time
+
+Acceptance criteria:
+
+- the operator can choose one note from a shortlist
+- the operator can regenerate only that note
+- the note preview is visible before filing
+- filing does not alter unrelated note candidates
+
+** Phase 3: Action Pilot
+
+Move actions to the same pattern.
+
+Required outcomes:
+
+- `Extract Actions` becomes candidate-oriented
+- add `Draft Selected Action`
+- add `Regenerate Selected Action`
+- keep execution or filing consequence separate from drafting
+
+Acceptance criteria:
+
+- one selected action can be clarified or rewritten without regenerating all action candidates
+
+** Phase 4: Waiting-For Pilot
+
+Move waiting-fors to the same pattern.
+
+Required outcomes:
+
+- waiting-for finder stage produces shortlist candidates
+- selected waiting-for drafting clarifies owner, expected outcome, and follow-up framing
+- regeneration only replaces the selected waiting-for draft
+
+Acceptance criteria:
+
+- operator can refine one waiting-for without disturbing other waiting candidates
+
+** Phase 5: Project Proposal Pilot
+
+Move project proposals to the same pattern.
+
+Required outcomes:
+
+- no-match and ambiguous paths can feed project-candidate discovery
+- selected project drafting produces a more concrete project artifact
+- first-item, tags, and rationale are drafted on the selected project only
+
+Acceptance criteria:
+
+- the operator can compare project candidates, choose one, and enrich only that proposal before filing
+
+** Phase 6: Filing Simplification
+
+After at least one full pilot works, simplify filing around selected enriched artifacts.
+
+Required outcomes:
+
+- filing preview becomes a final consequence workspace
+- batch candidate-generation responsibilities are removed from filing
+- selected enriched artifact is always the primary filing unit
+
+Acceptance criteria:
+
+- filing no longer feels like the place where note or project content first materializes
+
+** Control Buffer Work
+
+The control buffer needs explicit surfaces for the new model.
+
+Per family, the operator should see:
+
+- shortlist
+- selected item
+- selected-item draft preview
+- regenerate selected item
+- planned target or consequence
+- file or execute selected item
+
+This should be rolled out incrementally, starting with notes.
+
+** Migration Strategy
+
+The redesign should be staged rather than replaced in one pass.
+
+Recommended migration path:
+
+1. add new state and UI surfaces beside the current flow
+2. make note drafting use the new model first
+3. make filing prefer selected enriched state when available
+4. retire legacy batch-drafting assumptions family by family
+
+** Testing Strategy
+
+Add regressions at each phase for:
+
+- shortlist stability
+- selected-item preservation
+- selected-item-only regeneration
+- preview fidelity before filing
+- unchanged unrelated candidates after regeneration
+- filing consuming the selected enriched artifact
+
+Reference note pilot tests should be written first because that family will establish the shared pattern.

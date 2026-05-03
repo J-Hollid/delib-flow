@@ -79,6 +79,10 @@ run afterward.
 The main control-buffer commands for testing are:
 
 - =g=: refresh the control buffer
+- =revert-buffer=: standard Emacs revert also refreshes the cockpit when you
+  want special-buffer-style behavior
+- =n=: move to the next top-level cockpit section
+- =p=: move to the previous top-level cockpit section
 - =j=: jump to the active run subtree in the audit log
 - =J=: jump to the latest recorded stage subtree in the audit log
 - =D=: open latest-stage debug inspection
@@ -87,6 +91,7 @@ The main control-buffer commands for testing are:
 - =H=: apply a valid debug helper preset for the active review block
 - =N=: advance the active walkthrough to its next checkpoint
 - =R=: restart the active walkthrough from its baseline checkpoint
+- =TAB= or =S-TAB=: move to the next or previous rendered action
 - =RET= or =a=: execute the action at point
 - =A=: approve the current inspect or project-match result when applicable
 - =r=: retry the current inspect or project-match stage when applicable
@@ -101,6 +106,24 @@ Testing is fastest when you treat these as a loop:
 - use =j= and =J= to confirm audit persistence
 - use =H= when a seeded manual review block should be exercised
 - use =N= or =R= to move through the walkthrough path
+
+For selection-heavy checkpoints:
+
+- use =m= to populate the manual-project chooser from the shortlist shown in
+  `Now > Manual project selection`
+- use =s= to populate the filing chooser from the shortlist shown in
+  `Filing preview > Artifact selection`
+- treat the editable =Selection:= blocks as fallback paths rather than the
+  primary way to make those choices
+
+For filing verification:
+
+- inspect `Filing preview > Planned file targets` before writing
+- inspect `Filing preview > Staged content preview` to confirm the exact text
+  that will be inserted
+- after `File Approved Outputs`, verify the opened target buffers and the
+  `Filed target locations` section; those buffers are staged but intentionally
+  unsaved until you decide to save them
 
 * Starting A Debug Run
 
@@ -169,6 +192,386 @@ Supported checkpoints:
 - =project-reviewed=
 - =manual-project-ready=
 
+** =contact-disambiguates=
+
+Purpose:
+Exercise a weak-title source where project contact metadata should still produce
+a confident match.
+
+Supported checkpoints:
+
+- =source=
+- =inspect-reviewed=
+- =project-reviewed=
+- =context-ready=
+- =artifact-ready=
+- =cloud-ready=
+- =cloud-failure-ready=
+- =filing-ready=
+
+** =linked-note-disambiguates=
+
+Purpose:
+Exercise a weak-title source where a referenced Org note should push the match
+toward the correct project.
+
+Supported checkpoints:
+
+- =source=
+- =inspect-reviewed=
+- =project-reviewed=
+- =context-ready=
+- =artifact-ready=
+- =cloud-ready=
+- =cloud-failure-ready=
+- =filing-ready=
+
+** =no-match-clean=
+
+Purpose:
+Exercise a source that should remain unmatched and fall through to manual
+selection rather than forcing a weak project decision.
+
+Supported checkpoints:
+
+- =source=
+- =inspect-reviewed=
+- =project-reviewed=
+- =manual-project-ready=
+
+** =action-rich-midpoint=
+
+Purpose:
+Seed a stronger =context-ready= midpoint for action extraction stress testing,
+with hardcoded retained context that includes concrete next steps, a blocker,
+and an active decision.
+
+Supported checkpoints:
+
+- =source=
+- =inspect-reviewed=
+- =project-reviewed=
+- =context-ready=
+- =artifact-ready=
+- =filing-ready=
+
+** =waiting-rich-midpoint=
+
+Purpose:
+Seed a stronger =context-ready= midpoint for waiting-for extraction stress
+testing, with hardcoded retained context that includes explicit external
+approvals and dependency gates.
+
+Supported checkpoints:
+
+- =source=
+- =inspect-reviewed=
+- =project-reviewed=
+- =context-ready=
+- =artifact-ready=
+- =filing-ready=
+
+** =reference-note-rich-midpoint=
+
+Purpose:
+Seed a stronger =context-ready= midpoint for reference-note and integration
+stress testing, with hardcoded retained context focused on durable decisions,
+open questions, and runbook support material.
+
+Supported checkpoints:
+
+- =source=
+- =inspect-reviewed=
+- =project-reviewed=
+- =context-ready=
+- =artifact-ready=
+- =filing-ready=
+
+** =filing-selection-mixed=
+
+Purpose:
+Seed a filing queue with a mix of approval-ready, advisory, and blocked draft
+artifacts so filing selection, rejection, and blocked-approval handling can be
+stress tested directly.
+
+Supported checkpoints:
+
+- =source=
+- =inspect-reviewed=
+- =project-reviewed=
+- =context-ready=
+- =artifact-ready=
+- =filing-ready=
+
+** =filing-note-conflict=
+
+Purpose:
+Seed a filing queue whose first approval-ready artifact is a project-support
+reference note with an already-existing deterministic note target, so note
+conflict handling can be exercised directly.
+
+Supported checkpoints:
+
+- =source=
+- =inspect-reviewed=
+- =project-reviewed=
+- =context-ready=
+- =artifact-ready=
+- =filing-ready=
+- =filing-conflict-ready=
+
+* Local LLM Strategy
+
+This section is the handoff-oriented strategy for stage-by-stage hardening of
+the local LLM path.
+
+Use it when:
+
+- you are testing one stage at a time rather than replaying the full
+  deterministic walkthrough
+- you want to resume a previous Codex hardening session
+- you want the logs to be the main artifact for operator review
+
+** Session Bootstrap
+
+Use the one-shot bootstrap:
+
+#+begin_example
+M-x load-file RET /path/to/delib-flow/scripts/load-delib-flow-local-llm-session.el RET
+#+end_example
+
+That path:
+
+- loads =delib-flow-local-test-config.el=
+- clears the local LLM log
+- clears the audit log
+- starts Ollama if needed
+- runs the readiness check
+
+Useful helpers during a session:
+
+- =M-x delib-flow-local-test-start-debug-scenario=
+- =M-x delib-flow-local-test-start-context-scenario=
+- =M-x delib-flow-local-test-open-llm-log=
+- =M-x delib-flow-local-test-open-ollama-buffer=
+
+Primary evidence files:
+
+- local LLM log: =/tmp/delib-flow-local-llm-log.org=
+- audit logs: debug scenarios use temp audit files, not a fixed
+  =/tmp/delib-flow-audit.org=
+
+** Operator Loop
+
+For local-LLM hardening, prefer this loop:
+
+1. Start a debug scenario at the checkpoint just before the stage under test.
+2. Run only the next stage manually.
+3. Inspect the control-buffer output.
+4. Inspect the latest stage block in =/tmp/delib-flow-local-llm-log.org=.
+5. Judge:
+   - was the stage output structurally valid
+   - was the reasoning/operator-facing text useful
+   - did the stage preserve the downstream-useful information
+6. Rerun only when the output is weak or malformed.
+
+The local-LLM path is expected to require operator review. The goal is not to
+eliminate all variance. The goal is to make failure shapes bounded, legible,
+and recoverable.
+
+When the machine is too slow to replay early stages repeatedly, start from a
+later deterministic checkpoint instead of =source=. In particular:
+
+- use =M-x delib-flow-local-test-start-context-scenario= when you want
+  accepted inspect/project review plus filtered reference context already
+  prepared
+- use =M-x delib-flow-local-test-start-debug-scenario= when you want to choose
+  any scenario-supported checkpoint directly, such as =project-reviewed=,
+  =context-ready=, or =artifact-ready=
+
+For those later-checkpoint starts, the replay preload is deterministic on
+purpose. That keeps slow local models out of the bootstrap path so the first
+LLM call is the stage you are actively hardening, not the earlier setup stages.
+
+** Recommended Stage Order
+
+Use this order when hardening progressively:
+
+1. =inspect-source=
+2. =match-project=
+3. =discover-reference-material=
+4. =filter-reference-material=
+5. =extract-actions=
+6. =extract-waiting-for=
+7. =suggest-reference-notes=
+8. =integrate-into-source=
+
+The reason for this order is simple: each stage should receive acceptable
+upstream context before you start judging its own quality.
+
+** Recommended Scenario Order
+
+Use these scenarios repeatedly while moving from stage to stage:
+
+1. =alpha-followup=
+   Baseline matched-project path with straightforward source cues.
+2. =manual-project-override=
+   Ambiguity calibration path.
+3. =contact-disambiguates=
+   Weak wording, strong direct contact cue.
+4. =linked-note-disambiguates=
+   Weak wording, strong linked-note cue.
+5. =no-match-clean=
+   Clean no-match path.
+
+After those are stable, move to a real heading from your own notes.
+
+For midpoint-heavy downstream stress passes where you want stronger retained
+context than the deterministic filter normally produces, use:
+
+1. =action-rich-midpoint=
+   Best for =extract-actions=.
+2. =waiting-rich-midpoint=
+   Best for =extract-waiting-for=.
+3. =reference-note-rich-midpoint=
+   Best for =suggest-reference-notes= and =integrate-into-source=.
+
+** What To Check Per Stage
+
+For =inspect-source=:
+
+- source type should be defensible from literal cues
+- contacts must be literal/high-trust
+- entities should preserve person/project signals without junk
+- links should be canonicalized
+- summary should keep the material that matters downstream
+
+For =match-project=:
+
+- avoid forced matches on generic overlap
+- choose =ambiguous= when evidence is split
+- choose =no-match= when evidence is generic
+- allow unique contact or linked-note evidence to tip to =matched=
+
+For =discover-reference-material=:
+
+- prefer clean =candidate_titles= output
+- retrieve the obviously relevant note near the top
+- avoid broad package/UI echoing
+- keep failure bounded when the model drifts
+
+For =filter-reference-material=:
+
+- preserve concrete downstream-useful context, not just note titles
+- keep blockers, questions, dependencies, and note relevance when present
+- drop noise rather than collapsing to vague summaries
+- degrade clearly when there are no candidates
+- do not offer or run the filter stage when discovery returned no candidates
+
+** Current Progress Snapshot
+
+As of the current local-LLM hardening pass:
+
+- =inspect-source= is in good shape for the current testing goal
+  - hardened against hallucinated email-header classification
+  - uses deterministic counts where appropriate
+  - keeps richer summary/entity/link/contact signals
+- =match-project= is in good shape for the current testing goal
+  - stress scenarios cover ambiguity, no-match, contact disambiguation, and
+    linked-note disambiguation
+- =discover-reference-material= is in good shape structurally
+  - compact prompt reduced schema drift substantially
+  - the model is now usually returning clean =candidate_titles=
+- =filter-reference-material= is now in a usable state for the current testing
+  goal
+  - it produces explicit =retained_context= instead of title-only retention
+  - compressed or contaminated contexts are now replaced by richer grounded
+  fallback context
+  - no-candidate runs are now blocked at the action/command level
+- =extract-actions= is now in a usable state for current field testing
+  - compact prompts removed the old full-package/UI prompt bloat
+  - bare top-level JSON arrays are accepted directly instead of forcing
+    deterministic fallback
+  - decision/state phrasing such as =Keep Friday launch target= now carries a
+    blocking warning
+  - midpoint stress runs are producing concrete approval-ready actions
+- =extract-waiting-for= is now in a usable state for current field testing
+  - role/group owners such as =finance=, =legal=, and =vendor contact= are
+    accepted as valid waiting owners
+  - explicit =Waiting for ...= structure is still enforced
+  - drift into imperative/action phrasing is still caught
+- =suggest-reference-notes= is now in a usable state for current field testing
+  - compact prompts removed the old full-package/UI prompt bloat
+  - bare top-level arrays of note objects are accepted directly
+  - runtimes are much lower than the earlier oversized-prompt path
+  - note quality is now good enough to evaluate in field use rather than only
+    parser survival
+- filing-stage stress coverage is now available through deterministic debug
+  fixtures
+  - =filing-selection-mixed= exercises ready vs blocked vs advisory draft
+    artifacts
+  - =filing-note-conflict= exercises deterministic reference-note target
+    conflicts
+  - =filing-conflict= still covers the project-child conflict path
+- checkpoint replay for debug scenarios is now always deterministic
+  - later checkpoints no longer accidentally spend local LLM calls during
+    preload
+  - this applies even when the active local stage adapter is the Ollama-backed
+    one
+- filing-review block stages now salvage truncated Ollama envelope responses
+  - =select-approved-filing-actions=
+  - =reject-draft-filing-artifact=
+  - =resolve-filing-conflict=
+
+If another Codex session picks this up, start at:
+
+1. load the local-LLM bootstrap
+2. assume downstream stage checkpoint replay is deterministic; do not spend
+   time re-fixing bootstrap replay unless a new regression appears
+3. use the filing scenarios for the highest-value remaining hardening work:
+   - =filing-selection-mixed= at =filing-ready=
+   - =filing-note-conflict= at =filing-conflict-ready=
+   - =filing-conflict= at =filing-conflict-ready=
+4. if local-LLM quality work resumes, the next likely target is
+   =integrate-into-source=
+5. if filing-review stages drift again, inspect whether the failure is:
+   - malformed but salvageable review JSON
+   - bad artifact choice quality
+   - deterministic target conflict behavior
+6. keep using the midpoint scenarios when field-style context quality matters
+   more than upstream replay cost
+
+** Next Session Handover
+
+Recommended resume commands:
+
+1. =M-x delib-flow-local-test-start-debug-scenario RET filing-selection-mixed RET filing-ready RET=
+2. Run =Select Approved Filing Actions= and =Reject Draft Filing Artifact=
+   repeatedly.
+3. Inspect:
+   - the control-buffer filing preview
+   - the latest stage block in =/tmp/delib-flow-local-llm-log.org=
+
+Then:
+
+1. =M-x delib-flow-local-test-start-debug-scenario RET filing-note-conflict RET filing-conflict-ready RET=
+2. Run =Resolve Filing Conflict= repeatedly.
+3. Verify:
+   - conflict review wording stays coherent
+   - smart fixes line up with the artifact kind
+   - deterministic retargeting/retry state is preserved
+
+Current known open issues or areas to watch:
+
+- =integrate-into-source= has not yet received the same level of local-LLM
+  hardening as the artifact-drafting stages
+- some old unrelated local-log entries still show =inspect-source= /
+  =match-project= =wrong-type-argument stringp nil= failures from prior runs;
+  those were not the active focus of this pass and should be revalidated only
+  if they reproduce again
+- filing-stage quality now matters more than parser survival; the next gains
+  are likely in item-selection discipline and operator-facing review quality
+
 ** =filing-conflict=
 
 Purpose:
@@ -183,6 +586,11 @@ Supported checkpoints:
 - =artifact-ready=
 - =filing-ready=
 - =filing-conflict-ready=
+
+For broader filing coverage beyond that project-child conflict path, also use:
+
+- =filing-selection-mixed= for approval-ready vs blocked draft selection
+- =filing-note-conflict= for deterministic reference-note target conflicts
 
 * Checkpoints
 
@@ -222,6 +630,20 @@ Each walkthrough target defines:
 
 Use =W= at any point to see the current target, current checkpoint, next
 checkpoint, and the built-in expectation text.
+
+* Suggested Stress Order
+
+For local-LLM project-match stress testing, this is a useful progression:
+
+1. =manual-project-override=
+   Expect =ambiguous=. The model should not force a winner.
+2. =no-match-clean=
+   Expect =no-match=. The model should avoid inventing a weak project connection.
+3. =contact-disambiguates=
+   Expect =matched=. Contact overlap should be strong enough to break ambiguity.
+4. =linked-note-disambiguates=
+   Expect =matched=. Linked-note context should tip the decision even when the
+   source title is weak.
 
 * Standard Verification Loop
 

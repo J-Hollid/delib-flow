@@ -201,6 +201,15 @@ This repository is being built incrementally from a design-first process.
 `delib-flow` currently works as a guided control buffer around a deterministic
 or adapter-backed workflow run started from an Org heading.
 
+A dedicated control-buffer redesign is now planned to improve cockpit
+readability, section-local action flow, selection UX, filing clarity, and
+mobile terminal ergonomics. The
+target interaction model is described in
+[[file:docs/design.org][docs/design.org]] under =Control-buffer redesign direction=. The phased
+implementation sequence is tracked in
+[[file:docs/implementation-plan.org][docs/implementation-plan.org]] under
+=Control-buffer redesign roadmap=.
+
 At a high level, the package does this:
 
 - capture a frozen snapshot of the heading at point
@@ -213,17 +222,20 @@ At a high level, the package does this:
 The control buffer is organized around these top-level sections:
 
 - `Now`
-- `Next actions`
 - `Current result`
-- `Current context`
 - `Filing preview`
+- `Next actions`
+- `Current context`
 - `Details`
 
-The first four sections stay expanded after refresh and action execution.
-`Filing preview` expands when there is something to review or file. `Details`
-stays folded by default and holds verbose material such as the source snapshot,
-accepted working context, latest prompt/input, latest raw output, grouped stage
-history, and audit status.
+`Now` now starts with a compact decision strip plus a recommended-next-pass
+block and quick actions, so the first screen answers the current stage,
+blockage, recommendation, active selection, and filing-target questions more
+directly. `Current result`,
+`Filing preview`, `Next actions`, and `Current context` stay expanded after
+refresh and action execution. `Details` stays folded by default and holds
+verbose material such as the source snapshot, accepted working context, latest
+prompt/input, latest raw output, grouped stage history, and audit status.
 
 Typical workflow:
 
@@ -241,7 +253,29 @@ Typical workflow:
 
 Control-buffer usage:
 
-- Move point to an action in `Next actions` and press `RET` or `a` to run it.
+- Use `n` and `p` to move between the main cockpit sections.
+- Use `TAB` and `S-TAB` to move between rendered actions.
+- Press `RET` or `a` to run the action at point.
+- Work from the nearest action cluster:
+  `Recommended next pass` or `Quick actions` in `Now`, `Filing actions` in
+  `Filing preview`, or the
+  broader `Next actions` list when you want the full downstream menu.
+- Press `z` to toggle narrow-screen focus mode when you want the cockpit to
+  keep only the current decision loop open.
+- The next cockpit pass is planned to add:
+  - local context menus for the current section
+  - on-demand control hints you can request at any point
+- Use the compact shortlist surfaces for selection-heavy steps:
+  `Manual project selection` now shows a candidate table in `Now`, and
+  `Artifact selection` now shows a filing shortlist in `Filing preview`.
+- Treat the editable `Selection:` blocks in those areas as fallback entry
+  paths when the chooser commands are not sufficient.
+- In the filing workspace, `Staged content preview` now shows the exact text
+  that will be inserted, and filed target buffers are opened as staged-unsaved
+  previews rather than being written to disk automatically.
+- The control buffer now behaves more like a special operational surface:
+  it uses a tighter special-buffer key foundation, a persistent header line,
+  and standard revert semantics wired to delib-flow refresh.
 - Press `A` to approve the current pending inspect or project-match result.
 - Press `r` to retry the current pending inspect or project-match stage.
 - Press `g` to refresh the control buffer.
@@ -268,8 +302,9 @@ Important current behavior:
 - Old and superseded attempts appear only under `Details > Stage history`,
   grouped by stage with nested attempts.
 - The control buffer is the primary UI. Some workflow branches rely on editing
-  structured in-buffer blocks, especially manual project selection and reviewed
-  cloud packages.
+  structured in-buffer blocks, but manual project choice and filing choice now
+  foreground compact shortlist views and completion commands before the
+  fallback block-edit path.
 
 Current interactive entry points:
 
@@ -290,10 +325,10 @@ Current interactive entry points:
 - `M-x delib-flow-control-help`
   Show the control-buffer keybindings.
 
-Most stage actions are normally triggered from the `Next actions` section of
-the control buffer. Stage-specific commands still exist as interactive
-commands, but the expected usage is to work from the buffer that
-`delib-flow-start` opens.
+Most stage actions are intended to be triggered from the control buffer rather
+than from standalone commands. The normal loop is to move to the relevant
+section, step through its rendered actions, and execute the one that matches
+the current decision point.
 
 * Configuration
 
@@ -343,9 +378,15 @@ workflow is:
 Useful optional configuration:
 
 - `delib-flow-audit-log-file` if you want persistent run logs
-- `delib-flow-general-note-template` and
-  `delib-flow-project-support-note-template` if you want custom filed note
-  shapes
+- `delib-flow-next-action-capture-template`,
+  `delib-flow-waiting-for-capture-template`,
+  `delib-flow-project-capture-template`,
+  `delib-flow-general-note-capture-template`, and
+  `delib-flow-project-support-note-capture-template` if you want filed output
+  to follow your own org-capture patterns
+- `delib-flow-general-note-org-roam-capture-key` and
+  `delib-flow-project-support-note-org-roam-capture-key` if you want
+  reference-note filing to use entries from `org-roam-capture-templates`
 - `delib-flow-default-local-model`, `delib-flow-default-cloud-model`, and
   adapter functions if you are wiring real model backends into the stage
   contract
@@ -362,15 +403,71 @@ Minimal setup example:
 (setq delib-flow-audit-log-file "/absolute/path/to/delib-flow-audit.org")
 #+end_src
 
-If you want deterministic filing to create custom note formats:
+If you want deterministic filing to use your own org-capture patterns:
 
 #+begin_src emacs-lisp
-(setq delib-flow-general-note-template
-      "#+title: ${title}\n#+filetags: :reference:\n\n- Source: ${source-artifact}\n")
+(setq delib-flow-next-action-capture-template
+      "%(delib-flow-capture-project-child-heading)\n:PROPERTIES:\n:CREATED: %U\n:SOURCE_ARTIFACT: %(delib-flow-capture-source-artifact)\n:END:\n")
 
-(setq delib-flow-project-support-note-template
-      "#+title: ${title}\n#+filetags: :project:support:\n\n- Source: ${source-artifact}\n")
+(setq delib-flow-waiting-for-capture-template
+      "%(delib-flow-capture-project-child-heading)\n:PROPERTIES:\n:CREATED: %U\n:SOURCE_ARTIFACT: %(delib-flow-capture-source-artifact)\n:END:\n")
+
+(setq delib-flow-project-capture-template
+      "%(delib-flow-capture-project-heading)\n:PROPERTIES:\n:CREATED: %U\n:END:\n%(delib-flow-capture-project-first-item-heading)\n")
+
+(setq delib-flow-general-note-capture-template
+      "#+title: %(delib-flow-capture-note-title)\n#+filetags: :reference:\n\n- Filed from delib-flow\n- Source artifact: %(delib-flow-capture-source-artifact)\n")
+
+(setq delib-flow-project-support-note-capture-template
+      "#+title: %(delib-flow-capture-note-title)\n#+filetags: :project:support:\n\n- Filed from delib-flow\n- Project: %(delib-flow-capture-project-title)\n- Source artifact: %(delib-flow-capture-source-artifact)\n")
 #+end_src
+
+The capture templates above must be non-interactive. Avoid `%^...` prompts and
+`%?`, because `File Approved Outputs` needs to complete in one operator action.
+
+If you want reference-note filing to follow your existing org-roam note
+destinations instead of delib-flow's fallback ZK path naming, set the
+org-roam capture keys directly:
+
+#+begin_src emacs-lisp
+(setq delib-flow-general-note-org-roam-capture-key "w")
+(setq delib-flow-project-support-note-org-roam-capture-key "w")
+#+end_src
+
+When either key is set, delib-flow resolves the note target path and staged
+file content from the matching `org-roam-capture-templates` entry. This is
+useful when org-roam already decides subdirectories, filetags, note headers,
+and IDs.
+
+The operator can choose the filing template from the control buffer with `T`
+while a reference-note artifact is active. If the chosen org-roam template
+needs extra target input, such as a zettel filename stem for a function-based
+target, delib-flow requests that value at template-selection time and stores
+it in the `Reference note capture` block.
+
+For delib-flow filing, prefer string-based `file` or `file+head` targets when
+possible. Function-based targets are supported only when the operator provides
+the needed `Target path:` override ahead of filing.
+
+Available helper functions for `%(...)` capture expansions:
+
+- `delib-flow-capture-item-text`
+- `delib-flow-capture-project-title`
+- `delib-flow-capture-note-title`
+- `delib-flow-capture-note-type`
+- `delib-flow-capture-source-artifact`
+- `delib-flow-capture-project-child-heading`
+- `delib-flow-capture-project-heading`
+- `delib-flow-capture-project-first-item-heading`
+
+Legacy compatibility:
+
+- `delib-flow-general-note-template`
+- `delib-flow-project-support-note-template`
+
+Those older `${title}`-style note templates still work. They are mainly useful
+if you only want note-file customization and do not need full org-capture
+expansion.
 
 If you want to test with a custom local or cloud adapter:
 
@@ -387,6 +484,61 @@ There is also a repo-local manual testing bootstrap in
 That file is intended for live local testing and shows a fuller configuration
 example, including adapter wiring and audit logging.
 
+For one-shot local LLM session setup, use
+[[file:scripts/load-delib-flow-local-llm-session.el][scripts/load-delib-flow-local-llm-session.el]].
+That bootstrap loads your local test config, clears the audit and LLM logs,
+starts Ollama if needed, and runs the readiness check.
+
+For slower local-model machines, the repo-local local-test helpers can now
+start debug scenarios at later checkpoints instead of always replaying from
+=source=. Use =M-x delib-flow-local-test-start-context-scenario= when you want
+accepted inspect/project review plus filtered reference context already loaded,
+or =M-x delib-flow-local-test-start-debug-scenario= to choose any supported
+checkpoint directly. Those later checkpoint preloads use deterministic replay
+so the local model is only spent on the stage you run after startup.
+
+There are also built-in midpoint stress scenarios with stronger seeded
+=context-ready= state for downstream stage testing: =action-rich-midpoint=,
+=waiting-rich-midpoint=, and =reference-note-rich-midpoint=. Filing-focused
+debug scenarios are also available: =filing-selection-mixed= for mixed
+approval readiness and =filing-note-conflict= for deterministic reference-note
+conflict review.
+
+Current local-LLM manual-test status:
+
+- =inspect-source= has been hardened for messy real notes, including stricter
+  source-type recovery, literal email enforcement, entity surfacing, and
+  richer analysis fields.
+- =match-project= has been hardened against overmatching, with explicit support
+  for ambiguity, no-match, unique contact disambiguation, and unique linked
+  note disambiguation.
+- =discover-reference-material= now uses a compact prompt and is currently
+  behaving reliably in the built-in stress scenarios, with clean
+  =candidate_titles= output instead of broad package echoing.
+- =filter-reference-material= now produces retained working context rather than
+  title-only retention, includes guards against no-candidate runs, and is in a
+  usable state for downstream testing.
+- =extract-actions=, =extract-waiting-for=, and =suggest-reference-notes= are
+  now in a usable state for current field testing, with compact prompts and
+  bounded parser recovery.
+- Filing-focused debug scenarios are now available for downstream review and
+  conflict handling: =filing-selection-mixed= and =filing-note-conflict=.
+- Later debug checkpoints now replay deterministically even when the active
+  local stage adapter is Ollama-backed, so scenario preload should not hang on
+  background local-model calls.
+- The next likely local-LLM hardening target is =integrate-into-source= or
+  filing-stage output quality, depending on what field testing surfaces.
+
+If you are resuming a local-LLM hardening session, the detailed stage-by-stage
+test strategy and current progress snapshot are documented in
+[[file:docs/test-guide.org][docs/test-guide.org]].
+
+For deterministic scenario testing with the built-in debug fixtures, use the
+repo-tracked bootstrap in
+[[file:scripts/load-delib-flow-debug-session.el][scripts/load-delib-flow-debug-session.el]].
+That path does not require your real projects file or ZK because the scenarios
+create disposable temp fixtures automatically.
+
 Suggested setup order:
 
 1. Set `delib-flow-my-projects-file`.
@@ -400,7 +552,7 @@ Suggested setup order:
 What you can use today:
 
 - Source inspection with deterministic source typing for email, meeting-note,
-  or unknown.
+  fleeting-note, reminder, or unknown.
 - Project matching against your projects file, including ambiguity and no-match
   branches.
 - Explicit project-decision review with accept, reject, retry, and manual
@@ -439,3 +591,19 @@ The current implementation plan is tracked separately in
 Repository history is tracked in [[file:CHANGELOG.org][CHANGELOG.org]].
 
 Validation commands run from the repository root.
+* Upcoming Artifact Enrichment Redesign
+
+The next workflow redesign direction is documented in:
+
+- [[file:docs/design.org][docs/design.org]]
+- [[file:docs/implementation-plan.org][docs/implementation-plan.org]]
+
+The main shift is from a filing-centric batch model toward a shared artifact loop:
+
+1. find candidates
+2. select one candidate
+3. enrich the selected candidate
+4. regenerate only the selected candidate when needed
+5. file or execute the selected enriched candidate
+
+This direction will be piloted on reference notes first, then extended to actions, waiting-fors, and project proposals.
