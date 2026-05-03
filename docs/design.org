@@ -7,7 +7,7 @@
 This file is the repository-local design contract for `delib-flow`.
 
 It was copied from the canonical working note at
-`/home/j-holliday/org/zk/wrk/20260425145925.org` on 2026-04-26 and lightly
+`/path/to/zk/wrk/example-design-note.org` on 2026-04-26 and lightly
 normalized for repository use. The substantive workflow design remains the same.
 
 * Implementation status note
@@ -88,6 +88,216 @@ normalized for repository use. The substantive workflow design remains the same.
 - A structured action layer is useful even before real stage execution exists,
   because it provides a stable place for legality, conflict, and review-state
   behavior.
+
+* Control-buffer redesign direction
+
+The current control buffer is functionally rich, but it still asks the operator
+to parse too many equally weighted surfaces before taking the next step. The
+next UI pass should optimize for decision-making speed, readability, and low
+friction instead of adding more information to the same viewport.
+
+** Primary operator goals
+
+- See the current workflow state in one screen without scanning the whole
+  buffer.
+- Understand the one recommended next step quickly.
+- See the exact consequence of filing before committing to it.
+- Move through stage review and filing loops without repeated long scrolls.
+- Distinguish clearly between current decision context, supporting detail, and
+  historical/debug material.
+
+** Emacs UI model
+
+- The control surface should move toward a =special-mode=-style operational
+  cockpit rather than a general-purpose document buffer.
+- The main interaction loop should favor buttons, section navigation, minibuffer
+  completion, and focused review commands over broad free-form editing.
+- The control surface should optimize explicitly for terminal Emacs on a narrow
+  viewport, including phone-sized SSH sessions where only one small work area
+  can remain visible at a time.
+- Editable in-buffer regions should remain available only where operator-authored
+  free text is genuinely valuable, such as notes or conflict rewrite text.
+- Selection-heavy states should prefer tabular presentation over prose lists.
+- Consequence-heavy actions such as filing should present a stable side or
+  sibling preview window instead of burying the result in lower sections.
+
+** Target information hierarchy
+
+The top screen of the control buffer should answer these questions in order:
+
+1. What stage am I at?
+2. What is blocked, if anything?
+3. What is the recommended next action?
+4. What item or project is currently selected?
+5. If I file now, where will it go?
+
+Everything else is secondary and should be visually lower-priority or collapsed
+by default.
+
+** Target control-buffer layout
+
+The redesign target is a cockpit with these priorities:
+
+- Top strip
+  - run status
+  - current stage
+  - recommendation
+  - active selection
+  - immediate filing target preview when relevant
+- Primary work area
+  - actions available at point
+  - current result
+  - action-relevant context
+  - staged output preview
+- Secondary detail area
+  - alternative actions
+  - draft backlog
+  - conflicts
+  - stage history
+  - audit and debug detail
+
+This is intentionally different from a chronological report. The operator
+should not have to read the workflow in historical order to decide what to do
+next.
+
+** Mobile-terminal target
+
+The cockpit should also work well through terminal Emacs over SSH on a narrow
+screen. That changes the design bar:
+
+- one viewport should foreground the current decision loop rather than multiple
+  equal-priority sections
+- dense explanatory prose should be replaced by short state, why, and next
+  lines
+- long sections should collapse by default and reopen only when explicitly
+  requested
+- sibling previews should be preferred over forcing large scroll jumps
+- action discovery should not depend on remembering many global keys
+
+The operator should be able to make steady progress with one hand on a phone
+keyboard and minimal scrolling.
+
+** Recommendation and action model
+
+The cockpit should foreground three distinct action layers:
+
+- `Recommended next pass`
+  - exactly one best next workflow pass when the system has a strong default
+  - why that pass is recommended right now
+  - one or two nearby alternatives when the recommendation is optional
+- `Quick actions`
+  - the small context-valid subset that should be reachable without scanning
+    the whole buffer
+  - each action should surface its outcome in one short line
+- `More actions`
+  - the broader legal action list for operators who want the full downstream
+    menu
+
+This makes the dominant path visible without hiding expert control.
+
+** Context menus and help
+
+Action discovery should not rely on the operator scanning the whole cockpit or
+memorizing all bindings.
+
+- Every major work area should support a local context menu.
+  - `Now`: run-stage and recommendation actions
+  - `Current result`: accept, reject, retry, compare, explain blocked state
+  - `Filing preview`: choose artifact, choose template, preview target, file,
+    open staged buffers
+  - `Current context`: inspect retained evidence, prune, reopen excerpts
+- A control-hints surface should be available at any time.
+  - global keys
+  - keys valid in the current section
+  - current recommended next pass
+  - current blocked reasons
+  - current preview or filing consequence explanation
+
+The control-hints surface should be lightweight enough to open and close
+frequently during terminal use.
+
+** Focus-mode target
+
+The cockpit should support an explicit focus mode for narrow screens.
+
+- Focus mode hides lower-priority sections and keeps only:
+  - decision strip
+  - recommended next pass
+  - quick actions
+  - one active work area such as current result or filing workspace
+- Historical, debug, and backlog-heavy surfaces should be easy to restore but
+  should not compete with the active decision loop while focus mode is on
+
+This is intended as a first-class operating mode rather than a cosmetic toggle.
+
+** Filing-workspace target
+
+The filing workspace should remain the most consequence-heavy area in the
+cockpit, especially on small screens. Its active loop should fit into one
+viewport with these priorities:
+
+- currently selected artifact
+- recommended filing action
+- exact file target
+- selected capture template
+- staged content preview
+- explicit saved versus unsaved state
+
+The operator should not need to scroll to another section to understand what a
+filing action will do.
+
+** Filing-loop target
+
+The filing loop should be redesigned around one viewport containing:
+
+- the currently selected artifact
+- the actions available for that artifact
+- the exact planned target location
+- the staged content preview that would be inserted
+
+Backlog artifacts, rejected items, older conflicts, and filed-location history
+should remain available, but they should not compete with the active filing
+decision by default.
+
+** Selection model
+
+- Manual project selection and filing-artifact selection should use completion
+  commands and tabular views as the primary interaction model.
+- Free-text =Selection:= editing should become a fallback path rather than the
+  normal path.
+- Candidate comparison views should show compact, decision-relevant columns such
+  as title, status, kind, warning count, and target summary.
+
+** Navigation model
+
+- Global keys should stay minimal and memorable: refresh, quit, next/previous
+  section, next/previous button, activate, help.
+- Section-local actions should be discoverable at point and invokable without
+  searching other parts of the buffer.
+- The operator should be able to stay within the currently relevant section for
+  most loops instead of jumping between far-apart parts of the cockpit.
+
+** Visibility and disclosure model
+
+- The current decision strip and current action area should always be expanded.
+- Action-relevant previews should be auto-expanded.
+- Historical, audit, and debug sections should be available but collapsed by
+  default unless the current state specifically depends on them.
+- Buffer motion after rerender should preserve local context when possible
+  instead of aggressively pulling point back to a broad top-level anchor.
+
+** Best-practice alignment
+
+This redesign intentionally follows established Emacs patterns:
+
+- =special-mode= conventions for generated operational buffers
+- Help-style button navigation with =TAB=, =S-TAB=, and =RET=
+- Magit-style section navigation and section-local behavior
+- tabulated list presentation for row-oriented comparisons
+- predictable temporary-window previews for supporting displays
+
+The goal is not to imitate these packages visually, but to adopt their stronger
+interaction model for a high-frequency operator workflow.
 
 * Process scope
 - Using AI agents to handle clarifying information input into my [[id:47bbd1a8-9645-43d6-9a17-7b85f631114f][PARA]] / [[id:8e4d775a-744f-4688-8336-9a2a679bd17d][GTD]] system for keeping knowledge and actions.
@@ -363,7 +573,7 @@ normalized for repository use. The substantive workflow design remains the same.
 * Process flow
 #+BEGIN_SRC plantuml :file /tmp/delib-flow-my-ai-secretary-process.svg :results file 
 @startuml
-!include /home/j-holliday/.emacs.d/plantuml-templates/activity_modern.puml
+!include /path/to/plantuml-templates/activity_modern.puml
 |Human|
 start
 :Place point on source org item in Emacs;
@@ -441,3 +651,162 @@ stop
 - Existing project waiting-for items should be filed as direct WAITING children under the project item.
 - Projects should stay under Active if there is any action available to move them forward.
 - Projects should move under Waiting only when no further action can currently move them forward.
+* Artifact Enrichment Redesign
+
+The current filing-centric model still conflates four different operator concerns:
+
+- finding candidate artifacts
+- selecting which artifact is worth pursuing
+- enriching one artifact into a stronger draft
+- filing or executing the finished artifact
+
+That interaction model is weakest for note drafting, but the same structural issue exists for actions, waiting-fors, and project proposals. The operator should not need to treat broad candidate generation as if it already produced a finalized artifact.
+
+** Target Interaction Model
+
+The intended operator loop for all enrichable artifact types is:
+
+1. find candidate artifacts
+2. select one candidate
+3. enrich the selected candidate
+4. review or regenerate only that selected candidate
+5. file or execute the selected enriched candidate
+
+This should replace the current model where one stage often tries to generate several artifacts at once and filing becomes the first place where a concrete draft feels real.
+
+** Applicable Artifact Families
+
+This redesign applies to all enrichable artifact families:
+
+- actions
+- waiting-fors
+- reference notes
+- project proposals
+
+Each family can still have family-specific rules and prompts, but they should share the same control-flow model.
+
+** Shared State Model
+
+Each artifact family should expose two distinct layers of state:
+
+1. Candidate state
+   - lightweight shortlist
+   - item text or title
+   - item kind or subtype
+   - explanation or why-this-might-matter
+   - warnings
+   - suggested tags
+
+2. Selected draft state
+   - selected candidate identifier
+   - enriched or drafted body
+   - targeted supporting material
+   - regeneration history
+   - filing preview
+
+The current filing state should stop carrying the whole burden of candidate discovery, selected draft state, and filing consequence at the same time.
+
+** Stage Design
+
+Each enrichable artifact family should be split into two conceptual stage layers:
+
+1. Finder stages
+   - broad candidate discovery
+   - shortlist-oriented
+   - cheap enough to rerun
+   - not responsible for full drafting
+
+2. Enrichment stages
+   - operate on the selected candidate only
+   - generate the concrete content that will later be filed or executed
+   - can be rerun without disturbing unrelated candidates
+
+Suggested naming direction:
+
+- Find Actions
+- Draft Selected Action
+- Find Waiting-Fors
+- Draft Selected Waiting-For
+- Find Reference Notes
+- Draft Selected Note
+- Find Project Candidates
+- Draft Selected Project
+
+The current stage names can be preserved initially for compatibility, but the design intent should follow this split.
+
+** Regeneration Semantics
+
+Regeneration should be item-local, not batch-global.
+
+When the operator wants another pass:
+
+- preserve the candidate shortlist
+- preserve the current selection
+- replace only the selected item draft
+- preserve other unrelated artifacts
+
+For example, if the operator selects one note candidate and asks for regeneration, only that note draft should change. The rest of the note shortlist should remain stable.
+
+** Retrieval and Supporting Material
+
+Discovery and filtering should be able to operate both:
+
+- broadly, before selection
+- narrowly, after selection
+
+The selected-item path is especially important. Once the operator chooses one artifact, supporting material should be targeted to that artifact's focus rather than to the entire source.
+
+This is expected to improve quality for:
+
+- reference note drafting
+- project proposal rationale
+- action clarification
+- waiting-for ownership and framing
+
+** Filing Role
+
+Filing should become the final staging step for an already enriched selected artifact.
+
+It should no longer act like the place where:
+
+- note bodies first materialize
+- project proposals first become concrete
+- action wording is first made specific
+
+The operator should arrive at filing with one selected enriched artifact that already has:
+
+- readable preview
+- consequence preview
+- target preview
+
+** Control Buffer Implications
+
+For each artifact family, the control buffer should converge on the same loop:
+
+- Candidate shortlist
+- Selected item
+- Draft preview
+- Regenerate selected item
+- Planned target or consequence
+- File or execute selected item
+
+This is the simplest model for operator comprehension on both desktop and narrow terminal/mobile use.
+
+** Why This Model Is Better
+
+- prompts become smaller and more specific
+- regeneration becomes predictable
+- retrieval can specialize to one artifact
+- filing becomes easier to understand
+- the operator sees a stable shortlist plus one active draft
+- authored artifacts feel authored rather than batch-generated
+
+** Pilot Recommendation
+
+Reference notes should be the first pilot for this redesign because:
+
+- the current pain is clearest there
+- drafting quality benefits most from narrower prompts
+- the existing filing loop already exposes much of the needed preview surface
+
+After notes, the same model should expand to actions, waiting-fors, and project proposals.

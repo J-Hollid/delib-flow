@@ -7,7 +7,10 @@
 
 ;;; Code:
 
-(load-file "/home/j-holliday/.emacs.d/site-lisp/delib-flow/delib-flow.el")
-(load-file "/home/j-holliday/.emacs.d/site-lisp/delib-flow/test/delib-flow-test.el")
+(let* ((this-file (or load-file-name buffer-file-name))
+       (repo-root (file-name-directory (directory-file-name
+                                        (file-name-directory this-file)))))
+  (load-file (expand-file-name "delib-flow.el" repo-root))
+  (load-file (expand-file-name "test/delib-flow-test.el" repo-root)))
 
 ;;; load-delib-flow-tests.el ends here

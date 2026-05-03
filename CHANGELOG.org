@@ -7,6 +7,36 @@ dated entries.
 
 * 2026-04-28
 
+- Continued Milestone 15 in `delib-flow.el`, `delib-flow-local-test-config.el`,
+  `test/delib-flow-test.el`, `README.org`, and `docs/test-guide.org` by
+  hardening the local-LLM path for `extract-actions`,
+  `extract-waiting-for`, and `suggest-reference-notes` with compact prompts,
+  array-tolerant parsing, bounded fallback behavior, stronger midpoint
+  fixtures, and updated operator handoff guidance.
+- Continued Milestone 15 in `delib-flow.el`, `test/delib-flow-test.el`,
+  `README.org`, and `docs/test-guide.org` by adding filing-focused debug
+  scenarios and filing-state seeding for deterministic stress testing:
+  `filing-selection-mixed` and `filing-note-conflict`.
+- Continued Milestone 15 in `delib-flow.el` and `test/delib-flow-test.el` by
+  forcing debug checkpoint replay to use the deterministic local adapter even
+  when the active manual-testing adapter is Ollama-backed, preventing later
+  scenario checkpoints from hanging on hidden local-model replay.
+- Continued Milestone 15 in `delib-flow-local-test-config.el` and
+  `test/delib-flow-test.el` by salvaging truncated Ollama envelope responses
+  for filing-review block stages, including `select-approved-filing-actions`,
+  `reject-draft-filing-artifact`, and `resolve-filing-conflict`.
+
+- Added midpoint-focused debug scenarios in `delib-flow.el`,
+  `test/delib-flow-test.el`, `README.org`, and `docs/test-guide.org` with
+  hardcoded strong `context-ready` state for downstream local-LLM stress
+  passes: `action-rich-midpoint`, `waiting-rich-midpoint`, and
+  `reference-note-rich-midpoint`.
+- Updated `delib-flow-local-test-config.el`, `test/delib-flow-test.el`,
+  `README.org`, and `docs/test-guide.org` so repo-local local-LLM scenario
+  helpers can start at later supported checkpoints instead of forcing every
+  manual pass to begin at `source`, including a direct
+  `delib-flow-local-test-start-context-scenario` entrypoint for downstream
+  stage hardening on slower machines.
 - Added [[file:docs/test-guide.org][docs/test-guide.org]] as a dedicated local testing and debug
   operator guide covering walkthrough targets, direct scenario/checkpoint
   replay, inspection/comparison/audit commands, helper presets, and suggested

@@ -5,8 +5,8 @@
 ;; Evaluate this file in a live Emacs session to load the repo-local
 ;; delib-flow checkout, then prepare the local LLM manual-test environment.
 ;;
-;; This bootstrap expects your normal Emacs config to provide `jh/ollama-url`
-;; and `jh/ollama-model`. It will:
+;; This bootstrap expects your normal Emacs config to provide working Ollama
+;; transport variables. It will:
 ;; - load `delib-flow-local-test-config.el`
 ;; - clear the local LLM log
 ;; - clear the audit log
