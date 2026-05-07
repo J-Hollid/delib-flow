@@ -277,8 +277,48 @@
   "Return raw selected-project drafting output for PACKAGE."
   (delib-flow--draft-selected-project-result package))
 
+(defconst delib-flow--stage-command-runner-default-alist
+  '((decide-cloud-pass . run-stage-locally)
+    (sanitize-for-cloud . run-stage-locally)
+    (approve-cloud-send . run-stage-locally)
+    (run-cloud-stage . dynamic-cloud-stage)
+    (resolve-cloud-failure . run-stage-locally)
+    (approve-candidate-reintegration . run-stage-locally))
+  "Default UI command runner kinds keyed by stage id.")
+
+(defun delib-flow--default-stage-command-runner-kind (stage-id)
+  "Return the default UI command runner kind for STAGE-ID."
+  (or (alist-get stage-id delib-flow--stage-command-runner-default-alist)
+      'execute-local-stage))
+
+(defun delib-flow--default-stage-command-rerender (stage-id)
+  "Return the default rerender policy for STAGE-ID."
+  (ignore stage-id)
+  'current-result)
+
+(defun delib-flow--stage-descriptor-with-command-metadata (descriptor)
+  "Return DESCRIPTOR with default command metadata populated."
+  (let ((stage-id (plist-get (cdr descriptor) :id))
+        (props (copy-sequence (cdr descriptor))))
+    (unless (plist-member props :command-runner-kind)
+      (setq props
+            (plist-put props
+                       :command-runner-kind
+                       (delib-flow--default-stage-command-runner-kind stage-id))))
+    (unless (plist-member props :command-sync)
+      (setq props
+            (plist-put props :command-sync 'control-buffer)))
+    (unless (plist-member props :command-rerender)
+      (setq props
+            (plist-put props
+                       :command-rerender
+                       (delib-flow--default-stage-command-rerender stage-id))))
+    (cons (car descriptor) props)))
+
 (defconst delib-flow--stage-descriptor-alist
-  '((inspect-source
+  (mapcar
+   #'delib-flow--stage-descriptor-with-command-metadata
+   '((inspect-source
      :id inspect-source
      :label "Inspect Source"
      :prompt-id milestone2-inspect-source
@@ -469,7 +509,7 @@
      :label "File Approved Outputs"
      :prompt-id milestone2-file-approved-outputs
      :executor delib-flow--execute-file-approved-outputs
-     :normalizer delib-flow--normalize-file-approved-outputs-output))
+     :normalizer delib-flow--normalize-file-approved-outputs-output)))
   "Stage descriptors keyed by stage identifier.")
 
 (defconst delib-flow--stage-decision-alist
@@ -717,6 +757,19 @@
         :deterministic-write-boundary-p t)))
   "Stage-aware structured prompt contracts keyed by stage ID.")
 
+(defconst delib-flow--required-stage-command-metadata-keys
+  '(:command-runner-kind :command-sync :command-rerender)
+  "Descriptor keys required by the shared stage-command runner.")
+
+(defun delib-flow--validated-stage-descriptor (stage-id)
+  "Return validated descriptor plist for STAGE-ID."
+  (let ((descriptor (delib-flow--stage-descriptor stage-id)))
+    (unless descriptor
+      (error "No stage descriptor is registered for %s" stage-id))
+    (dolist (key delib-flow--required-stage-command-metadata-keys descriptor)
+      (unless (plist-member descriptor key)
+        (error "Stage descriptor for %s is missing %s" stage-id key)))))
+
 (defun delib-flow--stage-descriptor (stage-id)
   "Return the descriptor plist for STAGE-ID."
   (cdr (assoc stage-id delib-flow--stage-descriptor-alist)))
@@ -724,6 +777,21 @@
 (defun delib-flow--stage-label (stage-id)
   "Return the user-facing label for STAGE-ID."
   (plist-get (delib-flow--stage-descriptor stage-id) :label))
+
+(defun delib-flow--stage-command-runner-kind (stage-id)
+  "Return UI command runner kind for STAGE-ID."
+  (plist-get (delib-flow--validated-stage-descriptor stage-id)
+             :command-runner-kind))
+
+(defun delib-flow--stage-command-sync (stage-id)
+  "Return UI command sync policy for STAGE-ID."
+  (plist-get (delib-flow--validated-stage-descriptor stage-id)
+             :command-sync))
+
+(defun delib-flow--stage-command-rerender (stage-id)
+  "Return UI command rerender policy for STAGE-ID."
+  (plist-get (delib-flow--validated-stage-descriptor stage-id)
+             :command-rerender))
 
 (defun delib-flow--stage-prompt-id (stage-id)
   "Return the prompt identifier for STAGE-ID."

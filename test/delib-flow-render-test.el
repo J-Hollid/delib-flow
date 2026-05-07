@@ -4,103 +4,20 @@
 (require 'cl-lib)
 (require 'org)
 (require 'delib-flow)
+(require 'delib-flow-test-support)
 
-(defmacro delib-flow-render-test--with-temp-project-file (content &rest body)
-  "Run BODY with a temporary My Projects file containing CONTENT."
-  (declare (indent 1))
-  `(let ((file (make-temp-file "delib-flow-projects" nil ".org" ,content)))
-     (unwind-protect
-         (let ((delib-flow-my-projects-file file))
-           ,@body)
-       (when-let ((buffer (get-file-buffer file)))
-         (kill-buffer buffer))
-       (when (file-exists-p file)
-         (delete-file file)))))
+(ert-deftest delib-flow-render-managed-surface-descriptor-errors-for-unknown-surface ()
+  (should-error (delib-flow--managed-surface-descriptor 'missing-surface)
+                :type 'error))
 
-(defmacro delib-flow-render-test--with-temp-directory-var (var prefix &rest body)
-  "Bind VAR to a temporary directory while running BODY."
-  (declare (indent 2))
-  `(let ((,var (make-temp-file ,prefix t)))
-     (unwind-protect
-         (progn ,@body)
-       (when (file-directory-p ,var)
-         (delete-directory ,var t)))))
-
-(defmacro delib-flow-render-test--with-temp-zk-root (files &rest body)
-  "Run BODY with a temporary ZK root populated from FILES."
-  (declare (indent 1))
-  `(let ((root (make-temp-file "delib-flow-zk" t)))
-     (unwind-protect
-         (progn
-           (dolist (entry ,files)
-             (let* ((relative (car entry))
-                    (content (cdr entry))
-                    (target (expand-file-name relative root))
-                    (dir (file-name-directory target)))
-               (make-directory dir t)
-               (with-temp-file target
-                 (insert content))))
-           (let ((delib-flow-zk-root root))
-             ,@body))
-       (dolist (entry ,files)
-         (let ((buffer (get-file-buffer
-                        (expand-file-name (car entry) root))))
-           (when (buffer-live-p buffer)
-             (kill-buffer buffer))))
-       (when (file-directory-p root)
-         (delete-directory root t)))))
-
-(defun delib-flow-render-test--accept-inspect (run)
-  "Return RUN with inspect-source accepted and actions reseeded."
-  (delib-flow--seed-actions
-   (delib-flow--apply-inspect-review-outcome
-    run
-    'accepted
-    "Inspect result accepted. You may now match the project or retry inspect.")))
-
-(defun delib-flow-render-test--accept-match (run)
-  "Return RUN with match-project accepted and actions reseeded."
-  (delib-flow--seed-actions
-   (delib-flow--apply-match-review-outcome
-    run
-    'accepted
-    "Project match accepted. Continue with manual override or downstream stages as appropriate.")))
-
-(defun delib-flow-render-test--set-filing-selection (run selection &optional notes)
-  "Return RUN with filing-selection block set to SELECTION and NOTES."
-  (let* ((block (delib-flow--editable-block run 'filing-selection-review))
-         (text (format "Selection: %s
-Notes:
-%s
-"
-                       selection
-                       (or notes ""))))
-    (delib-flow--set-editable-block
-     run
-     'filing-selection-review
-     (delib-flow--set-editable-block-text block text))))
-
-(defun delib-flow-render-test--set-manual-project-selection (run selection &optional notes)
-  "Return RUN with manual project-selection block set to SELECTION and NOTES."
-  (let* ((block (delib-flow--editable-block run 'manual-project-selection))
-         (text (format "Selection: %s\nNotes:\n%s\n"
-                       selection
-                       (or notes ""))))
-    (delib-flow--set-editable-block
-     run
-     'manual-project-selection
-     (delib-flow--set-editable-block-text block text))))
-
-(defun delib-flow-render-test--set-cloud-target-stage (run stage-id &optional notes)
-  "Return RUN with cloud-routing review block set to STAGE-ID and NOTES."
-  (let* ((block (delib-flow--editable-block run 'cloud-routing-review))
-         (text (format "Target stage: %s\nNotes:\n%s\n"
-                       stage-id
-                       (or notes ""))))
-    (delib-flow--set-editable-block
-     run
-     'cloud-routing-review
-     (delib-flow--set-editable-block-text block text))))
+(ert-deftest delib-flow-render-managed-surface-descriptor-errors-for-missing-required-key ()
+  (let ((delib-flow--managed-surface-descriptor-alist
+         '((broken-surface
+            :buffer-name " *broken*"
+            :mode delib-flow-control-mode
+            :title-prefix "Broken"))))
+    (should-error (delib-flow--managed-surface-descriptor 'broken-surface)
+                  :type 'error)))
 
 (ert-deftest delib-flow-render-control-buffer-contains-required-sections ()
   (let* ((snapshot (list :title "Example"
@@ -390,7 +307,7 @@ Notes:
                 'reference-notes
                 (list candidate))))
          (run (delib-flow--run-stage-locally
-               (delib-flow-render-test--set-filing-selection run "1")
+               (delib-flow-test--set-filing-selection run "1")
                'draft-selected-reference-note))
          (text (delib-flow--current-result-text run)))
     (should (string-match-p "Selected note draft" text))
@@ -422,7 +339,7 @@ Notes:
          (run (delib-flow--initialize-run
                (list :title "Your Consumption Diet Is Your Moat"
                      :content source-content)))
-         (inspected (delib-flow-render-test--accept-inspect
+         (inspected (delib-flow-test--accept-inspect
                      (delib-flow--run-stage-locally run 'inspect-source)))
          (drafted (delib-flow--run-stage-locally inspected 'suggest-reference-notes))
          (text (delib-flow--current-result-text drafted)))
@@ -438,11 +355,12 @@ Notes:
                   26))))
 
 (ert-deftest delib-flow-audit-status-renders-archive-availability ()
-  (delib-flow-render-test--with-temp-directory-var archive-dir "delib-flow-audit-archive"
+  (delib-flow-test--with-temp-directory-var archive-dir "delib-flow-audit-archive"
     (let* ((run (delib-flow--initialize-run
                  (list :title "Example"
                        :content "* Example\nBody line\n")))
            (delib-flow-audit-archive-directory archive-dir)
+           (delib-flow--active-run nil)
            (text (delib-flow--audit-run-state-text run)))
       (should (string-match-p "Audit archive directory:" text))
       (should (string-match-p "Save archived run: not available" text))
@@ -484,17 +402,17 @@ Notes:
         (kill-buffer buffer)))))
 
 (ert-deftest delib-flow-working-context-renders-accepted-manual-project-decision ()
-  (delib-flow-render-test--with-temp-project-file
+  (delib-flow-test--with-temp-project-file
       "* Alpha Project\n* Beta Project\n"
     (let* ((run (delib-flow--initialize-run
                  (list :title "Completely Different Topic"
                        :content "* Completely Different Topic\nAgenda\n")))
-           (inspected (delib-flow-render-test--accept-inspect
+           (inspected (delib-flow-test--accept-inspect
                        (delib-flow--run-stage-locally run 'inspect-source)))
-           (matched (delib-flow-render-test--accept-match
+           (matched (delib-flow-test--accept-match
                      (delib-flow--run-stage-locally inspected 'match-project)))
            (selected-run
-            (delib-flow-render-test--set-manual-project-selection
+            (delib-flow-test--set-manual-project-selection
              matched
              "Alpha Project"
              "Operator selected the best fallback project."))
@@ -510,13 +428,13 @@ Notes:
           (kill-buffer buffer))))))
 
 (ert-deftest delib-flow-working-context-renders-retrieval-review-subsections ()
-  (delib-flow-render-test--with-temp-zk-root
+  (delib-flow-test--with-temp-zk-root
       '(("alpha.org" . "#+title: Alpha Project Notes\nKickoff agenda and blockers.\n")
         ("beta.org" . "#+title: Beta Notes\nUnrelated material.\n"))
     (let* ((run (delib-flow--initialize-run
                  (list :title "Alpha Project kickoff"
                        :content "* Alpha Project kickoff\nAgenda\n")))
-           (inspected (delib-flow-render-test--accept-inspect
+           (inspected (delib-flow-test--accept-inspect
                        (delib-flow--run-stage-locally run 'inspect-source)))
            (discovered
             (delib-flow--run-stage-locally inspected
@@ -537,15 +455,15 @@ Notes:
           (kill-buffer buffer))))))
 
 (ert-deftest delib-flow-stage-history-groups-attempts-by-stage ()
-  (delib-flow-render-test--with-temp-project-file
+  (delib-flow-test--with-temp-project-file
       "* Alpha Project\n"
     (let* ((run (delib-flow--initialize-run
                  (list :title "Alpha Project kickoff"
                        :content "* Alpha Project kickoff\nAgenda\n")))
            (first-inspect (delib-flow--run-stage-locally run 'inspect-source))
-           (accepted-inspect (delib-flow-render-test--accept-inspect first-inspect))
+           (accepted-inspect (delib-flow-test--accept-inspect first-inspect))
            (second-inspect (delib-flow--run-stage-locally accepted-inspect 'inspect-source))
-           (accepted-second-inspect (delib-flow-render-test--accept-inspect second-inspect))
+           (accepted-second-inspect (delib-flow-test--accept-inspect second-inspect))
            (matched (delib-flow--run-stage-locally accepted-second-inspect 'match-project))
            (buffer (delib-flow--render-control-buffer matched)))
       (unwind-protect
@@ -567,11 +485,11 @@ Notes:
   (let* ((run (delib-flow--initialize-run
                (list :title "Alice Example"
                      :content "* Alice Example\nContact alice@example.com\nAction items:\n- Draft kickoff follow-up\n")))
-         (inspected (delib-flow-render-test--accept-inspect
+         (inspected (delib-flow-test--accept-inspect
                      (delib-flow--run-stage-locally run 'inspect-source)))
          (cloud-decided
           (delib-flow--run-stage-locally
-           (delib-flow-render-test--set-cloud-target-stage inspected 'extract-actions)
+           (delib-flow-test--set-cloud-target-stage inspected 'extract-actions)
            'decide-cloud-pass))
          (sanitized
           (delib-flow--run-stage-locally cloud-decided 'sanitize-for-cloud))
@@ -596,7 +514,7 @@ Notes:
         (kill-buffer buffer)))))
 
 (ert-deftest delib-flow-render-filing-preview-prioritizes-actions-and-targets ()
-  (delib-flow-render-test--with-temp-project-file
+  (delib-flow-test--with-temp-project-file
       "* Alpha Project\n"
     (let* ((run (delib-flow--initialize-run
                  (list :title "Alpha Project kickoff"
@@ -608,7 +526,7 @@ Notes:
             (delib-flow--run-stage-locally drafted 'integrate-into-source))
            (selected
             (delib-flow--run-stage-locally
-             (delib-flow-render-test--set-filing-selection integrated "1")
+             (delib-flow-test--set-filing-selection integrated "1")
              'select-approved-filing-actions))
            (text (delib-flow--render-filing-preview-section selected)))
       (should (< (string-match-p "\\*\\*\\* What to do next" text)
@@ -623,7 +541,7 @@ Notes:
       (should (string-match-p "- If blocked:" text)))))
 
 (ert-deftest delib-flow-render-filing-preview-renders-selected-action-workflow ()
-  (delib-flow-render-test--with-temp-project-file
+  (delib-flow-test--with-temp-project-file
       "* Alpha Project\n"
     (let* ((run (delib-flow--initialize-run
                  (list :title "Alpha Project kickoff"
@@ -634,7 +552,7 @@ Notes:
            (integrated
             (delib-flow--run-stage-locally drafted 'integrate-into-source))
            (selected-run
-            (delib-flow-render-test--set-filing-selection integrated "1"))
+            (delib-flow-test--set-filing-selection integrated "1"))
            (text (delib-flow--render-filing-preview-section selected-run)))
       (should (string-match-p "\\*\\*\\* Selected action workspace" text))
       (should (string-match-p
@@ -655,7 +573,7 @@ Notes:
                  (string-match-p "\\*\\*\\* Filing actions" text))))))
 
 (ert-deftest delib-flow-render-filing-preview-renders-selected-waiting-for-workflow ()
-  (delib-flow-render-test--with-temp-project-file
+  (delib-flow-test--with-temp-project-file
       "* Alpha Project\n"
     (let* ((run (delib-flow--initialize-run
                  (list :title "Alpha Project kickoff"
@@ -666,7 +584,7 @@ Notes:
            (integrated
             (delib-flow--run-stage-locally drafted 'integrate-into-source))
            (selected-run
-            (delib-flow-render-test--set-filing-selection integrated "1"))
+            (delib-flow-test--set-filing-selection integrated "1"))
            (text (delib-flow--render-filing-preview-section selected-run)))
       (should (string-match-p "\\*\\*\\* Selected waiting-for workspace" text))
       (should (string-match-p
@@ -693,8 +611,8 @@ Notes:
          (run (delib-flow--seed-filing-selection-block
                (delib-flow--set-artifact-family-candidates
                 (plist-put
-                 (delib-flow-render-test--accept-inspect
-                  (delib-flow-render-test--accept-match
+                 (delib-flow-test--accept-inspect
+                  (delib-flow-test--accept-match
                    (delib-flow--initialize-run
                     (list :title "Example"
                           :content "* Example\nBody line\n"))))
@@ -711,7 +629,7 @@ Notes:
                        :target-locations nil))
                 'project-proposals
                 (list project))))
-         (selected-run (delib-flow-render-test--set-filing-selection run "1"))
+         (selected-run (delib-flow-test--set-filing-selection run "1"))
          (text (delib-flow--render-filing-preview-section selected-run)))
     (should (string-match-p "\\*\\*\\* Project workspace" text))
     (should (string-match-p "\\*\\* Project package" text))
@@ -750,7 +668,7 @@ Notes:
                       :selected-candidate-id
                       (delib-flow--artifact-candidate-id project)
                       :selected-draft project))))
-         (selected (delib-flow-render-test--set-filing-selection run "1"))
+         (selected (delib-flow-test--set-filing-selection run "1"))
          (text (with-current-buffer
                    (delib-flow--render-focused-filing-workspace-buffer selected)
                  (buffer-string))))
@@ -809,7 +727,7 @@ Notes:
     (should-not (string-match-p "Focused filing workspace" text))))
 
 (ert-deftest delib-flow-render-filing-preview-guides-drafted-project-toward-extraction ()
-  (delib-flow-render-test--with-temp-project-file
+  (delib-flow-test--with-temp-project-file
       "* Alpha Project\n"
     (let* ((run (delib-flow--initialize-run
                  (list :title "Broken steno exercise"
@@ -819,12 +737,12 @@ Notes:
                                    "https://example.com/drill?id=two"
                                    "I need to fix a couple of exercises on the steno website.")
                                  "\n"))))
-           (inspected (delib-flow-render-test--accept-inspect
+           (inspected (delib-flow-test--accept-inspect
                        (delib-flow--run-stage-locally run 'inspect-source)))
-           (matched (delib-flow-render-test--accept-match
+           (matched (delib-flow-test--accept-match
                      (delib-flow--run-stage-locally inspected 'match-project)))
            (proposed (delib-flow--run-stage-locally matched 'propose-new-project))
-           (selected (delib-flow-render-test--set-filing-selection proposed "1"))
+           (selected (delib-flow-test--set-filing-selection proposed "1"))
            (drafted (delib-flow--run-stage-locally selected
                                                    'draft-selected-project))
            (text (with-current-buffer
@@ -927,7 +845,7 @@ Notes:
                       :selected-candidate-id
                       (delib-flow--artifact-candidate-id project)
                       :selected-draft project))))
-         (selected (delib-flow-render-test--set-filing-selection run "1"))
+         (selected (delib-flow-test--set-filing-selection run "1"))
          (text (with-current-buffer
                    (delib-flow--render-focused-filing-workspace-buffer selected)
                  (buffer-string))))

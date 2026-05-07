@@ -3,74 +3,52 @@
 (require 'ert)
 (require 'org)
 (require 'delib-flow)
+(require 'delib-flow-test-support)
 
-(defmacro delib-flow-ui-test--with-temp-project-file (content &rest body)
-  "Run BODY with a temporary My Projects file containing CONTENT."
-  (declare (indent 1))
-  `(let ((file (make-temp-file "delib-flow-projects" nil ".org" ,content)))
-     (unwind-protect
-         (let ((delib-flow-my-projects-file file))
-           ,@body)
-       (when-let ((buffer (get-file-buffer file)))
-         (kill-buffer buffer))
-       (when (file-exists-p file)
-         (delete-file file)))))
+(ert-deftest delib-flow-ui-surface-render-descriptor-errors-for-unknown-surface ()
+  (should-error (delib-flow--surface-render-descriptor 'missing-surface)
+                :type 'error))
 
-(defun delib-flow-ui-test--set-operator-intent (run text)
-  "Return RUN with operator intent block set to TEXT."
-  (let ((block (delib-flow--editable-block run 'context-main)))
-    (delib-flow--set-editable-block
-     run
-     'context-main
-     (delib-flow--set-editable-block-text block text))))
+(ert-deftest delib-flow-ui-surface-render-descriptor-errors-for-missing-required-key ()
+  (let ((delib-flow--surface-render-descriptor-alist
+         '((broken-surface
+            :buffer-renderer delib-flow--render-control-buffer))))
+    (should-error (delib-flow--surface-render-descriptor 'broken-surface)
+                  :type 'error)))
 
-(defun delib-flow-ui-test--accept-inspect (run)
-  "Return RUN with inspect-source accepted and actions reseeded."
-  (delib-flow--seed-actions
-   (delib-flow--apply-inspect-review-outcome
-    run
-    'accepted
-    "Inspect result accepted. You may now match the project or retry inspect.")))
+(ert-deftest delib-flow-ui-stage-command-source-run-errors-for-unknown-sync-policy ()
+  (let ((delib-flow--active-run (delib-flow--initialize-run (list :title "Example")))
+        (delib-flow--stage-descriptor-alist
+         '((broken-stage
+            :id broken-stage
+            :label "Broken"
+            :command-runner-kind run-stage-locally
+            :command-sync invalid-sync
+            :command-rerender current-result))))
+    (should-error (delib-flow--stage-command-source-run 'broken-stage)
+                  :type 'error)))
 
-(defun delib-flow-ui-test--accept-match (run)
-  "Return RUN with match-project accepted and actions reseeded."
-  (delib-flow--seed-actions
-   (delib-flow--apply-match-review-outcome
-    run
-    'accepted
-    "Project match accepted. Continue with manual override or downstream stages as appropriate.")))
+(ert-deftest delib-flow-ui-rerender-after-stage-command-errors-for-unknown-policy ()
+  (let ((delib-flow--stage-descriptor-alist
+         '((broken-stage
+            :id broken-stage
+            :label "Broken"
+            :command-runner-kind run-stage-locally
+            :command-sync control-buffer
+            :command-rerender invalid-rerender))))
+    (should-error (delib-flow--rerender-after-stage-command 'broken-stage)
+                  :type 'error)))
 
-(defun delib-flow-ui-test--set-filing-selection (run selection &optional notes)
-  "Return RUN with filing-selection block set to SELECTION and NOTES."
-  (let* ((block (delib-flow--editable-block run 'filing-selection-review))
-         (text (format "Selection: %s\nNotes:\n%s\n"
-                       selection
-                       (or notes ""))))
-    (delib-flow--set-editable-block
-     run
-     'filing-selection-review
-     (delib-flow--set-editable-block-text block text))))
-
-(defun delib-flow-ui-test--reference-note-candidate-only-run ()
-  "Return a filing-ready run with a selected reference-note candidate only."
-  (let* ((candidate (list :kind 'reference-note
-                          :text "Create general PKM note for Project Atlas Pattern"
-                          :note-type 'general-pkm))
-         (run
-          (delib-flow--set-artifact-family-state
-           (delib-flow--initialize-run
-            (list :title "Atlas source"
-                  :content
-                  (string-join
-                   '("* Atlas source"
-                     "Project Atlas Pattern turns setup notes into reusable execution scaffolds."
-                     "Use this when a recurring project setup pattern keeps reappearing.")
-                   "\n")))
-           'reference-notes
-           (list :candidates (list candidate)
-                 :selected-candidate-id (delib-flow--artifact-candidate-id candidate)))))
-    (delib-flow--seed-actions
-     (delib-flow--seed-filing-selection-block run))))
+(ert-deftest delib-flow-ui-stage-command-runner-errors-for-unregistered-kind ()
+  (let ((delib-flow--stage-descriptor-alist
+         '((broken-stage
+            :id broken-stage
+            :label "Broken"
+            :command-runner-kind missing-runner
+            :command-sync control-buffer
+            :command-rerender current-result))))
+    (should-error (delib-flow--stage-command-runner 'broken-stage)
+                  :type 'error)))
 
 (ert-deftest delib-flow-ui-toggle-focus-mode-preserves-active-loop-visibility ()
   (let* ((run (delib-flow--initialize-run (list :title "Example")))
@@ -132,7 +110,7 @@
 (ert-deftest delib-flow-ui-refresh-buffer-rerenders-active-run ()
   (let* ((run (delib-flow--initialize-run (list :title "Example")))
          (delib-flow--active-run
-          (delib-flow-ui-test--set-operator-intent run "Retained edit"))
+          (delib-flow-test--set-operator-intent run "Retained edit"))
          (buffer (delib-flow--render-control-buffer run)))
     (unwind-protect
         (progn
@@ -168,7 +146,7 @@
         (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
 
 (ert-deftest delib-flow-ui-refresh-buffer-preserves-current-subheading-anchor ()
-  (delib-flow-ui-test--with-temp-project-file
+  (delib-flow-test--with-temp-project-file
       "* Alpha Project\n"
     (let* ((run (delib-flow--initialize-run
                  (list :title "Alpha Project kickoff"
@@ -460,7 +438,7 @@
                       :selected-candidate-id
                       (delib-flow--artifact-candidate-id candidate)
                       :selected-draft drafted-item))))
-         (delib-flow--active-run (delib-flow-ui-test--set-filing-selection run "1")))
+         (delib-flow--active-run (delib-flow-test--set-filing-selection run "1")))
     (unwind-protect
         (progn
           (delib-flow-open-filing-workspace)
@@ -500,7 +478,7 @@
         (kill-buffer (get-buffer delib-flow-filing-workspace-buffer-name))))))
 
 (ert-deftest delib-flow-ui-open-filing-workspace-renders-project-buffer-at-do-here-now ()
-  (delib-flow-ui-test--with-temp-project-file
+  (delib-flow-test--with-temp-project-file
       "* Alpha Project\n"
     (let* ((run (delib-flow--initialize-run
                  (list :title "Broken steno exercise"
@@ -509,12 +487,12 @@
                                    "https://example.com/path?id=one"
                                    "Need to fix a couple of exercises on the steno website.")
                                  "\n"))))
-           (inspected (delib-flow-ui-test--accept-inspect
+           (inspected (delib-flow-test--accept-inspect
                        (delib-flow--run-stage-locally run 'inspect-source)))
-           (matched (delib-flow-ui-test--accept-match
+           (matched (delib-flow-test--accept-match
                      (delib-flow--run-stage-locally inspected 'match-project)))
            (proposed (delib-flow--run-stage-locally matched 'propose-new-project))
-           (delib-flow--active-run (delib-flow-ui-test--set-filing-selection proposed "1")))
+           (delib-flow--active-run (delib-flow-test--set-filing-selection proposed "1")))
       (unwind-protect
           (progn
             (delib-flow-open-filing-workspace)
@@ -699,7 +677,7 @@
             (list :candidates (list candidate)
                   :selected-candidate-id
                   (delib-flow--artifact-candidate-id candidate)))))
-         (run (delib-flow-ui-test--set-filing-selection run "1"))
+         (run (delib-flow-test--set-filing-selection run "1"))
          (delib-flow--active-run run))
     (unwind-protect
         (progn
@@ -783,7 +761,7 @@
                             details)))))
 
 (ert-deftest delib-flow-ui-return-main-cockpit-uses-filing-preview-default-anchor ()
-  (let* ((run (delib-flow-ui-test--reference-note-candidate-only-run))
+  (let* ((run (delib-flow-test--reference-note-candidate-only-run))
          (delib-flow--active-run run)
          rendered-anchor
          control-buffer)
@@ -810,7 +788,7 @@
 
 (ert-deftest delib-flow-ui-jump-active-filing-workspace-opens-or-reuses-buffer ()
   (should-error (delib-flow-jump-to-active-filing-workspace) :type 'user-error)
-  (let* ((run (delib-flow-ui-test--reference-note-candidate-only-run))
+  (let* ((run (delib-flow-test--reference-note-candidate-only-run))
          (delib-flow--active-run run))
     (unwind-protect
         (progn
@@ -827,7 +805,7 @@
 (ert-deftest delib-flow-ui-return-main-cockpit-errors-without-run-and-rerenders-without-workspace ()
   (let ((delib-flow--active-run nil))
     (should-error (delib-flow-return-main-cockpit) :type 'user-error))
-  (let* ((run (delib-flow-ui-test--reference-note-candidate-only-run))
+  (let* ((run (delib-flow-test--reference-note-candidate-only-run))
          (delib-flow--active-run run))
     (unwind-protect
         (progn

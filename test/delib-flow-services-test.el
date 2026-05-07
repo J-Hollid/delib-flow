@@ -4,72 +4,7 @@
 (require 'ert)
 (require 'org)
 (require 'delib-flow)
-
-(defmacro delib-flow-services-test--with-temp-org-file (content &rest body)
-  "Run BODY with a temporary Org file containing CONTENT."
-  (declare (indent 1))
-  `(let ((file (make-temp-file "delib-flow-org" nil ".org" ,content)))
-     (unwind-protect
-         (let ((buffer (find-file-noselect file)))
-           (with-current-buffer buffer
-             (org-mode)
-             ,@body))
-       (when-let ((buffer (get-file-buffer file)))
-         (kill-buffer buffer))
-       (when (file-exists-p file)
-         (delete-file file)))))
-
-(defmacro delib-flow-services-test--with-temp-project-file (content &rest body)
-  "Run BODY with a temporary My Projects file containing CONTENT."
-  (declare (indent 1))
-  `(let ((file (make-temp-file "delib-flow-projects" nil ".org" ,content)))
-     (unwind-protect
-         (let ((delib-flow-my-projects-file file))
-           ,@body)
-       (when-let ((buffer (get-file-buffer file)))
-         (kill-buffer buffer))
-       (when (file-exists-p file)
-         (delete-file file)))))
-
-(defmacro delib-flow-services-test--with-temp-zk-root (files &rest body)
-  "Run BODY with a temporary ZK root populated from FILES."
-  (declare (indent 1))
-  `(let ((root (make-temp-file "delib-flow-zk" t)))
-     (unwind-protect
-         (progn
-           (dolist (entry ,files)
-             (let* ((relative (car entry))
-                    (content (cdr entry))
-                    (target (expand-file-name relative root))
-                    (dir (file-name-directory target)))
-               (make-directory dir t)
-               (with-temp-file target
-                 (insert content))))
-           (let ((delib-flow-zk-root root))
-             ,@body))
-       (dolist (entry ,files)
-         (let ((buffer (get-file-buffer
-                        (expand-file-name (car entry) root))))
-           (when (buffer-live-p buffer)
-             (kill-buffer buffer))))
-       (when (file-directory-p root)
-         (delete-directory root t)))))
-
-(defun delib-flow-services-test--accept-inspect (run)
-  "Return RUN with inspect-source accepted and actions reseeded."
-  (delib-flow--seed-actions
-   (delib-flow--apply-inspect-review-outcome
-    run
-    'accepted
-    "Inspect result accepted. You may now match the project or retry inspect.")))
-
-(defun delib-flow-services-test--accept-match (run)
-  "Return RUN with match-project accepted and actions reseeded."
-  (delib-flow--seed-actions
-   (delib-flow--apply-match-review-outcome
-    run
-    'accepted
-    "Project match accepted. Continue with manual override or downstream stages as appropriate.")))
+(require 'delib-flow-test-support)
 
 (ert-deftest delib-flow-execute-inspect-source-classifies-email-sources ()
   (let* ((source (list :title "Re: Alpha Project update"
@@ -235,7 +170,7 @@
                             (plist-get raw-output :source-type-reason)))))
 
 (ert-deftest delib-flow-project-candidates-ignore-state-bucket-headings ()
-  (delib-flow-services-test--with-temp-project-file
+  (delib-flow-test--with-temp-project-file
       "* Active\n** Alpha Project\nContact alice@example.com\n* Complete\n** Old Project\n* Waiting\n** Beta Project\n"
     (let ((titles
            (mapcar (lambda (candidate)
@@ -246,7 +181,7 @@
                      titles)))))
 
 (ert-deftest delib-flow-project-candidates-ignore-nested-project-todos ()
-  (delib-flow-services-test--with-temp-project-file
+  (delib-flow-test--with-temp-project-file
       "* Active\n** Alpha Project\n*** TODO Draft kickoff follow-up\n*** WAITING Vendor approval\n* Waiting\n** Beta Project\n*** TODO Schedule review\n"
     (let ((titles
            (mapcar (lambda (candidate)
@@ -257,7 +192,7 @@
                      titles)))))
 
 (ert-deftest delib-flow-project-candidates-ignore-nested-child-terms ()
-  (delib-flow-services-test--with-temp-project-file
+  (delib-flow-test--with-temp-project-file
       "* Active\n** Project Atlas :example:product:\nCore project concept.\n*** TODO Write follow-up note for [2026-02-24 Tue 22:37] Project Atlas\n"
     (let* ((candidate (car (delib-flow--project-candidates-from-file
                             delib-flow-my-projects-file)))
@@ -269,7 +204,7 @@
       (should-not (member "todo" terms)))))
 
 (ert-deftest delib-flow-inbox-heading-snapshots-ignore-nested-headings ()
-  (delib-flow-services-test--with-temp-org-file
+  (delib-flow-test--with-temp-org-file
       "* First item\nBody\n** Nested child\nNested body\n* Second item\nMore body\n"
     (let ((snapshots (delib-flow--inbox-heading-snapshots
                       (buffer-file-name))))
@@ -279,7 +214,7 @@
                              snapshots))))))
 
 (ert-deftest delib-flow-inbox-heading-snapshots-can-read-configured-outline-path ()
-  (delib-flow-services-test--with-temp-org-file
+  (delib-flow-test--with-temp-org-file
       "* Inbox\n** First queued item\nBody\n** Second queued item\nMore body\n* Elsewhere\n** Ignored child\n"
     (let ((snapshots (delib-flow--inbox-heading-snapshots
                       (buffer-file-name)
@@ -290,7 +225,7 @@
                              snapshots))))))
 
 (ert-deftest delib-flow-inbox-heading-snapshots-do-not-mark-inbox-buffer-modified ()
-  (delib-flow-services-test--with-temp-org-file
+  (delib-flow-test--with-temp-org-file
       "* Inbox\n** First queued item\nBody\n** Second queued item\nMore body\n"
     (let ((buffer (find-file-noselect (buffer-file-name))))
       (unwind-protect
@@ -346,9 +281,9 @@
             (let* ((run (delib-flow--initialize-run
                          (list :title "Project Atlas"
                                :content "* Project Atlas\nUseful support context.\n")))
-                   (inspected (delib-flow-services-test--accept-inspect
+                   (inspected (delib-flow-test--accept-inspect
                                (delib-flow--run-stage-locally run 'inspect-source)))
-                   (matched (delib-flow-services-test--accept-match
+                   (matched (delib-flow-test--accept-match
                              (delib-flow--run-stage-locally inspected 'match-project)))
                    (updated-run
                     (delib-flow--run-stage-locally matched
@@ -390,9 +325,9 @@
                          (list :title "Project Atlas"
                                :file source-file
                                :content "* Project Atlas\nUseful support context.\n")))
-                   (inspected (delib-flow-services-test--accept-inspect
+                   (inspected (delib-flow-test--accept-inspect
                                (delib-flow--run-stage-locally run 'inspect-source)))
-                   (matched (delib-flow-services-test--accept-match
+                   (matched (delib-flow-test--accept-match
                              (delib-flow--run-stage-locally inspected 'match-project)))
                    (updated-run
                     (delib-flow--run-stage-locally matched
@@ -441,9 +376,9 @@
                          (list :title "Your Consumption Diet Is Your Moat"
                                :file "/tmp/inbox-item.org"
                                :content "* Your Consumption Diet Is Your Moat\nA quick update on week 2 of the AI Second Brain cohort.\nFrom: hello@fortelabs.com\n")))
-                   (inspected (delib-flow-services-test--accept-inspect
+                   (inspected (delib-flow-test--accept-inspect
                                (delib-flow--run-stage-locally run 'inspect-source)))
-                   (matched (delib-flow-services-test--accept-match
+                   (matched (delib-flow-test--accept-match
                              (delib-flow--run-stage-locally inspected 'match-project)))
                    (updated-run
                     (delib-flow--run-stage-locally matched

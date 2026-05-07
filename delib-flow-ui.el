@@ -1030,62 +1030,96 @@
          (not (string-prefix-p "No staged content preview is available yet." text))
          (not (string-prefix-p "Staged content preview is unavailable:" text)))))
 
-(delib-flow--define-function
- delib-flow--finalize-rendered-active-run-buffer
- (run buffer anchor-section)
- "Apply final visibility, anchoring, and conflict recovery for RUN in BUFFER."
- (with-current-buffer buffer
-   (delib-flow--apply-visibility-policy run)
-   (unless (delib-flow--goto-section anchor-section)
-     (goto-char (point-min)))
-   (delib-flow--align-heading-top)
-   (delib-flow--highlight-changed-heading run))
- (when (and delib-flow--active-run (eq run delib-flow--active-run))
-   (let ((recorded
-          (plist-get (delib-flow--run-ui run) :managed-region-conflicts)))
-     (when recorded
-       (setq delib-flow--active-run
-             (delib-flow--seed-actions
-              (delib-flow--set-managed-region-conflicts
-               delib-flow--active-run nil)))
-       (setq run delib-flow--active-run)
-       (setq buffer (delib-flow--render-control-buffer run))
-       (with-current-buffer buffer
-         (delib-flow--apply-visibility-policy run)
-         (unless (delib-flow--goto-section anchor-section)
-           (goto-char (point-min)))
-         (delib-flow--align-heading-top)
-         (delib-flow--highlight-changed-heading run)))))
- (delib-flow--refresh-staged-content-preview-buffer run)
- buffer)
+(defconst delib-flow--surface-render-descriptor-alist
+  '((cockpit
+     :buffer-renderer delib-flow--render-control-buffer
+     :visibility-policy delib-flow--apply-visibility-policy
+     :kill-hook delib-flow--control-buffer-killed
+     :conflict-recovery t)
+    (filing-workspace
+     :buffer-renderer delib-flow--render-focused-filing-workspace-buffer
+     :visibility-policy delib-flow--apply-focused-filing-workspace-visibility-policy
+     :kill-hook delib-flow--focused-filing-workspace-buffer-killed))
+  "Surface render descriptors keyed by internal surface id.")
 
-(defun delib-flow--finalize-rendered-filing-workspace-buffer (run buffer anchor-section)
-  "Apply final visibility and anchoring for RUN in focused filing BUFFER."
-  (with-current-buffer buffer
-    (delib-flow--apply-focused-filing-workspace-visibility-policy run)
-    (unless (delib-flow--goto-section anchor-section)
-      (goto-char (point-min)))
-    (delib-flow--align-heading-top))
+(defconst delib-flow--required-surface-render-descriptor-keys
+  '(:buffer-renderer :visibility-policy)
+  "Descriptor keys required by the shared surface render pipeline.")
+
+(defun delib-flow--surface-render-descriptor (surface-id)
+  "Return render descriptor plist for SURFACE-ID."
+  (let ((descriptor (cdr (assq surface-id
+                               delib-flow--surface-render-descriptor-alist))))
+    (unless descriptor
+      (error "No surface render descriptor is registered for %s" surface-id))
+    (dolist (key delib-flow--required-surface-render-descriptor-keys descriptor)
+      (unless (plist-member descriptor key)
+        (error "Surface render descriptor for %s is missing %s"
+               surface-id key)))))
+
+(defun delib-flow--finalize-rendered-surface-buffer (surface-id run buffer anchor-section)
+  "Apply final visibility and anchoring for SURFACE-ID RUN in BUFFER."
+  (let* ((descriptor (delib-flow--surface-render-descriptor surface-id))
+         (visibility-policy (plist-get descriptor :visibility-policy)))
+    (with-current-buffer buffer
+      (funcall visibility-policy run)
+      (unless (delib-flow--goto-section anchor-section)
+        (goto-char (point-min)))
+      (delib-flow--align-heading-top)
+      (when (eq surface-id 'cockpit)
+        (delib-flow--highlight-changed-heading run))))
+  (when (and (eq surface-id 'cockpit)
+             (plist-get (delib-flow--surface-render-descriptor surface-id)
+                        :conflict-recovery)
+             delib-flow--active-run
+             (eq run delib-flow--active-run))
+    (let ((recorded
+           (plist-get (delib-flow--run-ui run) :managed-region-conflicts)))
+      (when recorded
+        (setq delib-flow--active-run
+              (delib-flow--seed-actions
+               (delib-flow--set-managed-region-conflicts
+                delib-flow--active-run nil)))
+        (setq run delib-flow--active-run)
+        (setq buffer (delib-flow--render-control-buffer run))
+        (with-current-buffer buffer
+          (funcall (plist-get (delib-flow--surface-render-descriptor 'cockpit)
+                              :visibility-policy)
+                   run)
+          (unless (delib-flow--goto-section anchor-section)
+            (goto-char (point-min)))
+          (delib-flow--align-heading-top)
+          (delib-flow--highlight-changed-heading run)))))
+  (when (eq surface-id 'cockpit)
+    (delib-flow--refresh-staged-content-preview-buffer run))
   buffer)
+
+(defun delib-flow--render-surface-buffer (surface-id run anchor-section)
+  "Return SURFACE-ID buffer freshly rendered from RUN using ANCHOR-SECTION."
+  (let* ((descriptor (delib-flow--surface-render-descriptor surface-id))
+         (renderer (plist-get descriptor :buffer-renderer))
+         (kill-hook (plist-get descriptor :kill-hook))
+         (buffer (funcall renderer run)))
+    (with-current-buffer buffer
+      (when kill-hook
+        (add-hook 'kill-buffer-hook kill-hook nil t)))
+    (delib-flow--finalize-rendered-surface-buffer
+     surface-id run buffer anchor-section)))
 
 (defun delib-flow--render-active-run-buffer (run &optional anchor-section)
   "Return the control buffer freshly rendered from RUN.
 
 When ANCHOR-SECTION is non-nil, move point to that top-level section."
-  (let ((buffer (delib-flow--render-control-buffer run)))
-    (with-current-buffer buffer
-      (add-hook 'kill-buffer-hook #'delib-flow--control-buffer-killed nil t))
-    (delib-flow--finalize-rendered-active-run-buffer run buffer anchor-section)))
+  (delib-flow--render-surface-buffer 'cockpit run anchor-section))
 
 (defun delib-flow--render-filing-workspace-buffer (run &optional anchor-section)
   "Return the focused filing workspace freshly rendered from RUN."
-  (let ((buffer (delib-flow--render-focused-filing-workspace-buffer run)))
-    (delib-flow--finalize-rendered-filing-workspace-buffer
-     run
-     buffer
-     (or anchor-section
-         (delib-flow--filing-workspace-anchor run)
-         (delib-flow--default-filing-workspace-anchor run)))))
+  (delib-flow--render-surface-buffer
+   'filing-workspace
+   run
+   (or anchor-section
+       (delib-flow--filing-workspace-anchor run)
+       (delib-flow--default-filing-workspace-anchor run))))
 
 (defun delib-flow--render-clean-source-buffer (run)
   "Return cleaned source review buffer for RUN."
@@ -1893,12 +1927,7 @@ the current local heading."
 
 (defun delib-flow--run-selected-reference-note-part-stage (stage-id)
   "Run selected reference-note part STAGE-ID and rerender the result."
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--execute-local-stage delib-flow--active-run stage-id)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command stage-id))
 
 (defun delib-flow-action-refresh-selected-reference-note-draft-body ()
   "Regenerate only the working-draft body of the selected note draft."
@@ -2180,6 +2209,81 @@ the current local heading."
       (call-interactively command)
     (user-error "%s" error-message)))
 
+(defun delib-flow--require-active-run ()
+  "Signal a user error when no active run exists."
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run")))
+
+(defun delib-flow--stage-command-source-run (stage-id)
+  "Return the active run prepared according to STAGE-ID sync policy."
+  (delib-flow--require-active-run)
+  (pcase (delib-flow--stage-command-sync stage-id)
+    ('control-buffer
+     (delib-flow--sync-run-from-control-buffer delib-flow--active-run))
+    ('active-run
+     delib-flow--active-run)
+    (other
+     (error "Unknown command sync policy %s for %s" other stage-id))))
+
+(defun delib-flow--run-stage-command-dynamic-cloud-stage (run stage-id)
+  "Return RUN after executing STAGE-ID using the configured cloud path."
+  (if (delib-flow--run-cloud-stage-p stage-id)
+      (delib-flow--run-stage-in-cloud run stage-id)
+    (delib-flow--run-stage-locally run stage-id)))
+
+(defconst delib-flow--stage-command-runner-alist
+  '((execute-local-stage . delib-flow--execute-local-stage)
+    (run-stage-locally . delib-flow--run-stage-locally)
+    (run-stage-in-cloud . delib-flow--run-stage-in-cloud)
+    (dynamic-cloud-stage . delib-flow--run-stage-command-dynamic-cloud-stage))
+  "Runner functions keyed by internal stage command kind.")
+
+(defun delib-flow--stage-command-runner (stage-id)
+  "Return internal UI stage runner function for STAGE-ID."
+  (or (alist-get (delib-flow--stage-command-runner-kind stage-id)
+                 delib-flow--stage-command-runner-alist)
+      (error "No command runner is registered for %s" stage-id)))
+
+(defun delib-flow--rerender-after-stage-command (stage-id)
+  "Rerender the active surfaces after STAGE-ID according to its policy."
+  (pcase (delib-flow--stage-command-rerender stage-id)
+    ('current-result
+     (delib-flow--rerender-current-result))
+    ('active-run-buffer
+     (delib-flow--rerender-active-run-buffer))
+    (other
+     (error "Unknown rerender policy %s for %s" other stage-id))))
+
+(defun delib-flow--run-stage-command (stage-id &optional prepare-run)
+  "Execute STAGE-ID through the shared command lifecycle.
+
+PREPARE-RUN receives the synced active run and may validate or rewrite it
+before the stage executes."
+  (let* ((run (delib-flow--stage-command-source-run stage-id))
+         (prepared-run (if prepare-run
+                           (funcall prepare-run run)
+                         run))
+         (runner (delib-flow--stage-command-runner stage-id)))
+    (setq delib-flow--active-run
+          (delib-flow--seed-actions
+           (funcall runner prepared-run stage-id)))
+    (delib-flow--rerender-after-stage-command stage-id)))
+
+(defun delib-flow--apply-review-command
+    (stage-id review-pending-p update-fn error-message)
+  "Apply a review outcome for STAGE-ID when REVIEW-PENDING-P succeeds.
+
+UPDATE-FN receives the current active run and must return the updated run."
+  (delib-flow--require-active-run)
+  (unless (funcall review-pending-p delib-flow--active-run)
+    (user-error "%s" error-message))
+  (setq delib-flow--active-run
+        (delib-flow--seed-actions
+         (delib-flow--refresh-run-audit
+          (funcall update-fn delib-flow--active-run)
+          stage-id)))
+  (delib-flow--rerender-after-stage-command stage-id))
+
 (defmacro delib-flow--define-interactive-command (name docstring &rest body)
   "Define NAME with DOCSTRING and BODY as an interactive command."
   `(defalias ',name
@@ -2190,128 +2294,91 @@ the current local heading."
 
 (delib-flow--define-interactive-command delib-flow-action-inspect-source
   "Execute the inspect-source stage for the active run."
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--execute-local-stage delib-flow--active-run
-                                          'inspect-source)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command 'inspect-source))
 
 (defun delib-flow-action-match-project ()
   "Execute the match-project stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
+  (delib-flow--require-active-run)
   (unless (delib-flow--stage-accepted-p delib-flow--active-run 'inspect-source)
     (user-error "Inspect result must be accepted before project matching"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--execute-local-stage delib-flow--active-run
-                                          'match-project)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command 'match-project))
 
 (defun delib-flow-action-accept-inspect-source ()
   "Accept the current inspect-source result for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (unless (delib-flow--inspect-review-pending-p delib-flow--active-run)
-    (user-error "No inspect result is pending review"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--refresh-run-audit
-          (delib-flow--apply-inspect-review-outcome
-           (delib-flow--apply-inspect-source-review-edit
-            (delib-flow--sync-run-from-control-buffer delib-flow--active-run))
-           'accepted
-           "Inspect result accepted. You may now match the project or retry inspect.")
-          'inspect-source)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--apply-review-command
+   'inspect-source
+   #'delib-flow--inspect-review-pending-p
+   (lambda (run)
+     (delib-flow--apply-inspect-review-outcome
+      (delib-flow--apply-inspect-source-review-edit
+       (delib-flow--sync-run-from-control-buffer run))
+      'accepted
+      "Inspect result accepted. You may now match the project or retry inspect."))
+   "No inspect result is pending review"))
 
 (defun delib-flow-action-reject-inspect-source ()
   "Reject the current inspect-source result for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (unless (delib-flow--inspect-review-pending-p delib-flow--active-run)
-    (user-error "No inspect result is pending review"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--refresh-run-audit
-          (delib-flow--apply-inspect-review-outcome
-           delib-flow--active-run
-           'rejected
-           "Inspect result rejected. Retry inspect before matching a project.")
-          'inspect-source)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--apply-review-command
+   'inspect-source
+   #'delib-flow--inspect-review-pending-p
+   (lambda (run)
+     (delib-flow--apply-inspect-review-outcome
+      run
+      'rejected
+      "Inspect result rejected. Retry inspect before matching a project."))
+   "No inspect result is pending review"))
 
 (defun delib-flow-action-accept-match-project ()
   "Accept the current match-project result for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (unless (delib-flow--match-review-pending-p delib-flow--active-run)
-    (user-error "No project match is pending review"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--refresh-run-audit
-          (delib-flow--apply-match-review-outcome
-           delib-flow--active-run
-           'accepted
-           (if (memq (delib-flow--match-status delib-flow--active-run) '(ambiguous no-match))
-               "Project match accepted for manual review. Edit the manual project selection block, then choose a project manually or continue with no-match follow-up."
-             "Project match accepted. Continue with downstream stages as appropriate."))
-          'match-project)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--apply-review-command
+   'match-project
+   #'delib-flow--match-review-pending-p
+   (lambda (run)
+     (delib-flow--apply-match-review-outcome
+      run
+      'accepted
+      (if (memq (delib-flow--match-status run) '(ambiguous no-match))
+          "Project match accepted for manual review. Edit the manual project selection block, then choose a project manually or continue with no-match follow-up."
+        "Project match accepted. Continue with downstream stages as appropriate.")))
+   "No project match is pending review"))
 
 (defun delib-flow-action-reject-match-project ()
   "Reject the current match-project result for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (unless (delib-flow--match-review-pending-p delib-flow--active-run)
-    (user-error "No project match is pending review"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--refresh-run-audit
-          (delib-flow--apply-match-review-outcome
-           delib-flow--active-run
-           'rejected
-           "Project match rejected. Retry project matching before downstream project-dependent stages.")
-          'match-project)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--apply-review-command
+   'match-project
+   #'delib-flow--match-review-pending-p
+   (lambda (run)
+     (delib-flow--apply-match-review-outcome
+      run
+      'rejected
+      "Project match rejected. Retry project matching before downstream project-dependent stages."))
+   "No project match is pending review"))
 
 (defun delib-flow-action-discover-reference-material ()
   "Execute the discover-reference-material stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
+  (delib-flow--require-active-run)
   (unless (or (delib-flow--project-decision-ready-p delib-flow--active-run)
               (delib-flow--stage-accepted-p delib-flow--active-run 'inspect-source))
     (user-error "Accept Inspect Source before reference discovery"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--execute-local-stage delib-flow--active-run
-                                          'discover-reference-material)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command 'discover-reference-material))
 
 (defun delib-flow-action-filter-reference-material ()
   "Execute the filter-reference-material stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
+  (delib-flow--require-active-run)
   (unless (delib-flow--stage-executed-p delib-flow--active-run
                                         'discover-reference-material)
     (user-error "Reference discovery must run before filtering retained material"))
   (unless (plist-get (delib-flow--run-working-context delib-flow--active-run)
                      :retrieved-candidates)
     (user-error "No discovered reference material is available to filter"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--execute-local-stage delib-flow--active-run
-                                          'filter-reference-material)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command 'filter-reference-material))
 
 (delib-flow--define-function delib-flow-choose-manual-project nil
   "Choose a valid manual project candidate with completion."
@@ -2424,71 +2491,49 @@ the current local heading."
 (defun delib-flow-action-propose-new-project ()
   "Execute the propose-new-project stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
+  (delib-flow--require-active-run)
   (unless (delib-flow--project-proposal-ready-p delib-flow--active-run)
     (user-error "A reviewed ambiguous or no-match project decision is required before proposing a new project"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--execute-local-stage delib-flow--active-run
-                                          'propose-new-project)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command 'propose-new-project))
 
 (defun delib-flow-action-extract-actions ()
   "Execute the extract-actions stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
+  (delib-flow--require-active-run)
   (unless (delib-flow--project-extraction-context-ready-p delib-flow--active-run)
     (user-error "%s"
                 (delib-flow--project-extraction-blocked-message
                  delib-flow--active-run 'action)))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--execute-local-stage delib-flow--active-run
-                                          'extract-actions)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command 'extract-actions))
 
 (defun delib-flow-action-extract-waiting-for ()
   "Execute the extract-waiting-for stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
+  (delib-flow--require-active-run)
   (unless (delib-flow--project-extraction-context-ready-p delib-flow--active-run)
     (user-error "%s"
                 (delib-flow--project-extraction-blocked-message
                  delib-flow--active-run 'waiting-for)))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--execute-local-stage delib-flow--active-run
-                                          'extract-waiting-for)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command 'extract-waiting-for))
 
 (defun delib-flow-action-suggest-reference-notes ()
   "Execute the suggest-reference-notes stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
+  (delib-flow--require-active-run)
   (unless (delib-flow--reference-note-suggestion-ready-p delib-flow--active-run)
     (user-error "Accepted inspect result is required before suggesting reference notes"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--execute-local-stage delib-flow--active-run
-                                          'suggest-reference-notes)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command 'suggest-reference-notes))
 
 (defun delib-flow--run-selected-artifact-stage (stage-id selector expected-kind error-message)
   "Run STAGE-ID for the selected artifact from SELECTOR.
 Require the selected artifact to have EXPECTED-KIND or raise ERROR-MESSAGE."
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (unless (eq (plist-get (funcall selector delib-flow--active-run) :kind)
-              expected-kind)
-    (user-error "%s" error-message))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--execute-local-stage delib-flow--active-run stage-id)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command
+   stage-id
+   (lambda (run)
+     (unless (eq (plist-get (funcall selector run) :kind)
+                 expected-kind)
+       (user-error "%s" error-message))
+     run)))
 
 (defun delib-flow-action-draft-selected-action ()
   "Execute the selected-action drafting stage for the active run."
@@ -2729,38 +2774,17 @@ Require the selected artifact to have EXPECTED-KIND or raise ERROR-MESSAGE."
 (defun delib-flow-action-decide-cloud-pass ()
   "Execute the decide-cloud-pass stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--run-stage-locally
-          (delib-flow--sync-run-from-control-buffer delib-flow--active-run)
-          'decide-cloud-pass)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command 'decide-cloud-pass))
 
 (defun delib-flow-action-sanitize-for-cloud ()
   "Execute the sanitize-for-cloud stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--run-stage-locally
-          (delib-flow--sync-run-from-control-buffer delib-flow--active-run)
-          'sanitize-for-cloud)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command 'sanitize-for-cloud))
 
 (defun delib-flow-action-approve-cloud-send ()
   "Execute the approve-cloud-send stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--run-stage-locally
-          (delib-flow--sync-run-from-control-buffer delib-flow--active-run)
-          'approve-cloud-send)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command 'approve-cloud-send))
 
 (defun delib-flow-action-restart-cloud-path ()
   "Restart the current cloud path for the active run."
@@ -2776,17 +2800,7 @@ Require the selected artifact to have EXPECTED-KIND or raise ERROR-MESSAGE."
 (defun delib-flow-action-run-cloud-stage ()
   "Execute the run-cloud-stage stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (setq delib-flow--active-run
-        (if (delib-flow--run-cloud-stage-p 'run-cloud-stage)
-            (delib-flow--run-stage-in-cloud
-             (delib-flow--sync-run-from-control-buffer delib-flow--active-run)
-             'run-cloud-stage)
-          (delib-flow--run-stage-locally
-           (delib-flow--sync-run-from-control-buffer delib-flow--active-run)
-           'run-cloud-stage)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command 'run-cloud-stage))
 
 (defun delib-flow-action-retry-rerouted-cloud-stage ()
   "Retry the current rerouted cloud target for the active run."
@@ -2823,41 +2837,19 @@ Require the selected artifact to have EXPECTED-KIND or raise ERROR-MESSAGE."
 (defun delib-flow-action-approve-candidate-reintegration ()
   "Execute the approve-candidate-reintegration stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--run-stage-locally
-          (delib-flow--sync-run-from-control-buffer delib-flow--active-run)
-          'approve-candidate-reintegration)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command 'approve-candidate-reintegration))
 
 (defun delib-flow-action-integrate-into-source ()
   "Execute the integrate-into-source stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--execute-local-stage
-          (delib-flow--sync-run-from-control-buffer delib-flow--active-run)
-          'integrate-into-source)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command 'integrate-into-source))
 
 (defun delib-flow-action-reject-draft-filing-artifact ()
   "Execute the reject-draft-filing-artifact stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (let ((synced-run
-         (delib-flow--validate-filing-selection-entry
-          (delib-flow--sync-run-from-control-buffer delib-flow--active-run))))
-    (setq delib-flow--active-run
-          (delib-flow--seed-actions
-           (delib-flow--execute-local-stage
-            synced-run
-            'reject-draft-filing-artifact))))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command
+   'reject-draft-filing-artifact
+   #'delib-flow--validate-filing-selection-entry))
 
 (defun delib-flow-choose-filing-selection ()
   "Choose a valid filing artifact selection with completion."
@@ -2943,42 +2935,20 @@ Require the selected artifact to have EXPECTED-KIND or raise ERROR-MESSAGE."
 (defun delib-flow-action-select-approved-filing-actions ()
   "Execute the select-approved-filing-actions stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (let ((synced-run
-         (delib-flow--validate-filing-selection-entry
-          (delib-flow--sync-run-from-control-buffer delib-flow--active-run))))
-    (setq delib-flow--active-run
-          (delib-flow--seed-actions
-           (delib-flow--execute-local-stage
-            synced-run
-            'select-approved-filing-actions))))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command
+   'select-approved-filing-actions
+   #'delib-flow--validate-filing-selection-entry))
 
 (defun delib-flow-action-file-approved-outputs ()
   "Execute the file-approved-outputs stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--execute-local-stage
-          (delib-flow--sync-run-from-control-buffer delib-flow--active-run)
-          'file-approved-outputs)))
-  (delib-flow--rerender-current-result)
+  (delib-flow--run-stage-command 'file-approved-outputs)
   (delib-flow--show-filed-target-locations delib-flow--active-run))
 
 (defun delib-flow-action-resolve-filing-conflict ()
   "Execute the resolve-filing-conflict stage for the active run."
   (interactive)
-  (unless delib-flow--active-run
-    (user-error "No active delib-flow run"))
-  (setq delib-flow--active-run
-        (delib-flow--seed-actions
-         (delib-flow--execute-local-stage
-          (delib-flow--sync-run-from-control-buffer delib-flow--active-run)
-          'resolve-filing-conflict)))
-  (delib-flow--rerender-current-result))
+  (delib-flow--run-stage-command 'resolve-filing-conflict))
 
 (defun delib-flow-action-stage-placeholder ()
   "Signal that the selected stage exists but is not yet implemented."

@@ -4,70 +4,10 @@
 (require 'cl-lib)
 (require 'org)
 (require 'delib-flow)
-
-(defmacro delib-flow-audit-test--with-temp-project-file (content &rest body)
-  "Run BODY with a temporary My Projects file containing CONTENT."
-  (declare (indent 1))
-  `(let ((file (make-temp-file "delib-flow-projects" nil ".org" ,content)))
-     (unwind-protect
-         (let ((delib-flow-my-projects-file file))
-           ,@body)
-       (when-let ((buffer (get-file-buffer file)))
-         (kill-buffer buffer))
-       (when (file-exists-p file)
-         (delete-file file)))))
-
-(defmacro delib-flow-audit-test--with-temp-audit-file (&rest body)
-  "Run BODY with a temporary audit log file."
-  (declare (indent 0))
-  `(let ((file (make-temp-file "delib-flow-audit" nil ".org")))
-     (unwind-protect
-         (let ((delib-flow-audit-log-file file))
-           ,@body)
-       (when (file-exists-p file)
-         (delete-file file)))))
-
-(defmacro delib-flow-audit-test--with-temp-directory-var (var prefix &rest body)
-  "Bind VAR to a temporary directory during BODY."
-  (declare (indent 2))
-  `(let ((,var (make-temp-file ,prefix t)))
-     (unwind-protect
-         (progn ,@body)
-       (when (file-directory-p ,var)
-         (delete-directory ,var t)))))
-
-(defun delib-flow-audit-test--accept-inspect (run)
-  "Return RUN with inspect-source accepted and actions reseeded."
-  (delib-flow--seed-actions
-   (delib-flow--apply-inspect-review-outcome
-    run
-    'accepted
-    "Inspect result accepted. You may now match the project or retry inspect.")))
-
-(defun delib-flow-audit-test--set-filing-selection (run selection &optional notes)
-  "Return RUN with filing-selection block set to SELECTION and NOTES."
-  (let* ((block (delib-flow--editable-block run 'filing-selection-review))
-         (text (format "Selection: %s\nNotes:\n%s\n"
-                       selection
-                       (or notes ""))))
-    (delib-flow--set-editable-block
-     run
-     'filing-selection-review
-     (delib-flow--set-editable-block-text block text))))
-
-(defun delib-flow-audit-test--set-cloud-target-stage (run stage-id &optional notes)
-  "Return RUN with cloud-routing review block set to STAGE-ID and NOTES."
-  (let* ((block (delib-flow--editable-block run 'cloud-routing-review))
-         (text (format "Target stage: %s\nNotes:\n%s\n"
-                       stage-id
-                       (or notes ""))))
-    (delib-flow--set-editable-block
-     run
-     'cloud-routing-review
-     (delib-flow--set-editable-block-text block text))))
+(require 'delib-flow-test-support)
 
 (ert-deftest delib-flow-stage-execution-updates-audit-state-and-file ()
-  (delib-flow-audit-test--with-temp-audit-file
+  (delib-flow-test--with-temp-audit-file
     (let* ((run (delib-flow--initialize-run
                  (list :title "Example"
                        :content "* Example\nBody line\n")))
@@ -100,7 +40,7 @@
     (should (equal "llama3" (delib-flow--audit-model-name entry)))))
 
 (ert-deftest delib-flow-stage-execution-redacts-audit-payloads ()
-  (delib-flow-audit-test--with-temp-audit-file
+  (delib-flow-test--with-temp-audit-file
     (let* ((delib-flow-audit-payload-policy 'redacted)
            (delib-flow-audit-redaction-profile 'strict)
            (run (delib-flow--initialize-run
@@ -122,7 +62,7 @@
         (should (search-forward "[redacted-url]" nil t))))))
 
 (ert-deftest delib-flow-stage-execution-omits-audit-payloads-under-metadata-policy ()
-  (delib-flow-audit-test--with-temp-audit-file
+  (delib-flow-test--with-temp-audit-file
     (let* ((delib-flow-audit-payload-policy 'metadata-only)
            (run (delib-flow--initialize-run
                  (list :title "Example"
@@ -141,7 +81,7 @@
                                 nil t))))))
 
 (ert-deftest delib-flow-review-outcome-refreshes-audit-stage-state ()
-  (delib-flow-audit-test--with-temp-audit-file
+  (delib-flow-test--with-temp-audit-file
     (let* ((run (delib-flow--initialize-run
                  (list :title "Example"
                        :content "* Example\nBody line\n")))
@@ -163,7 +103,7 @@
         (should (search-forward ":REVIEW_STATE: accepted" nil t))))))
 
 (ert-deftest delib-flow-audit-status-rerenders-after-stage-execution ()
-  (delib-flow-audit-test--with-temp-audit-file
+  (delib-flow-test--with-temp-audit-file
     (let* ((run (delib-flow--initialize-run
                  (list :title "Example"
                        :content "* Example\nBody line\n")))
@@ -198,12 +138,12 @@
           (kill-buffer (get-buffer delib-flow-control-buffer-name)))))))
 
 (ert-deftest delib-flow-retry-refreshes-audit-with-superseded-prior-stage ()
-  (delib-flow-audit-test--with-temp-audit-file
+  (delib-flow-test--with-temp-audit-file
     (let* ((run (delib-flow--initialize-run
                  (list :title "Example"
                        :content "* Example\nBody line\n")))
            (accepted
-            (delib-flow-audit-test--accept-inspect
+            (delib-flow-test--accept-inspect
              (delib-flow--refresh-run-audit
               (delib-flow--run-stage-locally run 'inspect-source)
               'inspect-source)))
@@ -226,15 +166,15 @@
         (should (search-forward ":REVIEW_STATE: pending-review" nil t))))))
 
 (ert-deftest delib-flow-rerouted-cloud-audit-records-transport-stage ()
-  (delib-flow-audit-test--with-temp-audit-file
+  (delib-flow-test--with-temp-audit-file
     (let* ((run (delib-flow--initialize-run
                  (list :title "Alice Example"
                        :content "* Alice Example\nContact alice@example.com\nAction items:\n- Draft kickoff follow-up\n")))
-           (inspected (delib-flow-audit-test--accept-inspect
+           (inspected (delib-flow-test--accept-inspect
                        (delib-flow--run-stage-locally run 'inspect-source)))
            (cloud-decided
             (delib-flow--run-stage-locally
-             (delib-flow-audit-test--set-cloud-target-stage inspected 'extract-actions)
+             (delib-flow-test--set-cloud-target-stage inspected 'extract-actions)
              'decide-cloud-pass))
            (sanitized
             (delib-flow--run-stage-locally cloud-decided 'sanitize-for-cloud))
@@ -247,8 +187,8 @@
         (should (search-forward ":TRANSPORT_STAGE: run-cloud-stage" nil t))))))
 
 (ert-deftest delib-flow-file-approved-outputs-audit-captures-target-locations ()
-  (delib-flow-audit-test--with-temp-audit-file
-    (delib-flow-audit-test--with-temp-project-file
+  (delib-flow-test--with-temp-audit-file
+    (delib-flow-test--with-temp-project-file
         "* Alpha Project\n"
       (let* ((run (delib-flow--initialize-run
                    (list :title "Alpha Project kickoff"
@@ -260,7 +200,7 @@
               (delib-flow--run-stage-locally drafted 'integrate-into-source))
              (selected
               (delib-flow--run-stage-locally
-               (delib-flow-audit-test--set-filing-selection integrated "1")
+               (delib-flow-test--set-filing-selection integrated "1")
                'select-approved-filing-actions))
              (_updated-run
               (delib-flow--run-stage-locally selected 'file-approved-outputs)))
@@ -272,7 +212,7 @@
                                   nil t)))))))
 
 (ert-deftest delib-flow-open-audit-run-jumps-to-active-run-subtree ()
-  (delib-flow-audit-test--with-temp-audit-file
+  (delib-flow-test--with-temp-audit-file
     (let* ((run (delib-flow--initialize-run
                  (list :title "Example"
                        :content "* Example\nBody line\n")))
@@ -288,7 +228,7 @@
           (kill-buffer buffer))))))
 
 (ert-deftest delib-flow-open-audit-run-errors-when-run-subtree-is-missing ()
-  (delib-flow-audit-test--with-temp-audit-file
+  (delib-flow-test--with-temp-audit-file
     (let* ((run (delib-flow--initialize-run
                  (list :title "Example"
                        :content "* Example\nBody line\n")))
@@ -296,11 +236,11 @@
       (should-error (delib-flow-open-audit-run) :type 'user-error))))
 
 (ert-deftest delib-flow-open-audit-latest-stage-jumps-to-latest-stage-subtree ()
-  (delib-flow-audit-test--with-temp-audit-file
+  (delib-flow-test--with-temp-audit-file
     (let* ((run (delib-flow--initialize-run
                  (list :title "Example"
                        :content "* Example\nAction items:\n- Draft follow-up\n")))
-           (inspected (delib-flow-audit-test--accept-inspect
+           (inspected (delib-flow-test--accept-inspect
                        (delib-flow--run-stage-locally run 'inspect-source)))
            (delib-flow--active-run
             (delib-flow--run-stage-locally inspected 'extract-actions))
@@ -315,7 +255,7 @@
           (kill-buffer buffer))))))
 
 (ert-deftest delib-flow-open-audit-latest-stage-errors-without-records ()
-  (delib-flow-audit-test--with-temp-audit-file
+  (delib-flow-test--with-temp-audit-file
     (let* ((run (delib-flow--initialize-run
                  (list :title "Example"
                        :content "* Example\nBody line\n")))
@@ -323,11 +263,11 @@
       (should-error (delib-flow-open-audit-latest-stage) :type 'user-error))))
 
 (ert-deftest delib-flow-open-audit-latest-stage-errors-when-stage-subtree-is-missing ()
-  (delib-flow-audit-test--with-temp-audit-file
+  (delib-flow-test--with-temp-audit-file
     (let* ((run (delib-flow--initialize-run
                  (list :title "Example"
                        :content "* Example\nBody line\n")))
-           (inspected (delib-flow-audit-test--accept-inspect
+           (inspected (delib-flow-test--accept-inspect
                        (delib-flow--run-stage-locally run 'inspect-source)))
            (delib-flow--active-run inspected))
       (with-temp-file delib-flow-audit-log-file
@@ -335,7 +275,7 @@
       (should-error (delib-flow-open-audit-latest-stage) :type 'user-error))))
 
 (ert-deftest delib-flow-save-active-audit-run-writes-standalone-run-file ()
-  (delib-flow-audit-test--with-temp-directory-var archive-dir "delib-flow-audit-archive"
+  (delib-flow-test--with-temp-directory-var archive-dir "delib-flow-audit-archive"
     (let* ((run (delib-flow--run-stage-locally
                  (delib-flow--initialize-run
                   (list :title "Example Source"
@@ -360,8 +300,8 @@
           (should-not (search-forward "** Match Project" nil t)))))))
 
 (ert-deftest delib-flow-save-active-audit-run-overwrites-same-run-file ()
-  (delib-flow-audit-test--with-temp-directory-var archive-dir "delib-flow-audit-archive"
-    (let* ((run (delib-flow-audit-test--accept-inspect
+  (delib-flow-test--with-temp-directory-var archive-dir "delib-flow-audit-archive"
+    (let* ((run (delib-flow-test--accept-inspect
                  (delib-flow--run-stage-locally
                   (delib-flow--initialize-run
                    (list :title "Overwrite Source"

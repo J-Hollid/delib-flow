@@ -29,6 +29,37 @@
     ("Details" . delib-flow--render-details-section))
   "Renderer functions keyed by section title.")
 
+(defconst delib-flow--managed-surface-descriptor-alist
+  '((cockpit
+     :buffer-name delib-flow-control-buffer-name
+     :mode delib-flow-control-mode
+     :title-prefix "DeliberateFlow -- "
+     :body-renderer delib-flow--render-control-surface-body
+     :annotator delib-flow--annotate-action-lines
+     :active-run-buffer t)
+    (filing-workspace
+     :buffer-name delib-flow-filing-workspace-buffer-name
+     :mode delib-flow-filing-workspace-mode
+     :title-prefix "DeliberateFlow Filing -- "
+     :body-renderer delib-flow--render-focused-filing-surface-body
+     :annotator delib-flow--annotate-focused-filing-workspace-action-lines))
+  "Managed surface descriptors keyed by internal surface id.")
+
+(defconst delib-flow--required-managed-surface-descriptor-keys
+  '(:buffer-name :mode :title-prefix :body-renderer)
+  "Descriptor keys required by the managed surface renderer.")
+
+(defun delib-flow--managed-surface-descriptor (surface-id)
+  "Return managed surface descriptor plist for SURFACE-ID."
+  (let ((descriptor (cdr (assq surface-id
+                               delib-flow--managed-surface-descriptor-alist))))
+    (unless descriptor
+      (error "No managed surface descriptor is registered for %s" surface-id))
+    (dolist (key delib-flow--required-managed-surface-descriptor-keys descriptor)
+      (unless (plist-member descriptor key)
+        (error "Managed surface descriptor for %s is missing %s"
+               surface-id key)))))
+
 (defun delib-flow--render-editable-block (run block-id)
   "Return Org text for editable block BLOCK-ID from RUN."
   (let* ((block (delib-flow--editable-block run block-id))
@@ -792,7 +823,7 @@ DEFAULT-HEADING is used when no predicate matches."
     (format "- Audit log file: %s\n- Audit archive directory: %s\n- Save archived run: %s\n- Audit payload policy: %s\n- Audit redaction profile: %s\n- Run status: %s\n- Run ID: %s"
             (delib-flow--audit-log-file-display)
             (delib-flow--audit-archive-directory-display)
-            (delib-flow--audit-archive-save-availability)
+            (delib-flow--audit-archive-save-availability run)
             (delib-flow--audit-payload-policy)
             (delib-flow--audit-redaction-profile)
             (plist-get run-record :run-status)
@@ -2399,48 +2430,69 @@ DEFAULT-HEADING is used when no predicate matches."
         (funcall renderer run)
       "")))
 
-(defun delib-flow--render-control-buffer (run)
-  "Render the control buffer from RUN."
-  (let ((buffer (get-buffer-create delib-flow-control-buffer-name)))
+(defun delib-flow--render-control-surface-body (run)
+  "Insert the cockpit body for RUN into the current buffer."
+  (dolist (section delib-flow--control-sections)
+    (insert (format "** %s\n" section))
+    (insert (delib-flow--section-content section run))
+    (unless (bolp)
+      (insert "\n"))))
+
+(defun delib-flow--render-focused-filing-surface-body (run)
+  "Insert the focused filing workspace body for RUN into the current buffer."
+  (insert
+   (if (delib-flow--project-focused-filing-workspace-available-p run)
+       (delib-flow--render-selected-project-filing-workspace run)
+     (delib-flow--render-selected-note-filing-workspace run)))
+  (unless (bolp)
+    (insert "\n")))
+
+(defun delib-flow--render-managed-surface-buffer (surface-id run)
+  "Render managed SURFACE-ID buffer from RUN."
+  (let* ((descriptor (delib-flow--managed-surface-descriptor surface-id))
+         (buffer-name (plist-get descriptor :buffer-name))
+         (buffer (get-buffer-create
+                  (if (symbolp buffer-name)
+                      (symbol-value buffer-name)
+                    buffer-name)))
+         (mode (plist-get descriptor :mode))
+         (title-prefix (plist-get descriptor :title-prefix))
+         (body-renderer (plist-get descriptor :body-renderer))
+         (annotator (plist-get descriptor :annotator)))
     (with-current-buffer buffer
-      (let ((inhibit-read-only t)
-            (preserve-focus-mode delib-flow-control-focus-mode))
+      (let ((inhibit-read-only t))
         (erase-buffer)
-        (delib-flow-control-mode)
-        (setq-local delib-flow-control-focus-mode preserve-focus-mode)
-        (insert (format "* DeliberateFlow -- %s\n"
+        (funcall mode)
+        (insert (format "* %s%s\n"
+                        title-prefix
                         (or (plist-get (delib-flow--run-source run) :title)
                             "Untitled source")))
-        (dolist (section delib-flow--control-sections)
-          (insert (format "** %s\n" section))
-          (insert (delib-flow--section-content section run))
-          (unless (bolp) (insert "\n")))
+        (funcall body-renderer run)
         (setq buffer-read-only nil)
         (delib-flow--protect-managed-regions)
-        (delib-flow--annotate-action-lines run)
+        (when annotator
+          (funcall annotator run))
         (goto-char (point-min)))
-      (setq-local delib-flow--active-run-buffer t))
+      (when (plist-get descriptor :active-run-buffer)
+        (setq-local delib-flow--active-run-buffer t)))
+    buffer))
+
+(defun delib-flow--render-control-buffer (run)
+  "Render the control buffer from RUN."
+  (let* ((existing (get-buffer delib-flow-control-buffer-name))
+         (preserve-focus-mode
+          (and (buffer-live-p existing)
+               (with-current-buffer existing
+                 delib-flow-control-focus-mode)))
+         (buffer (delib-flow--render-managed-surface-buffer 'cockpit run)))
+    (with-current-buffer buffer
+      (setq-local delib-flow-control-focus-mode preserve-focus-mode))
     buffer))
 
 (defun delib-flow--render-focused-filing-workspace-buffer (run)
   "Render the focused filing workspace buffer from RUN."
-  (let ((buffer (get-buffer-create delib-flow-filing-workspace-buffer-name)))
+  (let ((buffer (delib-flow--render-managed-surface-buffer 'filing-workspace run)))
     (with-current-buffer buffer
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (delib-flow-filing-workspace-mode)
-        (insert (format "* DeliberateFlow Filing -- %s\n"
-                        (or (plist-get (delib-flow--run-source run) :title)
-                            "Untitled source")))
-        (insert
-         (if (delib-flow--project-focused-filing-workspace-available-p run)
-             (delib-flow--render-selected-project-filing-workspace run)
-           (delib-flow--render-selected-note-filing-workspace run)))
-        (unless (bolp) (insert "\n"))
-        (setq buffer-read-only nil)
-        (delib-flow--protect-managed-regions)
-        (delib-flow--annotate-focused-filing-workspace-action-lines run)
-        (goto-char (point-min)))
       (add-hook 'kill-buffer-hook #'delib-flow--focused-filing-workspace-buffer-killed nil t))
     buffer))
 
@@ -5184,37 +5236,47 @@ broader filing numbering."
 
 (defun delib-flow--render-selected-project-filing-workspace (run)
   "Return project-focused filing workspace text for RUN."
-  (string-join
+  (delib-flow--render-structured-blocks
+   "**"
    (list
-    (format "** Project package\n%s\n%s"
-            (delib-flow--project-workflow-status run)
-            (concat
-             (delib-flow--project-package-summary-text run)
-             "\n\n"
-             (delib-flow--project-workflow-text run)))
-    (format "** Do here now\n%s\n%s"
-            (delib-flow--project-workspace-next-step-status run)
-            (delib-flow--project-workspace-action-text
-             run nil "No project-local actions are available yet."))
-    (format "** Package consequence\n%s\n%s"
-            "This tells you what is being drafted now, what is in the package, and what filing will do."
-            (delib-flow--project-package-consequence-text run))
-    (format "** Included items\n%s\n%s"
-            "These items will stage together when you file the package."
-            (delib-flow--project-package-items-text run))
-    (format "** Extracted but not yet included\n%s\n%s"
-            "These items are still outside the active package."
-            (delib-flow--project-package-other-candidates-text run))
-    (format "** Targets and staged output\n%s\n%s\n\n*** Do here: file package\n%s"
-            (delib-flow--planned-file-location-status run)
-            (delib-flow--planned-file-location-text run)
-            (delib-flow--project-workspace-action-text
-             run
-             '(select-approved-filing-actions file-approved-outputs reject-draft-filing-artifact resolve-filing-conflict)
-             "No package filing action is available yet."))
-    (format "** Leave workspace\n- `B` return to cockpit\n- `F` reopen this workspace later\n- Preview: `E` draft, `I` support, `P` target, `V` staged\n- Save state: %s"
-            (delib-flow--filing-save-state-text run)))
-   "\n\n"))
+    (list :heading "Project package"
+          :status (delib-flow--project-workflow-status run)
+          :text (concat
+                 (delib-flow--project-package-summary-text run)
+                 "\n\n"
+                 (delib-flow--project-workflow-text run)))
+    (list :heading "Do here now"
+          :status (delib-flow--project-workspace-next-step-status run)
+          :text (delib-flow--project-workspace-action-text
+                 run nil "No project-local actions are available yet."))
+    (list :heading "Package consequence"
+          :status "This tells you what is being drafted now, what is in the package, and what filing will do."
+          :text (delib-flow--project-package-consequence-text run))
+    (list :heading "Included items"
+          :status "These items will stage together when you file the package."
+          :text (delib-flow--project-package-items-text run))
+    (list :heading "Extracted but not yet included"
+          :status "These items are still outside the active package."
+          :text (delib-flow--project-package-other-candidates-text run))
+    (list :heading "Targets and staged output"
+          :status (delib-flow--planned-file-location-status run)
+          :text (concat
+                 (delib-flow--planned-file-location-text run)
+                 "\n\n"
+                 (delib-flow--render-structured-block
+                  "***"
+                  "Do here: file package"
+                  nil
+                  (delib-flow--project-workspace-action-text
+                   run
+                   '(select-approved-filing-actions
+                     file-approved-outputs
+                     reject-draft-filing-artifact
+                     resolve-filing-conflict)
+                   "No package filing action is available yet."))))
+    (list :heading "Leave workspace"
+          :text (format "- `B` return to cockpit\n- `F` reopen this workspace later\n- Preview: `E` draft, `I` support, `P` target, `V` staged\n- Save state: %s"
+                        (delib-flow--filing-save-state-text run))))))
 
 (defun delib-flow--reference-note-selected-draft (run)
   "Return the selected reference-note draft from RUN, if any."
@@ -5811,6 +5873,42 @@ REASON is preserved for the local part card."
              action-heading
              action-text))))
 
+(defun delib-flow--render-structured-block (level heading &optional status text)
+  "Return a titled block at LEVEL with HEADING, STATUS, and TEXT."
+  (concat
+   (format "%s %s\n" level heading)
+   (when status
+     (format "%s\n" status))
+   (or text "")))
+
+(defun delib-flow--render-structured-blocks (level blocks)
+  "Return BLOCKS rendered at LEVEL and separated by blank lines."
+  (string-join
+   (mapcar
+    (lambda (block)
+      (delib-flow--render-structured-block
+       level
+       (plist-get block :heading)
+       (plist-get block :status)
+       (plist-get block :text)))
+    blocks)
+   "\n\n"))
+
+(defun delib-flow--render-reference-note-workspace-cards (cards)
+  "Return CARDS rendered for the focused reference-note workspace."
+  (string-join
+   (mapcar
+    (lambda (card)
+      (delib-flow--reference-note-workspace-card
+       (plist-get card :heading)
+       (plist-get card :status)
+       (plist-get card :text)
+       (plist-get card :action-heading)
+       (plist-get card :action-status)
+       (plist-get card :action-text)))
+    cards)
+   "\n\n"))
+
 (defun delib-flow--note-focused-filing-workspace-available-p (run)
   "Return non-nil when RUN supports the focused note filing workspace."
   (or (and (eq (delib-flow--active-filing-family run) 'reference-notes)
@@ -5830,177 +5928,171 @@ REASON is preserved for the local part card."
 
 (defun delib-flow--render-selected-note-filing-workspace (run)
   "Return note-focused filing workspace text for RUN."
-  (string-join
-   (list
-    (format "** Selected artifact\n%s\n%s"
-            (delib-flow--selected-note-workspace-status run)
-            (concat
-             (delib-flow--reference-note-workspace-selection-line run)
-             "\n"
-             (delib-flow--reference-note-workspace-summary-text run)))
-    (format "** Working draft\n%s\n%s"
-            (delib-flow--reference-note-draft-preview-status run)
-            (string-join
-             (list
-              (format "*** Draft map\n%s\n%s"
-                      "One note canvas, assembled from regenerable parts:"
-                      (delib-flow--reference-note-workspace-outline-text run))
-              (delib-flow--reference-note-workspace-card
-               "Source evidence"
-               (delib-flow--reference-note-source-evidence-status run)
-               (delib-flow--reference-note-source-evidence-text run)
-               "Do here: source evidence"
-               (delib-flow--reference-note-workspace-action-text
-                run
-                nil
-                "- Press `O` to open the full cleaned source."))
-              (delib-flow--reference-note-workspace-card
-               "What changed from last revision"
-               (delib-flow--reference-note-current-delta-status run)
-               (delib-flow--reference-note-revision-compare-summary-text run)
-               "Do here: revision compare"
-               (delib-flow--reference-note-workspace-action-text
-                run
-                '(choose-saved-selected-reference-note-draft
-                  restore-previous-selected-reference-note-draft)
-                "No revision action is available until at least one prior draft exists."))
-              (delib-flow--reference-note-workspace-card
-               (format "Note title [%s]"
-                       (delib-flow--reference-note-workspace-title-state run))
-               nil
-               (format "- %s" (delib-flow--reference-note-title
+  (let ((working-draft-cards
+         (list
+          (list :heading "Source evidence"
+                :status (delib-flow--reference-note-source-evidence-status run)
+                :text (delib-flow--reference-note-source-evidence-text run)
+                :action-heading "Do here: source evidence"
+                :action-text (delib-flow--reference-note-workspace-action-text
+                              run nil "- Press `O` to open the full cleaned source."))
+          (list :heading "What changed from last revision"
+                :status (delib-flow--reference-note-current-delta-status run)
+                :text (delib-flow--reference-note-revision-compare-summary-text run)
+                :action-heading "Do here: revision compare"
+                :action-text (delib-flow--reference-note-workspace-action-text
+                              run
+                              '(choose-saved-selected-reference-note-draft
+                                restore-previous-selected-reference-note-draft)
+                              "No revision action is available until at least one prior draft exists."))
+          (list :heading (format "Note title [%s]"
+                                 (delib-flow--reference-note-workspace-title-state run))
+                :text (format "- %s"
+                              (delib-flow--reference-note-title
                                (delib-flow--reference-note-workspace-item run)))
-               "Do here: note title"
-               (delib-flow--reference-note-workspace-action-text
-                run
-                '(edit-selected-reference-note-title)
-                "No title action is available yet."))
-              (delib-flow--reference-note-workspace-card
-              (format "Draft body [%s]"
-                      (delib-flow--reference-note-workspace-draft-body-state run))
-              (delib-flow--reference-note-part-outcome-text run 'draft-body)
-              (delib-flow--selected-reference-note-draft-working-body-text run)
-              "Do here: draft body"
-               (delib-flow--reference-note-workspace-action-text
-                run
-                '(edit-selected-reference-note-draft-body
-                  refresh-selected-reference-note-draft-body)
-                "No draft-body action is available yet."))
-              (delib-flow--reference-note-workspace-card
-               (format "Source highlights [%s]"
-                       (delib-flow--reference-note-workspace-section-state
-                        run
-                        "Source highlights"))
-               (delib-flow--reference-note-part-outcome-text run 'source-highlights)
-               (delib-flow--reference-note-source-highlights-display-text run)
-               "Do here: source highlights"
-               (delib-flow--reference-note-workspace-action-text
-                run
-                '(edit-selected-reference-note-source-highlights
-                  refresh-selected-reference-note-source-highlights)
-                "No source-highlight refresh is available yet."))
-              (delib-flow--reference-note-workspace-card
-               (format "Related material [%s]"
-                       (delib-flow--reference-note-workspace-section-state
-                        run
-                        "Related material to connect"))
-               (delib-flow--reference-note-part-outcome-text run 'related-material)
-               (delib-flow--selected-reference-note-draft-related-material-text run)
-               "Do here: related material"
-               (delib-flow--reference-note-workspace-action-text
-                run
-                '(find-support-for-selected-reference-note
-                  choose-support-for-selected-reference-note
-                  clear-selected-reference-note-support
-                  edit-selected-reference-note-related-material
-                  refresh-selected-reference-note-related-material)
-                "No related-material action is available yet."))
-              (delib-flow--reference-note-workspace-card
-               (format "Reuse angle [%s]"
-                       (delib-flow--reference-note-workspace-reuse-angle-state run))
-               (delib-flow--reference-note-part-outcome-text run 'reuse-angle)
-               (delib-flow--selected-reference-note-draft-reuse-angle-text run)
-               "Do here: reuse angle"
-               (delib-flow--reference-note-workspace-action-text
-                run
-                '(edit-selected-reference-note-reuse-angle
-                  refresh-selected-reference-note-reuse-angle)
-                "No reuse-angle refresh is available yet."))
-              (delib-flow--reference-note-workspace-card
-               "Whole note rebuild [generated]"
-               nil
-               (delib-flow--reference-note-regeneration-text run)
-               "Do here: whole note rebuild"
-               (delib-flow--reference-note-workspace-action-text
-                run
-                '(draft-selected-reference-note)
-                "No whole-note regeneration is available yet."))
-              (delib-flow--reference-note-workspace-card
-               "Revision compare"
-               (delib-flow--reference-note-draft-history-card-status run)
-               (delib-flow--reference-note-compact-history-text run)
-               "Do here: revision compare"
-               (delib-flow--reference-note-workspace-action-text
-                run
-                '(choose-saved-selected-reference-note-draft
-                  restore-previous-selected-reference-note-draft)
-                "No revision action is available until at least one prior draft exists.")))
-             "\n\n"))
-    (format "** Support for this draft\n%s\n%s"
-            (delib-flow--family-support-status run 'reference-notes)
-            (string-join
-             (list
-              (delib-flow--reference-note-workspace-card
-               "Attached support"
-               nil
-               (delib-flow--reference-note-attached-support-text run)
-               "Do here: attached support"
-               (delib-flow--reference-note-workspace-action-text
-                run
-                '(clear-selected-reference-note-support)
-                "No attached-support action is available yet."))
-              (delib-flow--reference-note-workspace-card
-               "Support suggestions"
-               nil
-               (delib-flow--reference-note-compact-support-suggestions-text run)
-               "Do here: support suggestions"
-               (delib-flow--reference-note-workspace-action-text
-                run
-                '(find-support-for-selected-reference-note
-                 choose-support-for-selected-reference-note)
-                "No support-suggestion action is available yet.")))
-             "\n\n"))
-    (format "** Save or discard\n%s\n%s\n\n*** Do here: save or discard\n%s"
-            (delib-flow--reference-note-regeneration-status run)
-            "- Save only when the visible note looks right."
-            (delib-flow--reference-note-workspace-action-text
-             run
-             '(select-approved-filing-actions
-               file-approved-outputs
-               reject-draft-filing-artifact
-               resolve-filing-conflict)
-             "No filing action is available yet."))
-    (format "** Final save target\n%s\n%s"
-            (delib-flow--reference-note-target-summary-status run)
-            (concat
-             (delib-flow--reference-note-compact-target-text run)
-             "\n\n"
-             (delib-flow--reference-note-workspace-card
-              "Target controls"
-              nil
-              "- Change template or path only when the save destination is wrong."
-              "Do here: target controls"
-              (delib-flow--reference-note-workspace-action-text
-               run
-               '(choose-reference-note-template
-                 edit-selected-reference-note-target-path)
-               "No target-edit action is available yet."))))
-    (format "** Other candidates\n%s\n%s"
-            (delib-flow--filing-family-shortlist-status run 'reference-notes)
-            (delib-flow--reference-note-compact-other-candidates-text run))
-    (format "** Leave workspace\n- `B` return to cockpit\n- `F` reopen this workspace later\n- Preview: `E` draft, `I` support, `P` target, `V` staged\n- Save state: %s"
-            (delib-flow--filing-save-state-text run)))
-   "\n\n"))
+                :action-heading "Do here: note title"
+                :action-text (delib-flow--reference-note-workspace-action-text
+                              run
+                              '(edit-selected-reference-note-title)
+                              "No title action is available yet."))
+          (list :heading (format "Draft body [%s]"
+                                 (delib-flow--reference-note-workspace-draft-body-state run))
+                :status (delib-flow--reference-note-part-outcome-text run 'draft-body)
+                :text (delib-flow--selected-reference-note-draft-working-body-text run)
+                :action-heading "Do here: draft body"
+                :action-text (delib-flow--reference-note-workspace-action-text
+                              run
+                              '(edit-selected-reference-note-draft-body
+                                refresh-selected-reference-note-draft-body)
+                              "No draft-body action is available yet."))
+          (list :heading (format "Source highlights [%s]"
+                                 (delib-flow--reference-note-workspace-section-state
+                                  run "Source highlights"))
+                :status (delib-flow--reference-note-part-outcome-text run 'source-highlights)
+                :text (delib-flow--reference-note-source-highlights-display-text run)
+                :action-heading "Do here: source highlights"
+                :action-text (delib-flow--reference-note-workspace-action-text
+                              run
+                              '(edit-selected-reference-note-source-highlights
+                                refresh-selected-reference-note-source-highlights)
+                              "No source-highlight refresh is available yet."))
+          (list :heading (format "Related material [%s]"
+                                 (delib-flow--reference-note-workspace-section-state
+                                  run "Related material to connect"))
+                :status (delib-flow--reference-note-part-outcome-text run 'related-material)
+                :text (delib-flow--selected-reference-note-draft-related-material-text run)
+                :action-heading "Do here: related material"
+                :action-text (delib-flow--reference-note-workspace-action-text
+                              run
+                              '(find-support-for-selected-reference-note
+                                choose-support-for-selected-reference-note
+                                clear-selected-reference-note-support
+                                edit-selected-reference-note-related-material
+                                refresh-selected-reference-note-related-material)
+                              "No related-material action is available yet."))
+          (list :heading (format "Reuse angle [%s]"
+                                 (delib-flow--reference-note-workspace-reuse-angle-state run))
+                :status (delib-flow--reference-note-part-outcome-text run 'reuse-angle)
+                :text (delib-flow--selected-reference-note-draft-reuse-angle-text run)
+                :action-heading "Do here: reuse angle"
+                :action-text (delib-flow--reference-note-workspace-action-text
+                              run
+                              '(edit-selected-reference-note-reuse-angle
+                                refresh-selected-reference-note-reuse-angle)
+                              "No reuse-angle refresh is available yet."))
+          (list :heading "Whole note rebuild [generated]"
+                :text (delib-flow--reference-note-regeneration-text run)
+                :action-heading "Do here: whole note rebuild"
+                :action-text (delib-flow--reference-note-workspace-action-text
+                              run
+                              '(draft-selected-reference-note)
+                              "No whole-note regeneration is available yet."))
+          (list :heading "Revision compare"
+                :status (delib-flow--reference-note-draft-history-card-status run)
+                :text (delib-flow--reference-note-compact-history-text run)
+                :action-heading "Do here: revision compare"
+                :action-text (delib-flow--reference-note-workspace-action-text
+                              run
+                              '(choose-saved-selected-reference-note-draft
+                                restore-previous-selected-reference-note-draft)
+                              "No revision action is available until at least one prior draft exists."))))
+        (support-cards
+         (list
+          (list :heading "Attached support"
+                :text (delib-flow--reference-note-attached-support-text run)
+                :action-heading "Do here: attached support"
+                :action-text (delib-flow--reference-note-workspace-action-text
+                              run
+                              '(clear-selected-reference-note-support)
+                              "No attached-support action is available yet."))
+          (list :heading "Support suggestions"
+                :text (delib-flow--reference-note-compact-support-suggestions-text run)
+                :action-heading "Do here: support suggestions"
+                :action-text (delib-flow--reference-note-workspace-action-text
+                              run
+                              '(find-support-for-selected-reference-note
+                                choose-support-for-selected-reference-note)
+                              "No support-suggestion action is available yet.")))))
+    (delib-flow--render-structured-blocks
+     "**"
+     (list
+      (list :heading "Selected artifact"
+            :status (delib-flow--selected-note-workspace-status run)
+            :text (concat
+                   (delib-flow--reference-note-workspace-selection-line run)
+                   "\n"
+                   (delib-flow--reference-note-workspace-summary-text run)))
+      (list :heading "Working draft"
+            :status (delib-flow--reference-note-draft-preview-status run)
+            :text (concat
+                   (delib-flow--render-structured-block
+                    "***"
+                    "Draft map"
+                    "One note canvas, assembled from regenerable parts:"
+                    (delib-flow--reference-note-workspace-outline-text run))
+                   "\n\n"
+                   (delib-flow--render-reference-note-workspace-cards
+                    working-draft-cards)))
+      (list :heading "Support for this draft"
+            :status (delib-flow--family-support-status run 'reference-notes)
+            :text (delib-flow--render-reference-note-workspace-cards
+                   support-cards))
+      (list :heading "Save or discard"
+            :status (delib-flow--reference-note-regeneration-status run)
+            :text (concat
+                   "- Save only when the visible note looks right.\n\n"
+                   (delib-flow--render-structured-block
+                    "***"
+                    "Do here: save or discard"
+                    nil
+                    (delib-flow--reference-note-workspace-action-text
+                     run
+                     '(select-approved-filing-actions
+                       file-approved-outputs
+                       reject-draft-filing-artifact
+                       resolve-filing-conflict)
+                     "No filing action is available yet."))))
+      (list :heading "Final save target"
+            :status (delib-flow--reference-note-target-summary-status run)
+            :text (concat
+                   (delib-flow--reference-note-compact-target-text run)
+                   "\n\n"
+                   (delib-flow--render-reference-note-workspace-cards
+                    (list
+                     (list :heading "Target controls"
+                           :text "- Change template or path only when the save destination is wrong."
+                           :action-heading "Do here: target controls"
+                           :action-text (delib-flow--reference-note-workspace-action-text
+                                         run
+                                         '(choose-reference-note-template
+                                           edit-selected-reference-note-target-path)
+                                         "No target-edit action is available yet."))))))
+      (list :heading "Other candidates"
+            :status (delib-flow--filing-family-shortlist-status run 'reference-notes)
+            :text (delib-flow--reference-note-compact-other-candidates-text run))
+      (list :heading "Leave workspace"
+            :text (format "- `B` return to cockpit\n- `F` reopen this workspace later\n- Preview: `E` draft, `I` support, `P` target, `V` staged\n- Save state: %s"
+                          (delib-flow--filing-save-state-text run)))))))
 
 (defun delib-flow--focused-filing-summary-status (run)
   "Return compact cockpit summary status for the focused filing loop in RUN."
@@ -6120,56 +6212,60 @@ REASON is preserved for the local part card."
 (defun delib-flow--render-filing-preview-section (run)
   "Return Org text for the Filing preview section."
   (if (delib-flow--project-focused-filing-workspace-available-p run)
-      (string-join
+      (delib-flow--render-structured-blocks
+       "***"
        (list
-        (format "*** Project workspace\n%s"
-                (delib-flow--render-selected-project-filing-workspace run))
-        (format "*** Current blocked state\n%s"
-                (delib-flow--filing-selection-block-summary run)))
-       "\n\n")
+        (list :heading "Project workspace"
+              :text (delib-flow--render-selected-project-filing-workspace run))
+        (list :heading "Current blocked state"
+              :text (delib-flow--filing-selection-block-summary run))))
     (if (delib-flow--focused-filing-workspace-p run)
-        (string-join
+        (delib-flow--render-structured-blocks
+         "***"
          (list
-          (format "*** Focused filing workspace\n%s\n%s"
-                  (delib-flow--focused-filing-summary-status run)
-                  (delib-flow--focused-filing-summary-text run))
-          (format "*** Filing state\n%s"
-                  (delib-flow--filing-workspace-summary-text run))
-          (format "*** Current blocked state\n%s"
-                  (delib-flow--filing-selection-block-summary run)))
-         "\n\n")
+          (list :heading "Focused filing workspace"
+                :status (delib-flow--focused-filing-summary-status run)
+                :text (delib-flow--focused-filing-summary-text run))
+          (list :heading "Filing state"
+                :text (delib-flow--filing-workspace-summary-text run))
+          (list :heading "Current blocked state"
+                :text (delib-flow--filing-selection-block-summary run))))
       (string-join
        (append
         (list
-         (format "*** What happens here\n%s"
-                 (delib-flow--draft-item-status run))
-         (format "*** What to do next\n%s"
-                 (delib-flow--recommended-filing-action-text run))
-         (format "*** Current filing plan\n%s"
-                 (delib-flow--filing-workspace-summary-text run)))
+         (delib-flow--render-structured-block
+          "***" "What happens here" nil (delib-flow--draft-item-status run))
+         (delib-flow--render-structured-block
+          "***" "What to do next" nil (delib-flow--recommended-filing-action-text run))
+         (delib-flow--render-structured-block
+          "***" "Current filing plan" nil (delib-flow--filing-workspace-summary-text run)))
         (delib-flow--filing-preview-workspace-sections run)
         (list
-         (format "*** Filing actions\n%s"
-                 (delib-flow--filing-preview-actions-text run))
-         (format "*** Staged content preview\n%s\n%s"
-                 (delib-flow--staged-content-preview-status run)
-                 (delib-flow--staged-content-preview-text run)))
+         (delib-flow--render-structured-block
+          "***" "Filing actions" nil (delib-flow--filing-preview-actions-text run))
+         (delib-flow--render-structured-block
+          "***"
+          "Staged content preview"
+          (delib-flow--staged-content-preview-status run)
+          (delib-flow--staged-content-preview-text run)))
         (delq nil
               (list (delib-flow--reference-note-capture-section run)
                     (delib-flow--artifact-selection-section run)
                     (delib-flow--filing-conflict-resolution-section run)))
         (list
-         (format "*** Available queue\n%s"
-                 (delib-flow--draft-item-text run))
-         (format "*** Why approval is blocked\n%s"
-                 (delib-flow--filing-selection-block-summary run))
-         (format "*** Rejected artifacts\n%s"
-                 (delib-flow--rejected-item-text run))
-         (format "*** Filing conflicts\n%s"
-                 (delib-flow--filing-conflict-text run))
-         (format "*** Opened staged targets\n%s\n%s"
-                 (delib-flow--filed-location-status run)
-                 (delib-flow--filed-location-text run))))
+         (delib-flow--render-structured-block
+          "***" "Available queue" nil (delib-flow--draft-item-text run))
+         (delib-flow--render-structured-block
+          "***" "Why approval is blocked" nil (delib-flow--filing-selection-block-summary run))
+         (delib-flow--render-structured-block
+          "***" "Rejected artifacts" nil (delib-flow--rejected-item-text run))
+         (delib-flow--render-structured-block
+          "***" "Filing conflicts" nil (delib-flow--filing-conflict-text run))
+         (delib-flow--render-structured-block
+          "***"
+          "Opened staged targets"
+          (delib-flow--filed-location-status run)
+          (delib-flow--filed-location-text run))))
        "\n\n"))))
 
 

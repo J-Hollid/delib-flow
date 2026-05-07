@@ -4,50 +4,26 @@
 (require 'cl-lib)
 (require 'org)
 (require 'delib-flow)
+(require 'delib-flow-test-support)
 
-(defmacro delib-flow-stages-test--with-temp-file-var (var prefix suffix content &rest body)
-  "Bind VAR to a temporary file with CONTENT during BODY."
-  (declare (indent 4))
-  `(let ((,var (make-temp-file ,prefix nil ,suffix ,content)))
-     (unwind-protect
-         (progn ,@body)
-       (when (file-exists-p ,var)
-         (delete-file ,var)))))
+(ert-deftest delib-flow-stage-command-metadata-errors-for-unknown-stage ()
+  (should-error (delib-flow--stage-command-runner-kind 'missing-stage)
+                :type 'error))
 
-(defun delib-flow-stages-test--accept-inspect (run)
-  "Return RUN with inspect-source accepted and actions reseeded."
-  (delib-flow--seed-actions
-   (delib-flow--apply-inspect-review-outcome
-    run
-    'accepted
-    "Inspect result accepted. You may now match the project or retry inspect.")))
-
-(defun delib-flow-stages-test--set-cloud-failure-resolution (run resolution &optional notes)
-  "Return RUN with cloud-failure review block set to RESOLUTION and NOTES."
-  (let* ((block (delib-flow--editable-block run 'cloud-failure-review))
-         (text (format "Resolution: %s\nNotes:\n%s\n"
-                       resolution
-                       (or notes ""))))
-    (delib-flow--set-editable-block
-     run
-     'cloud-failure-review
-     (delib-flow--set-editable-block-text block text))))
-
-(defun delib-flow-stages-test--set-cloud-target-stage (run stage-id &optional notes)
-  "Return RUN with cloud-routing review block set to STAGE-ID and NOTES."
-  (let* ((block (delib-flow--editable-block run 'cloud-routing-review))
-         (text (format "Target stage: %s\nNotes:\n%s\n"
-                       stage-id
-                       (or notes ""))))
-    (delib-flow--set-editable-block
-     run
-     'cloud-routing-review
-     (delib-flow--set-editable-block-text block text))))
+(ert-deftest delib-flow-stage-command-metadata-errors-for-missing-required-key ()
+  (let ((delib-flow--stage-descriptor-alist
+         '((broken-stage
+            :id broken-stage
+            :label "Broken"
+            :command-runner-kind run-stage-locally
+            :command-sync control-buffer))))
+    (should-error (delib-flow--stage-command-rerender 'broken-stage)
+                  :type 'error)))
 
 (ert-deftest delib-flow-stage-input-package-resolves-prompt-library-entry ()
-  (delib-flow-stages-test--with-temp-file-var prompt-file "delib-flow-prompts" ".org"
+  (delib-flow-test--with-temp-file-var prompt-file "delib-flow-prompts" ".org"
       "* Inspect Source\n:PROPERTIES:\n:PROMPT_ID: milestone2-inspect-source\n:END:\nPrompt body text.\n"
-    (delib-flow-stages-test--with-temp-file-var example-file "delib-flow-examples" ".org"
+    (delib-flow-test--with-temp-file-var example-file "delib-flow-examples" ".org"
         "#+title: Example structures\n- Example output shape\n"
       (let* ((delib-flow-prompt-library-file prompt-file)
              (delib-flow-example-structures-file example-file)
@@ -121,11 +97,11 @@
   (let* ((run (delib-flow--initialize-run
                (list :title "Alice Example"
                      :content "* Alice Example\nContact alice@example.com\nAction items:\n- Draft kickoff follow-up\n")))
-         (inspected (delib-flow-stages-test--accept-inspect
+         (inspected (delib-flow-test--accept-inspect
                      (delib-flow--run-stage-locally run 'inspect-source)))
          (cloud-decided
           (delib-flow--run-stage-locally
-           (delib-flow-stages-test--set-cloud-target-stage inspected 'extract-actions)
+           (delib-flow-test--set-cloud-target-stage inspected 'extract-actions)
            'decide-cloud-pass))
          (sanitized
           (delib-flow--run-stage-locally cloud-decided 'sanitize-for-cloud))
@@ -159,7 +135,7 @@
          (failed-run (delib-flow--run-stage-in-cloud approved-send 'run-cloud-stage))
          (resolved-run
           (delib-flow--run-stage-locally
-           (delib-flow-stages-test--set-cloud-failure-resolution
+           (delib-flow-test--set-cloud-failure-resolution
             failed-run "RETRY-CLOUD" "retry it")
            'resolve-cloud-failure))
          (routing (plist-get resolved-run :routing))
@@ -191,7 +167,7 @@
          (failed-run (delib-flow--run-stage-in-cloud approved-send 'run-cloud-stage))
          (resolved-run
           (delib-flow--run-stage-locally
-           (delib-flow-stages-test--set-cloud-failure-resolution
+           (delib-flow-test--set-cloud-failure-resolution
             failed-run "USE-LOCAL" "continue locally")
            'resolve-cloud-failure))
          (routing (plist-get resolved-run :routing))
@@ -222,7 +198,7 @@
          (failed-run (delib-flow--run-stage-in-cloud approved-send 'run-cloud-stage))
          (resolved-run
           (delib-flow--run-stage-locally
-           (delib-flow-stages-test--set-cloud-failure-resolution
+           (delib-flow-test--set-cloud-failure-resolution
             failed-run "SKIP-CLOUD" "skip it")
            'resolve-cloud-failure))
          (routing (plist-get resolved-run :routing)))
@@ -297,11 +273,11 @@
   (let* ((run (delib-flow--initialize-run
                (list :title "Alice Example"
                      :content "* Alice Example\nContact alice@example.com\nAction items:\n- Draft kickoff follow-up\n")))
-         (inspected (delib-flow-stages-test--accept-inspect
+         (inspected (delib-flow-test--accept-inspect
                      (delib-flow--run-stage-locally run 'inspect-source)))
          (cloud-decided
           (delib-flow--run-stage-locally
-           (delib-flow-stages-test--set-cloud-target-stage inspected 'extract-actions)
+           (delib-flow-test--set-cloud-target-stage inspected 'extract-actions)
            'decide-cloud-pass))
          (sanitized
           (delib-flow--run-stage-locally cloud-decided 'sanitize-for-cloud))

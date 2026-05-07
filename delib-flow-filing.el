@@ -224,6 +224,22 @@
            (delib-flow--filing-conflict-resolution-template run))))
     (delib-flow--set-editable-block run 'filing-conflict-resolution updated-block)))
 
+(defun delib-flow--filing-with-updated-draft-queue (filing remaining-items)
+  "Return FILING with REMAINING-ITEMS and shared queue state refreshed."
+  (plist-put
+   (plist-put
+    (plist-put
+     (plist-put filing :draft-items remaining-items)
+     :target-locations nil)
+    :preview-text (delib-flow--draft-item-preview-text remaining-items))
+   :conflicts nil))
+
+(defun delib-flow--reseed-filing-queue-run (run filing)
+  "Return RUN with FILING stored and queue-facing review blocks reseeded."
+  (delib-flow--seed-reference-note-capture-review-block
+   (delib-flow--seed-filing-selection-block
+    (plist-put run :filing filing))))
+
 (defun delib-flow--apply-reject-draft-filing-artifact-entry (run entry)
   "Return RUN updated from completed filing-rejection ENTRY."
   (let* ((filing (plist-get run :filing))
@@ -231,21 +247,17 @@
          (remaining-items (plist-get raw :remaining-draft-items))
          (existing-rejected (plist-get filing :rejected-items))
          (updated-rejected (append existing-rejected
-                                   (plist-get raw :rejected-items))))
-    (delib-flow--seed-reference-note-capture-review-block
-     (delib-flow--seed-filing-selection-block
-      (plist-put
-       run :filing
-       (plist-put
-        (delib-flow--clear-filing-selection-block-state
-         (plist-put
+                                   (plist-get raw :rejected-items)))
+         (updated-filing
           (plist-put
-           (plist-put
-            (plist-put filing :draft-items remaining-items)
-            :approved-items (plist-get filing :approved-items))
-           :rejected-items updated-rejected)
-          :target-locations nil))
-        :preview-text (delib-flow--draft-item-preview-text remaining-items)))))))
+           (delib-flow--clear-filing-selection-block-state
+            (plist-put
+             (plist-put
+              (delib-flow--filing-with-updated-draft-queue filing remaining-items)
+              :approved-items (plist-get filing :approved-items))
+             :rejected-items updated-rejected))
+           :conflicts nil)))
+    (delib-flow--reseed-filing-queue-run run updated-filing)))
 
 (defun delib-flow--apply-select-approved-filing-actions-entry (run entry)
   "Return RUN updated from completed filing-selection ENTRY."
@@ -254,33 +266,27 @@
          (remaining-items (plist-get raw :remaining-draft-items))
          (updated-filing
           (plist-put
+           (delib-flow--filing-with-updated-draft-queue filing remaining-items)
+           :rejected-items (plist-get filing :rejected-items))))
+    (delib-flow--reseed-filing-queue-run
+     run
+     (if (plist-get raw :approval-blocked-p)
+         (plist-put
+          (plist-put
            (plist-put
             (plist-put
-             (plist-put filing :draft-items remaining-items)
-             :target-locations nil)
-            :rejected-items (plist-get filing :rejected-items))
-           :preview-text (delib-flow--draft-item-preview-text remaining-items))))
-    (delib-flow--seed-reference-note-capture-review-block
-     (delib-flow--seed-filing-selection-block
-      (plist-put
-       run :filing
-       (if (plist-get raw :approval-blocked-p)
-           (plist-put
-            (plist-put
-             (plist-put
-              (plist-put
-               (plist-put updated-filing :approved-items nil)
-               :selection-blocked-item
-               (plist-get raw :blocked-item))
-              :selection-blocking-warnings
-              (plist-get raw :blocking-warnings))
-             :selection-blocked-selection
-             (plist-get raw :operator-selection))
-            :selection-blocked-notes
-            (plist-get raw :operator-notes))
-         (delib-flow--clear-filing-selection-block-state
-          (plist-put updated-filing
-                     :approved-items (plist-get raw :approved-items)))))))))
+             (plist-put updated-filing :approved-items nil)
+             :selection-blocked-item
+             (plist-get raw :blocked-item))
+            :selection-blocking-warnings
+            (plist-get raw :blocking-warnings))
+           :selection-blocked-selection
+           (plist-get raw :operator-selection))
+          :selection-blocked-notes
+          (plist-get raw :operator-notes))
+       (delib-flow--clear-filing-selection-block-state
+        (plist-put updated-filing
+                   :approved-items (plist-get raw :approved-items)))))))
 
 (defun delib-flow--apply-file-approved-outputs-entry (run entry)
   "Return RUN updated from completed file-approved-outputs ENTRY."
@@ -336,14 +342,14 @@
                 working))
              :filing
              (plist-put
-              (plist-put
-               (delib-flow--clear-filing-selection-block-state
+              (delib-flow--clear-filing-selection-block-state
+               (plist-put
                 (plist-put
-                 (plist-put filing :approved-items nil)
-                 :draft-items remaining-items))
-               :conflicts nil)
-              :target-locations
-              (plist-get raw :target-locations))))
+                 (delib-flow--filing-with-updated-draft-queue filing remaining-items)
+                 :approved-items nil)
+                :target-locations
+                (plist-get raw :target-locations)))
+              :conflicts nil)))
       (setq run
             (delib-flow--set-artifact-family-candidates
              run 'actions remaining-action-candidates))

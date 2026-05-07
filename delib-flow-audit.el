@@ -422,9 +422,13 @@ rolling audit log."
       delib-flow-audit-archive-directory
     "unconfigured"))
 
-(defun delib-flow--audit-archive-save-availability ()
-  "Return availability text for saving an archived audit run."
-  (if (and delib-flow--active-run
+(defun delib-flow--audit-archive-save-availability (&optional run)
+  "Return availability text for saving an archived audit RUN."
+  (if (and (if run
+                (and delib-flow--active-run
+                     (equal (plist-get delib-flow--active-run :id)
+                            (plist-get run :id)))
+              delib-flow--active-run)
            (delib-flow--audit-archive-configured-p))
       "available"
     "not available"))
