@@ -1,0 +1,234 @@
+#+title: delib-flow UI scenario contracts
+
+This document is the executable UI contract for the main =delib-flow=
+operator scenarios.
+
+Use it for the middle layer between:
+
+- [[file:ux-wireframes.org][ux-wireframes.org]] as the lightweight surface sketch
+- [[file:operator-use-cases.org][operator-use-cases.org]] as the narrative manual walkthrough
+- render and UI tests as the automated enforcement layer
+
+Each top-level contract binds one UI surface to one deterministic debug
+scenario checkpoint.
+
+* Alpha follow-up source cockpit
+:PROPERTIES:
+:SCENARIO_ID: alpha-followup
+:CHECKPOINT: source
+:SURFACE: cockpit
+:TITLE: Start-of-run cockpit
+:USE_CASE: scenario-1
+:END:
+
+** Sections
+| order | heading         | required |
+|-------+-----------------+----------|
+|     1 | Now             | yes      |
+|     2 | Current result  | yes      |
+|     3 | Filing preview  | yes      |
+|     4 | Next actions    | yes      |
+|     5 | Current context | yes      |
+|     6 | Details         | yes      |
+
+** Actions
+| zone                  | label          | action_id      | required |
+|-----------------------+----------------+----------------+----------|
+| recommended-next-pass | Inspect Source | inspect-source | yes      |
+| quick-actions         | Inspect Source | inspect-source | yes      |
+| next-actions          | Refresh Buffer | refresh-buffer | yes      |
+| next-actions          | Abort Run      | abort-run      | yes      |
+
+** Transitions
+| action_id      | destination_surface | destination_anchor | latest_stage   | selected_family | workspace_open |
+|----------------+---------------------+--------------------+----------------+-----------------+----------------|
+| inspect-source | cockpit             | Current result     | inspect-source |                 |                |
+
+* Alpha follow-up project-reviewed cockpit
+:PROPERTIES:
+:SCENARIO_ID: alpha-followup
+:CHECKPOINT: project-reviewed
+:SURFACE: cockpit
+:TITLE: Project-reviewed cockpit
+:USE_CASE: scenario-3
+:END:
+
+** Sections
+| order | heading         | required |
+|-------+-----------------+----------|
+|     1 | Now             | yes      |
+|     2 | Current result  | yes      |
+|     3 | Filing preview  | yes      |
+|     4 | Next actions    | yes      |
+|     5 | Current context | yes      |
+|     6 | Details         | yes      |
+
+** Actions
+| zone                  | label                               | action_id                   | required |
+|-----------------------+-------------------------------------+-----------------------------+----------|
+| recommended-next-pass | Discover Relevant Reference Material | discover-reference-material | yes      |
+| quick-actions         | Retry Match Project                 | match-project               | yes      |
+| filing-actions        | Extract Actions                     | extract-actions             | yes      |
+| next-actions          | Decide on Cloud Pass                | decide-cloud-pass           | yes      |
+
+** Transitions
+| action_id                   | destination_surface | destination_anchor | latest_stage                | selected_family | workspace_open |
+|-----------------------------+---------------------+--------------------+-----------------------------+-----------------+----------------|
+| discover-reference-material | cockpit             | Current result     | discover-reference-material |                 |                |
+
+* Alpha follow-up filing-ready cockpit
+:PROPERTIES:
+:SCENARIO_ID: alpha-followup
+:CHECKPOINT: filing-ready
+:SURFACE: cockpit
+:TITLE: Filing-ready cockpit with selected action workspace
+:USE_CASE: scenario-2
+:END:
+
+** Sections
+| order | heading         | required |
+|-------+-----------------+----------|
+|     1 | Now             | yes      |
+|     2 | Current result  | yes      |
+|     3 | Filing preview  | yes      |
+|     4 | Next actions    | yes      |
+|     5 | Current context | yes      |
+|     6 | Details         | yes      |
+
+** Actions
+| zone                 | label                           | action_id                      | required |
+|----------------------+---------------------------------+--------------------------------+----------|
+| family-local-actions | Select Approved Filing Actions  | select-approved-filing-actions | yes      |
+| family-local-actions | Reject Draft Filing Artifact    | reject-draft-filing-artifact   | yes      |
+| filing-actions       | Select Approved Filing Actions  | select-approved-filing-actions | yes      |
+| next-actions         | Retry Integrate into Source     | integrate-into-source          | yes      |
+
+** Transitions
+| action_id | destination_surface | destination_anchor | latest_stage | selected_family | workspace_open |
+|-----------+---------------------+--------------------+--------------+-----------------+----------------|
+
+* Reference-note-rich artifact-ready cockpit
+:PROPERTIES:
+:SCENARIO_ID: reference-note-rich-midpoint
+:CHECKPOINT: artifact-ready
+:SURFACE: cockpit
+:TITLE: Reference-note cockpit before focused drafting
+:USE_CASE: scenario-1
+:END:
+
+** Sections
+| order | heading         | required |
+|-------+-----------------+----------|
+|     1 | Now             | yes      |
+|     2 | Current result  | yes      |
+|     3 | Filing preview  | yes      |
+|     4 | Next actions    | yes      |
+|     5 | Current context | yes      |
+|     6 | Details         | yes      |
+
+** Actions
+| zone                  | label                                  | action_id                      | required |
+|-----------------------+----------------------------------------+--------------------------------+----------|
+| recommended-next-pass | Retry Discover Relevant Reference Material | discover-reference-material | yes      |
+| next-actions          | Retry Suggest Reference Notes          | suggest-reference-notes        | yes      |
+| next-actions          | Select Approved Filing Actions         | select-approved-filing-actions | yes      |
+| next-actions          | Reject Draft Filing Artifact           | reject-draft-filing-artifact   | yes      |
+
+** Transitions
+| action_id             | destination_surface | destination_anchor | latest_stage | selected_family | workspace_open |
+|-----------------------+---------------------+--------------------+--------------+-----------------+----------------|
+| open-filing-workspace | filing-workspace    | Selected artifact  |              |                 | true           |
+
+* Reference-note-rich filing-ready workspace
+:PROPERTIES:
+:SCENARIO_ID: reference-note-rich-midpoint
+:CHECKPOINT: filing-ready
+:SURFACE: filing-workspace
+:TITLE: Reference-note focused filing workspace before selection
+:USE_CASE: scenario-1
+:END:
+
+** Sections
+| order | heading                | required |
+|-------+------------------------+----------|
+|     1 | Selected artifact      | yes      |
+|     2 | Working draft          | yes      |
+|     3 | Support for this draft | yes      |
+|     4 | Save or discard        | yes      |
+|     5 | Final save target      | yes      |
+|     6 | Other candidates       | yes      |
+|     7 | Leave workspace        | yes      |
+
+** Actions
+| zone          | label                          | action_id                      | required |
+|---------------+--------------------------------+--------------------------------+----------|
+| local-actions | Select Approved Filing Actions | select-approved-filing-actions | yes      |
+| local-actions | Reject Draft Filing Artifact   | reject-draft-filing-artifact   | yes      |
+
+** Transitions
+| action_id            | destination_surface | destination_anchor | latest_stage | selected_family | workspace_open |
+|----------------------+---------------------+--------------------+--------------+-----------------+----------------|
+| return-main-cockpit  | cockpit             |                    |              |                 | false          |
+
+* Manual project override cockpit
+:PROPERTIES:
+:SCENARIO_ID: manual-project-override
+:CHECKPOINT: manual-project-ready
+:SURFACE: cockpit
+:TITLE: Manual-project decision cockpit
+:USE_CASE: scenario-3
+:END:
+
+** Sections
+| order | heading         | required |
+|-------+-----------------+----------|
+|     1 | Now             | yes      |
+|     2 | Current result  | yes      |
+|     3 | Filing preview  | yes      |
+|     4 | Next actions    | yes      |
+|     5 | Current context | yes      |
+|     6 | Details         | yes      |
+
+** Actions
+| zone                  | label                               | action_id                   | required |
+|-----------------------+-------------------------------------+-----------------------------+----------|
+| recommended-next-pass | Discover Relevant Reference Material | discover-reference-material | yes      |
+| next-actions          | Choose Project Manually             | manual-project-match        | yes      |
+| next-actions          | Propose New Project                 | propose-new-project         | yes      |
+
+** Transitions
+| action_id | destination_surface | destination_anchor | latest_stage | selected_family | workspace_open |
+|-----------+---------------------+--------------------+--------------+-----------------+----------------|
+
+* Filing note conflict workspace
+:PROPERTIES:
+:SCENARIO_ID: filing-note-conflict
+:CHECKPOINT: filing-conflict-ready
+:SURFACE: filing-workspace
+:TITLE: Focused filing conflict recovery workspace
+:USE_CASE: scenario-9
+:END:
+
+** Sections
+| order | heading                | required |
+|-------+------------------------+----------|
+|     1 | Selected artifact      | yes      |
+|     2 | Working draft          | yes      |
+|     3 | Support for this draft | yes      |
+|     4 | Save or discard        | yes      |
+|     5 | Final save target      | yes      |
+|     6 | Other candidates       | yes      |
+|     7 | Leave workspace        | yes      |
+
+** Actions
+| zone          | label                          | action_id                               | required |
+|---------------+--------------------------------+-----------------------------------------+----------|
+| local-actions | Edit Note Title                | edit-selected-reference-note-title      | yes      |
+| local-actions | Regenerate Draft Body          | refresh-selected-reference-note-draft-body | yes   |
+| local-actions | Resolve Filing Conflict        | resolve-filing-conflict                 | yes      |
+| local-actions | Change Reference Note Template | choose-reference-note-template          | yes      |
+
+** Transitions
+| action_id            | destination_surface | destination_anchor | latest_stage | selected_family | workspace_open |
+|----------------------+---------------------+--------------------+--------------+-----------------+----------------|
+| return-main-cockpit  | cockpit             |                    |              |                 | false          |

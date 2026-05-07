@@ -15,6 +15,7 @@
 (require 'delib-flow-filing-test)
 (require 'delib-flow-render-test)
 (require 'delib-flow-ui-test)
+(require 'delib-flow-ui-contract-test)
 (require 'delib-flow-audit-test)
 (require 'delib-flow-debug-test)
 

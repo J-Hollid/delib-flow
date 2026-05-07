@@ -3,6 +3,9 @@
 These sketches are the canonical buffer-surface contracts for the architecture
 refactor. They are intentionally text-first and terminal-friendly.
 
+For the editable, testable main-scenario contract layer, see
+[[file:ui-scenario-contracts.org][ui-scenario-contracts.org]].
+
 * Main cockpit
 
 #+begin_example
