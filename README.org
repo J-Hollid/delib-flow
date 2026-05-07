@@ -204,9 +204,10 @@ in a stabilization and hardening phase.
   - `make coverage`
   - `make complexity`
   - `make validate`
-- Milestones 2, 3, 4, 5, 6, 7, and 8 are implemented
-- The retrieval path now has explanation-backed discovery, salience-aware
-  filtering, and reviewable retained-versus-rejected context presentation
+- The test suite is split by module, with
+  [[file:test/delib-flow-test.el][test/delib-flow-test.el]] kept as the aggregate integration loader.
+- Local verification and deterministic walkthrough guidance live in
+  [[file:docs/test-guide.org][docs/test-guide.org]].
 
 * User guide
 
@@ -271,9 +272,6 @@ Control-buffer usage:
   broader `Next actions` list when you want the full downstream menu.
 - Press `z` to toggle narrow-screen focus mode when you want the cockpit to
   keep only the current decision loop open.
-- The next cockpit pass is planned to add:
-  - local context menus for the current section
-  - on-demand control hints you can request at any point
 - Use the compact shortlist surfaces for selection-heavy steps:
   `Manual project selection` now shows a candidate table in `Now`, and
   `Artifact selection` now shows a filing shortlist in `Filing preview`.
@@ -600,19 +598,23 @@ The current implementation plan is tracked separately in
 Repository history is tracked in [[file:CHANGELOG.org][CHANGELOG.org]].
 
 Validation commands run from the repository root.
-* Upcoming Artifact Enrichment Redesign
+* Current architecture notes
 
-The next workflow redesign direction is documented in:
-
-- [[file:docs/design.org][docs/design.org]]
-- [[file:docs/implementation-plan.org][docs/implementation-plan.org]]
-
-The main shift is from a filing-centric batch model toward a shared artifact loop:
+The current product already uses the selected-artifact workflow model that the
+older redesign notes were moving toward:
 
 1. find candidates
 2. select one candidate
-3. enrich the selected candidate
-4. regenerate only the selected candidate when needed
-5. file or execute the selected enriched candidate
+3. enrich only the selected candidate
+4. approve or reject that drafted artifact
+5. file or execute it from a consequence-aware surface
 
-This direction will be piloted on reference notes first, then extended to actions, waiting-fors, and project proposals.
+That flow now exists across actions, waiting-fors, reference notes, and
+project proposals.
+
+For architecture and UX evaluation, use:
+
+- [[file:docs/design.org][docs/design.org]] for design principles
+- [[file:docs/ux-wireframes.org][docs/ux-wireframes.org]] for current render contracts
+- [[file:docs/implementation-plan.org][docs/implementation-plan.org]] for the historical build record and current
+  architecture snapshot

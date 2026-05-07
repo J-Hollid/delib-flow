@@ -13,8 +13,28 @@ passes where you want to:
 - compare current behavior against a fresh replay baseline after code changes
 - inspect the persisted audit trail alongside the in-memory run state
 
-The guide focuses on the Milestone 15 workflow that now exists in code rather
-than on the implementation plan.
+The guide focuses on the current split-architecture package rather than the
+older milestone sequence in the planning archive.
+
+* Validation entry points
+
+For repo-level validation, use:
+
+- =make test=
+- =make coverage=
+- =make complexity=
+- =make validate=
+
+For faster focused checks while iterating, use the split suites directly, for
+example:
+
+- =emacs -Q --batch -L . -L test -l test/delib-flow-ui-test.el -f ert-run-tests-batch-and-exit=
+- =emacs -Q --batch -L . -L test -l test/delib-flow-render-test.el -f ert-run-tests-batch-and-exit=
+- =emacs -Q --batch -L . -L test -l test/delib-flow-filing-test.el -f ert-run-tests-batch-and-exit=
+
+The aggregate integration loader remains
+[[file:../test/delib-flow-test.el][test/delib-flow-test.el]], but most module-owned regressions now live in the
+split test files under [[file:../test][test/]].
 
 The repository is now in stabilization mode. The shared test harness for
 module suites lives in [[file:../test/delib-flow-test-support.el][test/delib-flow-test-support.el]], while this guide
@@ -1144,7 +1164,8 @@ For each pass, record:
 - whether helper presets saved time or exposed rough edges
 - whether any stage still felt too manual or too opaque
 
-Those notes should tell you what the next Milestone 15 refinement needs to be.
+Those notes should tell you what the next local-verification or operator-UX
+refinement needs to be.
 
 * Future Refinement Targets
 

@@ -10,8 +10,9 @@
 (let* ((this-file (or load-file-name buffer-file-name))
        (repo-root (expand-file-name ".." (file-name-directory this-file)))
        (package-file (expand-file-name "delib-flow.el" repo-root)))
+  (setq load-prefer-newer t)
   (add-to-list 'load-path repo-root)
-  (load-file package-file))
+  (load package-file nil t))
 
 (provide 'load-delib-flow)
 

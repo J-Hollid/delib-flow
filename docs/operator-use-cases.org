@@ -1,0 +1,700 @@
+:PROPERTIES:
+:ID:       3f0d5335-5d8f-47e9-9a69-e2fd7cd3de31
+:END:
+#+title: delib-flow operator use cases
+#+subtitle: Concrete scenarios for validating UX and workflow value
+
+This document is a field-test script for =delib-flow=.
+
+It is meant to answer:
+
+- what kinds of source material this tool should be good at
+- what exact steps an operator should take in the cockpit
+- what useful output should result
+- what UX questions to ask while testing
+
+* How to use this document
+
+For each scenario:
+
+1. Create or locate a realistic Org heading that matches the input shape.
+2. Start =delib-flow= from that heading.
+3. Follow the exact operator steps.
+4. Compare the observed behavior to the expected outcomes.
+5. Note any confusion, friction, or missing trust surface.
+
+Prefer testing in the same environment you care about most:
+
+- desktop Emacs if you care about broad readability
+- terminal Emacs if you care about operator speed
+- narrow or mobile SSH sessions if you care about one-screen usability
+
+* Interaction conventions
+
+The steps below refer to actions by their visible labels, not only by key.
+
+Use whichever is easier in the moment:
+
+- activate the rendered action line with =RET=
+- use =.=
+  This opens the local context menu at point.
+- use =s=
+  This chooses a filing selection with completion when filing candidates exist.
+- use =F=
+  This opens or revisits the focused filing workspace when filing is active.
+- use =B=
+  This returns from the focused filing workspace to the main cockpit.
+- use =E=, =I=, =P=, =V=
+  These switch the consequence pane between draft, support, target, and staged
+  output.
+
+For note filing, the main cockpit is now mostly an overview and jump surface.
+The dense authoring loop should happen in the focused filing workspace.
+
+Inside the focused filing workspace, the most important sections should now be:
+
+- =Selected artifact=
+- =Working draft=
+- =Support for this draft=
+- =Save or discard=
+- =Final save target=
+- =Leave workspace=
+
+For selected reference notes, the working draft should read like part cards,
+not one large opaque block. The highest-value note parts to test are:
+
+- =Note title=
+- =Draft body=
+- =Source highlights=
+- =Related material=
+- =Reuse angle=
+
+Each part card should make the next local move obvious through a =Do here=
+block. If you cannot tell what to do next from the card itself, note that as a
+UX failure.
+
+* Scenario 1: Information-rich newsletter into useful ZK notes
+
+** Use case
+
+You received a dense newsletter with multiple reusable ideas and want:
+
+- one or more durable reference notes
+- possibly one follow-up action
+- confidence that the generated note is grounded in the source
+
+** Good source shape
+
+- a long email capture or imported newsletter heading
+- several distinct concepts or claims
+- maybe one project tie-in, but not necessarily
+
+** Why this should generate value
+
+This is one of the strongest =delib-flow= cases:
+
+- source inspection should classify the item correctly
+- project match should either find a relevant project or stay safely unmatched
+- retained context should help note extraction
+- selected-note drafting should turn a rough note candidate into a reusable ZK
+  artifact
+
+** Operator steps
+
+1. Put point on the newsletter heading.
+2. Run =M-x delib-flow-start=.
+3. Run =Inspect Source=.
+4. If the source classification looks right, run =Accept Inspect Source=.
+5. Run =Match Project=.
+6. If a project match is clearly right, accept it.
+   If no project is needed, reject the match and continue.
+7. Run =Discover Relevant Reference Material=.
+8. Run =Filter Useful Reference Material=.
+9. Run =Suggest Reference Notes=.
+10. Review the note candidates in the filing summary.
+11. Use =s= to choose one note candidate.
+12. Open the focused filing workspace with =F=.
+13. Confirm that =Selected artifact= clearly describes the chosen note.
+14. In =Working draft=, run =Draft Selected Note= if the note is not drafted
+    yet.
+15. Review the note part cards in order:
+    - =Note title=
+    - =Draft body=
+    - =Source highlights=
+    - =Related material=
+    - =Reuse angle=
+16. If one part is weak, use that card's =Do here= block to refresh or edit
+    only that part.
+17. If grounding is weak, run =Find Support for Selected Note=.
+18. Review =Support suggestions= without attaching anything automatically.
+19. Use =Choose Support for This Draft= only if one suggestion is genuinely
+    worth attaching.
+20. Open =E= and confirm the note reads as a durable ZK artifact rather than a
+    generic summary.
+21. Review =Save or discard= and =Final save target=.
+22. If the note looks right, approve and save it.
+23. Use =B= to return to the cockpit if you want to continue with another
+    artifact from the same source.
+
+** Expected value
+
+- the note should have a usable title and structure
+- the note should reflect actual source concepts, not generic summary prose
+- attached support should improve grounding only when you deliberately choose
+  it
+- saving should use the current assembled working draft, not the raw candidate
+
+** UX questions
+
+- Was it obvious when to leave the cockpit and move into the focused filing
+  workspace?
+- Did the note part cards make it clear which part needed attention?
+- Did support suggestions stay separate from attached support?
+- Did =Save or discard= make the final action clearer than the older filing
+  control surface?
+
+* Scenario 2: Meeting notes into next actions and waiting-fors
+
+** Use case
+
+You captured meeting notes and want to extract:
+
+- concrete next actions
+- external dependencies or blocked items
+
+** Good source shape
+
+- a meeting heading with bullets, attendees, and outcomes
+- some lines begin with action-like verbs
+- some lines imply someone else owes something
+
+** Why this should generate value
+
+This validates whether =delib-flow= can separate:
+
+- actionable work you should do
+- waiting-fors that belong to someone else
+
+** Operator steps
+
+1. Start =delib-flow= from the meeting heading.
+2. Run =Inspect Source= and accept it.
+3. Run =Match Project= and accept the correct project if one exists.
+4. Run =Extract Actions=.
+5. Run =Extract Waiting-For=.
+6. In filing preview, compare the action and waiting-for candidates.
+7. Choose one action with =s=.
+8. If filing focus is needed, open the focused filing workspace with =F=.
+9. Run =Draft Selected Action=.
+10. If needed, run =Find Support for Selected Action=.
+11. Check the action-specific evidence review.
+    It should explain why the item reads as executable now.
+12. Approve and file that action if it looks right.
+13. Return to the queue.
+14. Choose one waiting-for.
+15. Reopen or stay in the filing workspace for the waiting-for.
+16. Run =Draft Selected Waiting-For=.
+17. Review whether owner and blocked outcome became clearer.
+18. Approve and file that waiting-for if it looks right.
+
+** Expected value
+
+- actions should read like things you can directly do
+- waiting-fors should read like things someone else owes or must confirm
+- each selected artifact should feel local and focused, not queue-centric
+
+** UX questions
+
+- Was it clear why one candidate was an action versus a waiting-for?
+- Did the focused filing surface make the next step obvious once one artifact
+  was selected?
+- Was switching between artifact families straightforward or awkward?
+
+* Scenario 3: Ambiguous project match that needs operator judgment
+
+** Use case
+
+You have a source that could plausibly belong to two or more projects and need
+to choose the right one without losing momentum.
+
+** Good source shape
+
+- overlapping terms between multiple projects
+- a contact, tag, or link that is suggestive but not decisive
+
+** Why this should generate value
+
+This validates whether the product fails safely:
+
+- it should not silently pick the wrong project
+- it should make manual choice manageable
+
+** Operator steps
+
+1. Start =delib-flow= from the ambiguous heading.
+2. Run =Inspect Source= and accept it.
+3. Run =Match Project=.
+4. If the match result is ambiguous or rejected, run =Choose Project Manually=.
+5. Use the manual project selection block or completion to pick the right
+   project.
+6. Confirm that working context now shows the chosen project.
+7. Continue with the appropriate artifact stage:
+   - =Extract Actions=
+   - =Extract Waiting-For=
+   - or =Suggest Reference Notes=
+8. Select one artifact and continue through its focused filing workspace or
+   family-local filing flow.
+
+** Expected value
+
+- ambiguity should be explicit
+- manual selection should reseed the rest of the run cleanly
+- later filing targets should reflect the chosen project, not stale candidates
+
+** UX questions
+
+- Was it obvious why the automatic match was not trusted?
+- Did the manual-selection screen feel like a detour or a controlled branch?
+- After manual choice, did the rest of the workflow feel stable?
+
+* Scenario 4: No matching project, propose a new one
+
+** Use case
+
+You captured something meaningful that deserves project treatment, but no
+existing project matches.
+
+** Good source shape
+
+- a new initiative, idea, or thread of work
+- enough context to infer a project title and first action
+
+** Why this should generate value
+
+This validates the “turn source into project scaffolding” path.
+
+** Operator steps
+
+1. Start =delib-flow= from the source heading.
+2. Run =Inspect Source= and accept it.
+3. Run =Match Project=.
+4. Reject the match if no candidate is clearly right.
+5. Run =Propose New Project=.
+6. In filing preview, choose the proposed project.
+7. Move into the project-focused filing area if a detailed project review is
+   needed.
+8. Run =Draft Selected Project=.
+9. Review:
+   - title quality
+   - first-item concreteness
+   - tags
+10. Open =E= draft preview and =P= target preview.
+11. Approve and file the project if it looks correct.
+
+** Expected value
+
+- the proposal should not just repeat the source title verbatim
+- the project should include a plausible first action
+- the consequence preview should make clear where the new project will be filed
+
+** UX questions
+
+- Did the project workspace make the proposal feel real enough to review?
+- Was the first-item quality check useful or too vague?
+- Did filing a new project feel riskier than it should?
+
+* Scenario 5: Follow-up email that is mostly one waiting-for
+
+** Use case
+
+You received a message like “waiting on Pat to confirm launch date” and want a
+clean waiting-for in the right project.
+
+** Good source shape
+
+- short email or note
+- clear dependency on someone else
+- one obvious blocked outcome
+
+** Why this should generate value
+
+This is a narrow but common operator flow:
+
+- minimal retrieval
+- quick selection
+- quick drafting
+- quick filing
+
+** Operator steps
+
+1. Start =delib-flow= from the message heading.
+2. Run =Inspect Source= and accept it.
+3. Run =Match Project= and accept the right project.
+4. Run =Extract Waiting-For=.
+5. Choose the waiting-for candidate with =s=.
+6. Open the focused filing workspace if the cockpit summary is not enough.
+7. Run =Draft Selected Waiting-For=.
+8. Review whether the draft clarifies:
+   - owner
+   - blocked outcome
+   - wording
+9. If grounding is weak, run =Find Support for Selected Waiting-For=.
+10. Approve and file it.
+
+** Expected value
+
+- this should be a compact loop
+- the selected waiting-for should become the clear center of the active filing
+  surface
+- filing should feel like the last step, not the place where meaning first
+  appears
+
+** UX questions
+
+- How many steps felt unnecessary for a simple waiting-for?
+- Did the focused filing surface help, or did the broader cockpit still
+  dominate?
+- Was the “why approval is blocked” guidance understandable?
+
+* Scenario 6: Rich article or essay into support note plus action
+
+** Use case
+
+You read a long article that should produce:
+
+- a durable reference note in your ZK
+- one concrete follow-up action for a current project
+
+** Good source shape
+
+- long article or clipped essay
+- one or more strong ideas
+- one idea is clearly relevant to an active project
+
+** Why this should generate value
+
+This validates multi-artifact value from one source:
+
+- reference note plus action
+- same source, different artifact families
+
+** Operator steps
+
+1. Start =delib-flow= from the article heading.
+2. Run =Inspect Source= and accept it.
+3. Run =Match Project= if one project is clearly relevant.
+4. Run =Discover Relevant Reference Material=.
+5. Run =Filter Useful Reference Material=.
+6. Run =Suggest Reference Notes=.
+7. Run =Extract Actions=.
+8. First, choose a note candidate and open the focused filing workspace.
+9. Approve the drafted note, but do not file yet.
+10. Then choose and draft one action candidate.
+11. Review each artifact in its own focused surface.
+12. Use =E= and =P= previews to confirm both consequences.
+13. Approve the action too.
+14. File approved outputs.
+
+** Expected value
+
+- one source should support more than one artifact family
+- each family should still feel local once selected
+- consequence preview should keep the operator oriented before filing multiple
+  approved outputs
+
+** UX questions
+
+- Was it obvious which selected artifact you were currently operating on?
+- Did the queue still dominate attention after selection?
+- Did filing multiple approved outputs feel controlled or surprising?
+
+* Scenario 7: Revision trust after regeneration
+
+** Use case
+
+The first draft is close, but you want a second pass and need confidence that
+you can compare and restore safely.
+
+** Good source shape
+
+- any artifact family with a reasonable first draft
+- a visible reason to refine wording, title, or support use
+
+** Why this should generate value
+
+This validates Phase 11 and 12 trust surfaces:
+
+- history
+- compare
+- restore
+- frozen evidence snapshots
+
+** Operator steps
+
+1. Reach any focused filing workspace with a current draft.
+2. Run the family-local draft action again, or refresh one note part if you
+   are testing the note flow.
+   This regenerates the selected artifact.
+3. In the note flow, review the visible =Revision compare= card first.
+4. Then review =Draft history and restore= if deeper history is available.
+5. Compare current versus previous draft.
+6. Check:
+   - frozen evidence review
+   - frozen evidence changes
+   - support differences
+   - family review changes
+   - quality risk changes
+7. If the new draft is worse, run =Restore Previous ... Draft=.
+8. If an older draft is better, use =Choose Saved ... Revision=.
+9. Confirm that the selected draft really changed back.
+
+** Expected value
+
+- regeneration should feel reversible
+- evidence compare should explain why the revision changed
+- restore should update the active filing surface, not just hidden state
+
+** UX questions
+
+- Was it obvious that “restore previous” and “choose saved revision” are
+  different tools?
+- Did the compare surface help you judge quality, or was it too text-heavy?
+- After restore, did the workspace feel truthful immediately?
+
+* Scenario 8: Thin first note draft, repair only one part
+
+** Use case
+
+The suggested note is directionally right, but only one part is weak. You want
+to repair that part without disturbing the rest of the draft.
+
+** Good source shape
+
+- a source with one strong idea and a few weaker supporting details
+- a first note draft where the body is fine but highlights or reuse angle feel
+  generic
+
+** Why this should generate value
+
+This directly validates the newer note-part authoring model:
+
+- one selected note
+- one weak part
+- one local fix
+- no whole-note churn unless you choose it
+
+** Operator steps
+
+1. Reach a selected note in the focused filing workspace.
+2. Draft the note if needed.
+3. Identify one weak card, such as =Source highlights= or =Reuse angle=.
+4. Use that card's =Do here= block to either:
+   - refresh only that part
+   - or open the dedicated part editor
+5. Confirm that the changed part updates while the other note parts stay
+   stable.
+6. Review the =Revision compare= card.
+7. Confirm that the compare summary reflects the local part change.
+8. Save the note if the repaired draft is now good enough.
+
+** Expected value
+
+- the operator should not need to rerun the whole note
+- the changed part should be obvious
+- the rest of the draft should remain intact unless intentionally changed
+
+** UX questions
+
+- Was it obvious which card to use for the repair?
+- Did the part editor feel safer than full regeneration?
+- Did =Revision compare= make the local change visible quickly?
+
+* Scenario 9: Support retrieval finds noise, but you attach only one note
+
+** Use case
+
+You have a promising note draft, but broad support retrieval returns both one
+useful support note and several noisy overlaps.
+
+** Good source shape
+
+- a source with one clear concept that overlaps with many vaguely related notes
+- one or two genuinely strong supporting notes in the ZK
+
+** Why this should generate value
+
+This validates whether support curation is operator-controlled instead of
+retrieval-driven.
+
+** Operator steps
+
+1. Reach a drafted selected note in the focused filing workspace.
+2. Run =Find Support for Selected Note=.
+3. Review =Support suggestions=.
+4. Confirm that nothing is attached yet.
+5. Use =Choose Support for This Draft=.
+6. Attach only the strongest support note.
+7. Confirm that =Attached support= now shows the chosen note, while the noisy
+   suggestions remain only in =Support suggestions=.
+8. Review the working draft and evidence surfaces again.
+9. If the support did not help, detach it and confirm the note returns to the
+   unattached state cleanly.
+
+** Expected value
+
+- support suggestions should stay inert until chosen
+- the attached support area should read as deliberate curation, not retrieval
+  noise
+- the draft should feel better grounded only after explicit attachment
+
+** UX questions
+
+- Was the distinction between =Support suggestions= and =Attached support=
+  obvious?
+- Did the chooser make it easy to ignore noisy matches?
+- After attaching or detaching support, did the draft and evidence surfaces
+  stay trustworthy?
+
+* Scenario 10: Adjust title and save target without leaving the filing workspace
+
+** Use case
+
+The drafted note is useful, but the proposed title or target path is slightly
+wrong.
+
+** Good source shape
+
+- a note candidate whose content is good
+- a title that is too broad, too generic, or mismatched to your naming
+  conventions
+
+** Why this should generate value
+
+This validates that filing endgame adjustments are local and controlled, not a
+separate confusing mode.
+
+** Operator steps
+
+1. Reach a drafted selected note in the focused filing workspace.
+2. Review =Note title= and =Final save target=.
+3. Use =Edit Note Title= if the title needs tightening.
+4. Use =Change Reference Note Template= or =Edit Target Path= if the save
+   target is wrong.
+5. Confirm that the workspace rerenders with the new title or target.
+6. Review =P= target preview.
+7. Save the note without returning to the cockpit.
+
+** Expected value
+
+- note identity fixes should feel local to the note, not like switching modes
+- target edits should make the save consequence clearer before committing
+
+** UX questions
+
+- Was it obvious where to fix title versus target?
+- Did the target controls feel like part of the note workflow, or still like a
+  separate filing subsystem?
+- After editing, did the new target consequence feel clear enough to trust?
+
+* Scenario 11: Narrow-screen filing pass on one selected note
+
+** Use case
+
+You are testing from terminal Emacs or a narrow mobile session and want to see
+whether the focused filing workspace still supports a complete note-save loop.
+
+** Good source shape
+
+- any source likely to produce one promising note candidate
+- a narrow display where only a few sections fit comfortably at once
+
+** Why this should generate value
+
+This tests whether the newer workspace model actually improved constrained-input
+operation.
+
+** Operator steps
+
+1. Start =delib-flow= from the source heading in a narrow window.
+2. Reach note filing and choose one note candidate.
+3. Open the focused filing workspace.
+4. Move through the note cards one by one.
+5. Refresh or edit exactly one part.
+6. Review =Attached support= or ignore support suggestions.
+7. Save the note.
+8. Return to the cockpit with =B=.
+
+** Expected value
+
+- the focused workspace should keep one note as the center of attention
+- the next step should be discoverable without scanning the entire run state
+- =B= should make it easy to leave without feeling lost
+
+** UX questions
+
+- Did the focused workspace reduce scrolling and cross-buffer confusion?
+- Were the =Do here= blocks sufficient on a narrow screen?
+- Did returning to the cockpit preserve orientation?
+
+* Scenario 12: Filing conflict recovery
+
+** Use case
+
+The artifact is good, but the filing target conflicts with existing material.
+
+** Good source shape
+
+- a note or project child likely to collide with an existing title or heading
+
+** Why this should generate value
+
+This validates whether =delib-flow= handles endgame risk without losing the
+operator’s work.
+
+** Operator steps
+
+1. Drive a drafted artifact through approval.
+2. Run =File Approved Outputs=.
+3. If a conflict appears, move to =Filing conflicts=.
+4. Review the conflict reason.
+5. Use =Resolve Filing Conflict=.
+6. Enter the needed rewrite or retitle in the editable block.
+7. Retry the conflict resolution path.
+8. Confirm that the corrected item files successfully.
+
+** Expected value
+
+- conflict handling should preserve the drafted artifact
+- the operator should not have to restart the whole run
+- the retry path should make the fix feel local and controlled
+
+** UX questions
+
+- Was the conflict cause understandable?
+- Did the editable conflict-resolution block feel safe to use?
+- After resolution, did the cockpit make it clear what changed?
+
+* What to record while validating
+
+For each scenario, write down:
+
+- where you hesitated
+- where the recommended next step was unclear
+- whether the selected artifact really felt “first-class”
+- whether the focused filing workspace felt more intuitive than the cockpit for
+  dense note work
+- whether the consequence preview reduced risk
+- whether compare, support, and evidence surfaces improved trust
+- whether the control surface stayed compact enough on a narrow screen
+
+If a scenario succeeds functionally but feels awkward, note exactly where the
+awkwardness happened:
+
+- before selection
+- inside the focused filing workspace
+- during approval
+- during filing
+- during restore or compare
+
+That is the fastest way to separate “missing feature” from “UX contract still
+not landing.”
