@@ -3,10 +3,22 @@
 `delib-flow` is an Emacs package for running guided AI-assisted workflows from
 an Org heading at point.
 
-This repository is being built incrementally from a design-first process.
+This repository was built incrementally from a design-first process and is now
+in a stabilization and hardening phase.
 
 * Current status
 
+- Drift-resistant runtime infrastructure is now in place:
+  - stage execution flows through shared command-runner infrastructure
+  - stage descriptors now own command runner, sync, and rerender metadata
+  - cockpit and filing-workspace buffers now share a surface lifecycle shell
+  - filing queue/state rebuild paths now share internal helpers
+  - filing preview and focused workspace rendering now assemble from local
+    section/card descriptors instead of repeated string scaffolding
+  - shared test fixtures and common run/edit helpers now live in
+    [[file:test/delib-flow-test-support.el][test/delib-flow-test-support.el]]
+  - descriptor validation now fails fast when stage or surface metadata is
+    incomplete or invalid
 - Milestone 1 control-buffer foundation implemented
 - One active run at a time
 - Frozen source snapshot captured from heading at point
@@ -192,23 +204,15 @@ This repository is being built incrementally from a design-first process.
   - `make coverage`
   - `make complexity`
   - `make validate`
-- Milestones 2, 3, 4, 5, 6, 7, and 8 are implemented
-- The retrieval path now has explanation-backed discovery, salience-aware
-  filtering, and reviewable retained-versus-rejected context presentation
+- The test suite is split by module, with
+  [[file:test/delib-flow-test.el][test/delib-flow-test.el]] kept as the aggregate integration loader.
+- Local verification and deterministic walkthrough guidance live in
+  [[file:docs/test-guide.org][docs/test-guide.org]].
 
 * User guide
 
 `delib-flow` currently works as a guided control buffer around a deterministic
 or adapter-backed workflow run started from an Org heading.
-
-A dedicated control-buffer redesign is now planned to improve cockpit
-readability, section-local action flow, selection UX, filing clarity, and
-mobile terminal ergonomics. The
-target interaction model is described in
-[[file:docs/design.org][docs/design.org]] under =Control-buffer redesign direction=. The phased
-implementation sequence is tracked in
-[[file:docs/implementation-plan.org][docs/implementation-plan.org]] under
-=Control-buffer redesign roadmap=.
 
 At a high level, the package does this:
 
@@ -237,6 +241,12 @@ refresh and action execution. `Details` stays folded by default and holds
 verbose material such as the source snapshot, accepted working context, latest
 prompt/input, latest raw output, grouped stage history, and audit status.
 
+Internally, stage actions, cockpit rerendering, focused filing surfaces, and
+shared filing-state mutation now run through common infrastructure rather than
+stage-specific open-coded shells. The design and implementation documents now
+describe those shared contracts as the current system, not as future roadmap
+work.
+
 Typical workflow:
 
 1. Put point on an Org heading you want to process.
@@ -262,9 +272,6 @@ Control-buffer usage:
   broader `Next actions` list when you want the full downstream menu.
 - Press `z` to toggle narrow-screen focus mode when you want the cockpit to
   keep only the current decision loop open.
-- The next cockpit pass is planned to add:
-  - local context menus for the current section
-  - on-demand control hints you can request at any point
 - Use the compact shortlist surfaces for selection-heavy steps:
   `Manual project selection` now shows a candidate table in `Now`, and
   `Artifact selection` now shows a filing shortlist in `Filing preview`.
@@ -591,19 +598,23 @@ The current implementation plan is tracked separately in
 Repository history is tracked in [[file:CHANGELOG.org][CHANGELOG.org]].
 
 Validation commands run from the repository root.
-* Upcoming Artifact Enrichment Redesign
+* Current architecture notes
 
-The next workflow redesign direction is documented in:
-
-- [[file:docs/design.org][docs/design.org]]
-- [[file:docs/implementation-plan.org][docs/implementation-plan.org]]
-
-The main shift is from a filing-centric batch model toward a shared artifact loop:
+The current product already uses the selected-artifact workflow model that the
+older redesign notes were moving toward:
 
 1. find candidates
 2. select one candidate
-3. enrich the selected candidate
-4. regenerate only the selected candidate when needed
-5. file or execute the selected enriched candidate
+3. enrich only the selected candidate
+4. approve or reject that drafted artifact
+5. file or execute it from a consequence-aware surface
 
-This direction will be piloted on reference notes first, then extended to actions, waiting-fors, and project proposals.
+That flow now exists across actions, waiting-fors, reference notes, and
+project proposals.
+
+For architecture and UX evaluation, use:
+
+- [[file:docs/design.org][docs/design.org]] for design principles
+- [[file:docs/ux-wireframes.org][docs/ux-wireframes.org]] for current render contracts
+- [[file:docs/implementation-plan.org][docs/implementation-plan.org]] for the historical build record and current
+  architecture snapshot

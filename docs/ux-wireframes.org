@@ -1,0 +1,105 @@
+* Delib-Flow UX Wireframes
+
+These sketches are the canonical buffer-surface contracts for the architecture
+refactor. They are intentionally text-first and terminal-friendly.
+
+* Main cockpit
+
+#+begin_example
+* Now
+  Current loop state and immediate recommendation.
+
+* Current result
+  Latest stage outcome.
+
+* Filing preview
+  Destination appears before any file action.
+
+* Next actions
+  1. Local action
+  2. Secondary action
+
+* Current context
+  Retrieved and retained supporting material.
+
+* Details
+  Stage history, diagnostics, and expanded notes.
+#+end_example
+
+* Project package workspace
+
+#+begin_example
+* Project package
+  Selected project: Alpha Project
+  Included children:
+  - TODO Draft kickoff follow-up
+  - TODO Prepare timeline update
+  Extracted outside items:
+  - Waiting for Bob to confirm the launch date.
+
+* Do here now
+  1. Approve package
+  2. Edit included items
+
+* Package consequence
+  Save target: My Projects > Alpha Project
+
+* Targets and staged output
+  File action appears after the destination preview.
+#+end_example
+
+* Reference-note workspace
+
+#+begin_example
+* Selected artifact
+  Advisor briefs as reusable interfaces
+
+* Working draft
+  Note parts and composed draft text.
+
+* Support for this draft
+  Evidence, excerpts, and target note type.
+
+* Next actions
+  1. Save
+  2. Discard
+#+end_example
+
+* Action or waiting-for workspace
+
+#+begin_example
+* Selected artifact
+  Publish updated launch timeline
+
+* Working draft
+  Draft text before filing.
+
+* Support for this draft
+  Evidence and destination context.
+
+* Next actions
+  1. Approve
+  2. File
+#+end_example
+
+* Operator field editor
+
+#+begin_example
+* Field
+  Saved value appears before the edit action.
+
+* Next actions
+  1. Apply
+  2. Cancel
+#+end_example
+
+* Conflict or recovery
+
+#+begin_example
+* Conflict
+  Explain what is blocked.
+
+* Next valid move
+  1. Retry with revised title
+  2. Skip filing
+#+end_example

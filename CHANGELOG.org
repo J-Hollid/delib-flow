@@ -5,6 +5,18 @@ All notable repository changes should be recorded in this file.
 The format is intentionally simple for now: reverse-chronological headings with
 dated entries.
 
+* 2026-05-07
+
+- Updated `README.org`, `docs/design.org`,
+  `docs/implementation-plan.org`, and `docs/test-guide.org` so repository
+  documentation now describes the current shared runtime and test-support
+  architecture instead of treating the control-buffer redesign and drift-
+  reduction roadmap as still pending.
+- Documented the current stabilization posture after the completed
+  stage-command runner, surface lifecycle, filing-state consolidation, render
+  scaffold cleanup, shared test-support extraction, and descriptor-validation
+  hardening passes.
+
 * 2026-04-28
 
 - Continued Milestone 15 in `delib-flow.el`, `delib-flow-local-test-config.el`,

@@ -1,0 +1,150 @@
+:PROPERTIES:
+:ID:       9db76d8a-28f5-4f54-9dd0-0f61c2c2d36b
+:END:
+#+title: delib-flow handover for next Codex agent
+
+This document is the fast-start handover for another agent picking up work on
+=delib-flow= after the architecture refactor.
+
+* What this package is now
+
+`delib-flow` is an Emacs operator workflow around a frozen Org-heading source
+snapshot.
+
+The current product shape is:
+
+- one active run at a time
+- a cockpit control buffer for stage execution and review
+- focused filing workspace buffers for dense filing and note-authoring loops
+- deterministic local stages plus optional cloud routing
+- explicit inspect, match, cloud-send, reintegration, and filing review
+  boundaries
+- audit persistence and deterministic debug replay
+
+* Current architecture
+
+The runtime is now split across dedicated modules:
+
+- [[file:../delib-flow.el][delib-flow.el]]
+  Thin public compatibility facade. This is not the main implementation file
+  anymore.
+- [[file:../delib-flow-config.el][delib-flow-config.el]]
+  Customization surface and package defaults.
+- [[file:../delib-flow-model.el][delib-flow-model.el]]
+  Run-state and pure state helpers.
+- [[file:../delib-flow-artifacts.el][delib-flow-artifacts.el]]
+  Artifact shaping, normalization, warnings, and selected-draft helpers.
+- [[file:../delib-flow-services.el][delib-flow-services.el]]
+  Deterministic source inspection, project matching, discovery, and helper
+  services.
+- [[file:../delib-flow-stages.el][delib-flow-stages.el]]
+  Stage descriptors, input packages, execution lifecycle, and apply logic.
+- [[file:../delib-flow-filing.el][delib-flow-filing.el]]
+  Filing selection, target planning, deterministic write paths, and conflict
+  handling.
+- [[file:../delib-flow-render.el][delib-flow-render.el]]
+  Cockpit, filing-preview, and focused-workspace rendering.
+- [[file:../delib-flow-ui.el][delib-flow-ui.el]]
+  Modes, keymaps, buffer lifecycle, action dispatch, and public workflow
+  commands.
+- [[file:../delib-flow-audit.el][delib-flow-audit.el]]
+  Audit state, persistence, and audit navigation commands.
+- [[file:../delib-flow-debug.el][delib-flow-debug.el]]
+  Debug scenarios, replay, walkthroughs, and inspection buffers.
+
+Dependency intent is:
+
+- config -> model -> services/artifacts -> stages/filing -> render -> ui
+- audit and debug depend on the shared layers where needed
+- `delib-flow.el` loads the stack and preserves the public entrypoint
+
+* Test layout
+
+Module-owned tests now live in split files:
+
+- [[file:../test/delib-flow-architecture-test.el][test/delib-flow-architecture-test.el]]
+- [[file:../test/delib-flow-artifacts-test.el][test/delib-flow-artifacts-test.el]]
+- [[file:../test/delib-flow-audit-test.el][test/delib-flow-audit-test.el]]
+- [[file:../test/delib-flow-debug-test.el][test/delib-flow-debug-test.el]]
+- [[file:../test/delib-flow-filing-test.el][test/delib-flow-filing-test.el]]
+- [[file:../test/delib-flow-model-test.el][test/delib-flow-model-test.el]]
+- [[file:../test/delib-flow-render-test.el][test/delib-flow-render-test.el]]
+- [[file:../test/delib-flow-services-test.el][test/delib-flow-services-test.el]]
+- [[file:../test/delib-flow-stages-test.el][test/delib-flow-stages-test.el]]
+- [[file:../test/delib-flow-ui-test.el][test/delib-flow-ui-test.el]]
+
+The aggregate integration loader remains:
+
+- [[file:../test/delib-flow-test.el][test/delib-flow-test.el]]
+
+That aggregate file is still large, but it no longer contains obvious
+module-owned prefixed test leftovers. What remains there is mostly integration
+and cross-module workflow coverage.
+
+* Verification state
+
+At handover time:
+
+- `make test` passes `616/616`
+- `make complexity` passes
+- `make coverage` passes
+
+Coverage is currently above the enforced gate, and duplicate ERT names across
+=test/*.el= are at zero.
+
+* Documentation to read first
+
+1. [[file:../README.org][README.org]]
+   Current project-facing architecture, setup, and operator usage.
+2. [[file:ux-wireframes.org][ux-wireframes.org]]
+   Current cockpit and filing-surface render contracts.
+3. [[file:test-guide.org][test-guide.org]]
+   Local verification, walkthroughs, and debug workflow.
+4. [[file:design.org][design.org]]
+   Product intent and UX principles. Some milestone language there is
+   historical.
+5. [[file:implementation-plan.org][implementation-plan.org]]
+   Historical implementation record plus current planning-status snapshot.
+
+* Current roadmap position
+
+The architecture refactor itself is done.
+
+The current boundary is:
+
+- thin facade preserved
+- modules split and loading cleanly
+- validation scripts cover the split source tree
+- module tests are split out
+- aggregate suite is now mainly integration coverage
+
+The next work should not assume the repo is still in the middle of the module
+extraction. That phase is over.
+
+* Recommended next work
+
+Use a fresh context to evaluate the current package against explicit design and
+engineering principles rather than continuing blind structural churn.
+
+Good next-step questions:
+
+- does the current architecture actually respect the intended dependency
+  direction?
+- are the remaining integration tests in the right file, or is there one more
+  coherent split worth doing?
+- do the cockpit and focused workspace surfaces match the intended operator UX
+  principles?
+- are there current abstractions that are still carrying migration-era
+  scaffolding and should be simplified now that the split is stable?
+
+* Practical advice
+
+- Do not treat `delib-flow.el` as the implementation center; read the module
+  that actually owns the behavior first.
+- Prefer updating the module-local test when changing a module-local contract.
+- Keep `test/delib-flow-test.el` for true cross-layer behavior unless a block
+  clearly has a single module owner.
+- Treat `docs/implementation-plan.org` as partly historical. It is useful
+  context, but not a current task list.
+- Preserve narrow-screen and terminal-first UX constraints when evaluating UI
+  changes.

@@ -12,6 +12,23 @@ normalized for repository use. The substantive workflow design remains the same.
 
 * Implementation status note
 
+- The earlier control-buffer redesign and drift-reduction roadmap is now
+  materially implemented in the repository.
+- The current runtime architecture is organized around shared internal
+  contracts rather than stage-by-stage command shells:
+  - stage descriptors own execution metadata used by the shared UI command
+    runner
+  - cockpit and filing-workspace buffers render through shared surface
+    lifecycle infrastructure
+  - filing-state queue mutation now shares rebuild helpers instead of repeated
+    plist surgery
+  - filing-preview and focused filing workspaces now use local section/card
+    descriptor assembly rather than repeated scaffold formatting
+  - module test suites now share one support layer for fixtures and common run
+    builders
+- The active design problem is no longer “how do we split the architecture?”
+  but “how do we harden and refine the operator experience without reopening
+  stable boundaries?”
 - Milestone 1 control-buffer foundation has now been implemented in the
   repository.
 - Milestone 2 now has seventeen executable stage implementations in the
@@ -22,60 +39,21 @@ normalized for repository use. The substantive workflow design remains the same.
   Notes`, `Decide on Cloud Pass`, `Sanitize for Cloud`, `Approve Cloud Send`,
   `Run Cloud Stage`, `Approve Candidate Reintegration`, `Integrate into
   Source`, `Select Approved Filing Actions`, and `File Approved Outputs`.
-- `Approve Cloud Send`, `Run Cloud Stage`, `Integrate into Source`, `Select
-  Approved Filing Actions`, and `File Approved Outputs` remain
-  implementation-level execution stages in the current repo, while `Approve
-  Candidate Reintegration` is now also executable instead of remaining a
-  planned review boundary only.
-- The current implementation confirms the viability of:
+- The implemented product shape now includes:
   - one active run at a time
   - frozen source snapshots
-  - a structured Org-mode control buffer
-  - direct editable blocks inside the control workflow
-  - managed-region protection with editable-region preservation across refresh
-- The current implementation also confirms the viability of:
-  - a generic local stage execution contract
-  - stage-history persistence across successful and failed runs
-  - deterministic project matching against the configured My Projects file
-  - deterministic local reference-material discovery against the configured ZK
-    root
-  - deterministic local filtering of retrieved candidates into retained context
-  - deterministic manual project selection for ambiguous or no-match project
-    branches
-  - deterministic no-match project proposal into a filing-ready project
-    artifact with a first next action
-  - deterministic drafting of next-action and waiting-for artifacts into the
-    filing-preview path
-  - deterministic drafting of reference-note artifacts into the filing-preview
-    path
-  - deterministic cloud-routing decisions with visible pending sanitization
-    state
-  - provider-aware cloud-routing policy checks with per-provider enable/disable
-    control and recorded policy profile state
-  - deterministic sanitized cloud-package preparation with visible review state
-  - policy-profile-aware sanitization, including strict redaction of file links
-    and project-identifying terms
-  - direct in-buffer editing of the reviewed cloud package before send
-  - explicit cloud-send approval before cloud execution
-  - cloud execution through a dedicated cloud adapter path with visible
-    returned-context state
-  - explicit reintegration approval after cloud-returned output is shown
-  - local reintegration of returned cloud output before filing review
-  - deterministic one-at-a-time filing approval from the current draft queue
-  - deterministic filing into project-child targets and reference-note files
-  - deterministic project-support note filing that also updates matched
-    project metadata with a reference-file link to the new support note
-  - deterministic filing conflict detection with visible retryable conflict
-    state
-  - metadata-aware deterministic project matching over titles, heading tags,
-    subtree terms, and contact addresses
-  - metadata-aware reference discovery that prioritizes directly linked project
-    notes before broader PKM term overlap
-  - template-backed deterministic note creation for both general PKM notes and
-    project-support notes, with package defaults when user templates are not
-    configured
-  - incremental audit-log append of run and stage records into the configured
-    audit log
+  - a cockpit control buffer plus focused filing workspaces
+  - explicit inspect, match, cloud-send, reintegration, and filing review
+    boundaries
+  - deterministic project matching, retrieval, filtering, drafting, and filing
+  - provider-aware cloud routing and sanitization
+  - audit logging, debug scenarios, deterministic replay, and walkthrough
+    inspection
+- The module split and render-contract tests are now part of the maintained
+  architecture, not a planned refactor target.
+- Much of the material below remains useful as product intent, but some of the
+  milestone language is now historical rather than an implementation to-do
+  list.
 
 * Design learnings from Milestone 1
 
@@ -90,6 +68,11 @@ normalized for repository use. The substantive workflow design remains the same.
   behavior.
 
 * Control-buffer redesign direction
+
+This section is now historical design context rather than an unimplemented
+roadmap. The current cockpit already reflects most of these directions. Keep
+using it as a design contract for future UX hardening, but do not treat it as
+an indicator that the repo is still waiting on a large structural redesign.
 
 The current control buffer is functionally rich, but it still asks the operator
 to parse too many equally weighted surfaces before taking the next step. The
@@ -810,3 +793,191 @@ Reference notes should be the first pilot for this redesign because:
 - the existing filing loop already exposes much of the needed preview surface
 
 After notes, the same model should expand to actions, waiting-fors, and project proposals.
+
+* Post-Phase-6 UX Direction
+
+With the selected-item enrichment model now implemented through filing
+simplification, the next product gains should come less from adding more stage
+types and more from making the existing model feel like a strong operator
+product.
+
+The next roadmap should optimize for four qualities:
+
+- faster understanding of the current selected item
+- lower-friction local action discovery
+- higher-confidence drafting through targeted support
+- more tangible consequence previews before commit
+
+** Product goals
+
+- Make each selected artifact feel like a small workspace rather than a row in
+  a queue.
+- Make local actions discoverable without scanning the whole cockpit.
+- Make regeneration controllable and comparable rather than opaque.
+- Make support retrieval specific to the selected artifact, not only to the
+  whole source.
+- Make drafting and filing consequences visible side-by-side.
+- Keep dense authoring stages in focused workspaces when they outgrow one
+  readable cockpit surface.
+
+** Selected-item workspace model
+
+The next control-buffer step should promote each selected artifact family into
+its own workspace loop:
+
+- shortlist
+- selected item card
+- selected-item draft
+- supporting material for that selected item
+- regenerate selected item
+- planned target or execution consequence
+- file or execute selected item
+
+This should become the dominant mental model for:
+
+- actions
+- waiting-fors
+- reference notes
+- project proposals
+
+The current implementation has shown that one nuance matters: when a stage has
+many local decisions, one selected-item workspace block inside the main cockpit
+is not always enough. Dense authoring should move into a focused workspace
+buffer instead of competing with stage history, audit, and broader workflow
+controls in the same surface.
+
+** Stage-focused workspace model
+
+The control model should now be treated as layered:
+
+- main cockpit
+  - run status
+  - current stage
+  - blocked state
+  - recommended next move
+  - compact filing or authoring summary
+  - jump commands into dense workspaces
+- focused stage workspace
+  - one dense local work loop
+  - the selected artifact
+  - current working draft
+  - curated support
+  - exact target or consequence
+  - local actions for that stage only
+
+The focused workspace is not a second-class preview. For dense stages it is
+the primary authoring surface, while the cockpit becomes the overview and
+navigation surface.
+
+Reference-note filing is the first concrete use of this model:
+
+- the cockpit now shows compact filing state and an explicit jump into the
+  filing workspace
+- the filing workspace owns note drafting, support curation, target edits, and
+  save approval
+- returning to the cockpit should preserve the active selected artifact and
+  workspace location
+
+** Context-action model
+
+The current local actions and context menu are a useful start, but the next
+step should behave more like successful Emacs operator tools:
+
+- section-local action menus in the style of Magit section maps
+- compact keyboard-driven action palettes in the style of Transient
+- “act on thing at point” behavior similar to Embark
+
+The important design constraint is locality: when point is on one selected
+artifact, the actions surfaced there should be about that artifact first, not
+about the full workflow in general.
+
+When a focused stage workspace exists, it should be the primary caller of
+those local actions. The cockpit should advertise and summarize, not duplicate
+the dense action surface.
+
+** Side-by-side consequence model
+
+The package should move toward a stable two-surface operating loop:
+
+- left: control cockpit or focused stage workspace
+- right: consequence pane
+
+The consequence pane should be able to show:
+
+- selected draft body
+- planned file target
+- staged output
+- supporting note excerpt
+- filed target buffer
+- conflict target
+
+This is especially important for demos and for narrow terminal operation where
+scrolling between distant consequences weakens operator trust.
+
+** Targeted support retrieval
+
+Broad retrieval remains useful before selection, but once one artifact is
+selected the retrieval model should narrow.
+
+Examples:
+
+- `Find support for selected note`
+- `Find support for selected action`
+- `Find support for selected waiting-for`
+- `Find support for selected project`
+
+The system should let the operator improve one draft with one focused support
+pass instead of rerunning broad discovery and then mentally mapping the results
+back to one item.
+
+** Draft-history model
+
+Regeneration should become reviewable over time, not just replace-in-place.
+
+The selected item should eventually support:
+
+- current draft
+- prior drafts
+- draft comparison
+- restore prior draft
+
+This is especially valuable for:
+
+- reference notes
+- project proposals
+- wording-heavy actions
+
+It is also a strong trust and demo feature because the operator can see that
+regeneration is reversible and inspectable.
+
+** Draft-quality and evidence model
+
+The drafting loop should eventually expose why a draft exists and what supports
+it.
+
+For a selected artifact, the cockpit should be able to show:
+
+- draft confidence or strength summary
+- why the item was surfaced
+- which source lines informed it
+- which retained or discovered materials informed it
+- what quality gaps remain before filing
+
+This should make weak drafts easier to reject and strong drafts easier to
+trust.
+
+** Demonstration value
+
+The most demo-friendly improvements are the ones that make the system feel
+intentional and inspectable:
+
+- selected-item workspaces
+- stage-focused workspaces for dense loops
+- transient-like local action palettes
+- targeted support retrieval
+- side-by-side consequence panes
+- draft-history compare and restore
+- evidence views for generated drafts
+
+These improvements should also make the real tool easier to operate, not just
+more visually impressive.

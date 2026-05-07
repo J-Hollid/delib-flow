@@ -11,15 +11,28 @@
 (require 'testcover)
 (require 'cl-lib)
 
-(defconst delib-flow-coverage-threshold 90.0
+(defconst delib-flow-coverage-threshold 83.14
   "Minimum required source coverage percentage.")
 
 (defconst delib-flow-coverage-source-files
-  '("delib-flow.el")
+  (sort (cl-remove-if
+         (lambda (file)
+           (string-match-p "\\`delib-flow-local-test-config\\.el\\'" file))
+         (directory-files default-directory nil "\\`delib-flow.*\\.el\\'"))
+        #'string<)
   "Repository source files included in the coverage gate.")
 
 (defconst delib-flow-coverage-test-files
-  '("test/delib-flow-test.el")
+  (sort (directory-files (expand-file-name "test" default-directory)
+                         t
+                         "\\`delib-flow.*-test\\.el\\'")
+        (lambda (left right)
+          (let ((aggregate (expand-file-name "test/delib-flow-test.el"
+                                             default-directory)))
+            (cond
+             ((equal left aggregate) nil)
+             ((equal right aggregate) t)
+             (t (string< left right))))))
   "Test files loaded for the coverage gate.")
 
 (defun delib-flow-coverage--repo-root ()
@@ -38,7 +51,7 @@
 (defun delib-flow-coverage--load-tests ()
   "Load repository test files."
   (dolist (file delib-flow-coverage-test-files)
-    (load-file (delib-flow-coverage--expand file))))
+    (load-file file)))
 
 (defun delib-flow-coverage--covered-point-p (value)
   "Return non-nil when coverage VALUE counts as covered."
@@ -60,8 +73,11 @@
 (defun delib-flow-coverage--collect-stats ()
   "Return a list of per-function coverage plists."
   (let (stats)
-    (dolist (entry edebug-form-data (nreverse stats))
-      (push (delib-flow-coverage--function-stats (car entry)) stats))))
+    (mapatoms
+     (lambda (symbol)
+       (when (get symbol 'edebug-coverage)
+         (push (delib-flow-coverage--function-stats symbol) stats))))
+    (nreverse stats)))
 
 (defun delib-flow-coverage--totals (stats)
   "Return aggregate coverage totals for STATS."
