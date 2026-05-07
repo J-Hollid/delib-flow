@@ -12,6 +12,23 @@ normalized for repository use. The substantive workflow design remains the same.
 
 * Implementation status note
 
+- The earlier control-buffer redesign and drift-reduction roadmap is now
+  materially implemented in the repository.
+- The current runtime architecture is organized around shared internal
+  contracts rather than stage-by-stage command shells:
+  - stage descriptors own execution metadata used by the shared UI command
+    runner
+  - cockpit and filing-workspace buffers render through shared surface
+    lifecycle infrastructure
+  - filing-state queue mutation now shares rebuild helpers instead of repeated
+    plist surgery
+  - filing-preview and focused filing workspaces now use local section/card
+    descriptor assembly rather than repeated scaffold formatting
+  - module test suites now share one support layer for fixtures and common run
+    builders
+- The active design problem is no longer “how do we split the architecture?”
+  but “how do we harden and refine the operator experience without reopening
+  stable boundaries?”
 - Milestone 1 control-buffer foundation has now been implemented in the
   repository.
 - Milestone 2 now has seventeen executable stage implementations in the
@@ -90,6 +107,11 @@ normalized for repository use. The substantive workflow design remains the same.
   behavior.
 
 * Control-buffer redesign direction
+
+This section is now historical design context rather than an unimplemented
+roadmap. The current cockpit already reflects most of these directions. Keep
+using it as a design contract for future UX hardening, but do not treat it as
+an indicator that the repo is still waiting on a large structural redesign.
 
 The current control buffer is functionally rich, but it still asks the operator
 to parse too many equally weighted surfaces before taking the next step. The

@@ -16,6 +16,11 @@ passes where you want to:
 The guide focuses on the Milestone 15 workflow that now exists in code rather
 than on the implementation plan.
 
+The repository is now in stabilization mode. The shared test harness for
+module suites lives in [[file:../test/delib-flow-test-support.el][test/delib-flow-test-support.el]], while this guide
+focuses on operator-style manual verification and debug scenarios rather than
+on fixture ownership.
+
 * What The Debug Framework Gives You
 
 The current debug surface consists of:

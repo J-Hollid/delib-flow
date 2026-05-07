@@ -4,13 +4,23 @@ This document tracks the implementation plan for `delib-flow` separately from
 the product and workflow design in [[file:design.org][design.org]].
 
 It is intentionally execution-oriented. The design document defines what the
-package should do. This plan defines the current understanding of the work,
-open decisions that still require agreement, and the milestone sequence we
-intend to implement.
+package should do. This plan now serves primarily as a historical record of
+the implementation and migration sequence that brought the repository to its
+current architecture.
 
 * Planning status
 
-- Implementation is in progress.
+- The architecture roadmap described here is complete enough that the repo is
+  no longer in migration mode.
+- Shared runtime infrastructure now owns the main drift-prone paths:
+  - stage-command execution
+  - stage descriptor metadata
+  - cockpit and focused-workspace surface lifecycle
+  - filing queue/state rebuild logic
+  - render scaffold assembly for filing surfaces
+  - shared test-support ownership
+- Current work should be treated as stabilization and hardening, not as
+  another large structural split.
 - Slice A has been implemented: the run-state schema has been refactored to the
   agreed top-level domains and covered by baseline tests.
 - Slice B has been implemented: structured action objects, explicit refresh and
@@ -87,10 +97,9 @@ intend to implement.
 - The current codebase now includes a stable control-buffer foundation plus
   seventeen executable stage implementations with stage-history persistence and
   stage-dependent next actions.
-- A dedicated control-buffer redesign is now planned before additional
-  interaction complexity is added. The redesign focuses on cockpit readability,
-  operator decision speed, filing clarity, and alignment with established Emacs
-  special-buffer interaction patterns.
+- The dedicated control-buffer redesign that was once planned here is now
+  materially implemented in the current repo. What remains are targeted UX
+  refinements and edge-case hardening passes.
 - Control-buffer redesign phases 1 through 3 are now implemented:
   cockpit information hierarchy, section/action navigation, and shortlist-based
   selection surfaces for manual project and filing choice.
@@ -102,10 +111,15 @@ intend to implement.
   the cockpit now advertises itself as a special operational surface, uses a
   tighter special-buffer key foundation, and wires standard revert behavior to
   delib-flow refresh while preserving the existing editable review islands.
-- This plan should be kept in sync with changes in scope or implementation
-  order.
+- Keep this document as historical implementation context. Future status and
+  next-step notes should describe stabilization slices rather than reopening
+  the roadmap below as if it were still unstarted.
 
 * Control-buffer redesign roadmap
+
+This roadmap is now historical. The main phases it described have already been
+implemented in code. Keep it as rationale for why the current cockpit looks the
+way it does, not as an authoritative “what remains” tracker.
 
 This roadmap translates the updated design direction in
 [[file:design.org][design.org]] into a concrete implementation sequence. It should land before

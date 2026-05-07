@@ -3,10 +3,22 @@
 `delib-flow` is an Emacs package for running guided AI-assisted workflows from
 an Org heading at point.
 
-This repository is being built incrementally from a design-first process.
+This repository was built incrementally from a design-first process and is now
+in a stabilization and hardening phase.
 
 * Current status
 
+- Drift-resistant runtime infrastructure is now in place:
+  - stage execution flows through shared command-runner infrastructure
+  - stage descriptors now own command runner, sync, and rerender metadata
+  - cockpit and filing-workspace buffers now share a surface lifecycle shell
+  - filing queue/state rebuild paths now share internal helpers
+  - filing preview and focused workspace rendering now assemble from local
+    section/card descriptors instead of repeated string scaffolding
+  - shared test fixtures and common run/edit helpers now live in
+    [[file:test/delib-flow-test-support.el][test/delib-flow-test-support.el]]
+  - descriptor validation now fails fast when stage or surface metadata is
+    incomplete or invalid
 - Milestone 1 control-buffer foundation implemented
 - One active run at a time
 - Frozen source snapshot captured from heading at point
@@ -201,15 +213,6 @@ This repository is being built incrementally from a design-first process.
 `delib-flow` currently works as a guided control buffer around a deterministic
 or adapter-backed workflow run started from an Org heading.
 
-A dedicated control-buffer redesign is now planned to improve cockpit
-readability, section-local action flow, selection UX, filing clarity, and
-mobile terminal ergonomics. The
-target interaction model is described in
-[[file:docs/design.org][docs/design.org]] under =Control-buffer redesign direction=. The phased
-implementation sequence is tracked in
-[[file:docs/implementation-plan.org][docs/implementation-plan.org]] under
-=Control-buffer redesign roadmap=.
-
 At a high level, the package does this:
 
 - capture a frozen snapshot of the heading at point
@@ -236,6 +239,12 @@ directly. `Current result`,
 refresh and action execution. `Details` stays folded by default and holds
 verbose material such as the source snapshot, accepted working context, latest
 prompt/input, latest raw output, grouped stage history, and audit status.
+
+Internally, stage actions, cockpit rerendering, focused filing surfaces, and
+shared filing-state mutation now run through common infrastructure rather than
+stage-specific open-coded shells. The design and implementation documents now
+describe those shared contracts as the current system, not as future roadmap
+work.
 
 Typical workflow:
 
