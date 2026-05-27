@@ -1,0 +1,57 @@
+#+title: delib-flow phase-travel overview
+
+This overview reframes the run as guided travel through user-facing
+phases while keeping the underlying stage engine and audit trail
+unchanged.
+
+See also:
+
+- [[file:ui-scenario-contracts.org][ui-scenario-contracts.org]]
+- [[file:ux-wireframes.org][ux-wireframes.org]]
+- [[file:design.org][design.org]]
+
+#+begin_src plantuml :file stage-flow-overview.png
+@startuml
+title delib-flow phase travel
+
+[*] --> "Source review"
+"Source review" --> "Project context"
+"Project context" --> "Reference context"
+"Reference context" --> "Artifact generation"
+"Artifact generation" --> "Queue review"
+"Queue review" --> "Selected item"
+"Selected item" --> "Filing"
+"Filing" --> "Done"
+
+"Project context" --> "Cloud reroute" : cloud detour
+"Reference context" --> "Cloud reroute" : cloud detour
+"Artifact generation" --> "Cloud reroute" : cloud detour
+"Cloud reroute" --> "Project context" : return
+"Cloud reroute" --> "Reference context" : return
+"Cloud reroute" --> "Artifact generation" : return
+
+"Filing" --> "Conflict resolution" : target conflict
+"Conflict resolution" --> "Selected item" : return
+"Conflict resolution" --> "Filing" : retry
+
+"Selected item" --> "Queue review" : discard item
+"Selected item" --> "Artifact generation" : regenerate item
+"Selected item" --> "Reference context" : needs more support
+"Selected item" --> "Project context" : wrong project context
+"Selected item" --> "Selected item" : wrong filing target
+
+note right of "Cloud reroute"
+Travel state remembers:
+- origin phase
+- origin action/stage
+- reroute reason
+- return surface/anchor
+end note
+
+note right of "Selected item"
+The filing workspace is the primary
+authoring surface once an item is selected.
+end note
+
+@enduml
+#+end_src

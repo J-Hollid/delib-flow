@@ -6,6 +6,56 @@
 (require 'delib-flow)
 (require 'delib-flow-test-support)
 
+(ert-deftest delib-flow-filing-selection-guidance-separates-advisory-items-from-fully-ready-items ()
+  (let* ((ready-item (list :kind 'next-action
+                           :text "Draft launch checklist"
+                           :warnings nil))
+         (warning-item
+          (list :kind 'reference-note
+                :text "Create general PKM note for End-user focus"
+                :warnings
+                (list (delib-flow--make-artifact-warning
+                       'reference-note-candidate-identity
+                       "Still source-local."
+                       'advisory))))
+         (blocked-item
+          (list :kind 'next-action
+                :text "Check with stakeholders"
+                :warnings
+                (list (delib-flow--make-artifact-warning
+                       'exploratory-next-action
+                       "Needs a deliverable."
+                       'blocking))))
+         (guidance (delib-flow--filing-selection-guidance-lines
+                    (list ready-item warning-item blocked-item))))
+    (should (member "Ready selections: 1" guidance))
+    (should (member "Advisory-only selections: 2" guidance))
+    (should (member "Blocked selections: 3" guidance))))
+
+(ert-deftest delib-flow-effective-project-context-uses-approved-project-package ()
+  (let* ((run (plist-put
+               (delib-flow--initialize-run (list :title "Example"))
+               :filing
+               (list :draft-items nil
+                     :approved-items
+                     (list (list :kind 'project
+                                 :title "User empathy dashboard work"))
+                     :rejected-items nil
+                     :preview-text nil
+                     :selection-blocked-item nil
+                     :selection-blocking-warnings nil
+                     :selection-blocked-selection nil
+                     :selection-blocked-notes nil
+                     :conflicts nil
+                     :target-locations nil))))
+    (should (eq 'approved-project-package
+                (delib-flow--effective-project-context-kind run)))
+    (should (equal "User empathy dashboard work"
+                   (delib-flow--effective-project-title run)))
+    (should (string-match-p
+             "approved project package `User empathy dashboard work` remains available"
+             (delib-flow--project-context-status-line run)))))
+
 (ert-deftest delib-flow-select-approved-filing-actions-updates-filing-state ()
   (delib-flow-test--with-temp-project-file
       "* Alpha Project\n"
@@ -119,6 +169,107 @@
         (should (equal 2 (length remaining)))
         (should (string-match-p "Alpha Project kickoff"
                                 (plist-get (car remaining) :text)))))))
+
+(ert-deftest delib-flow-reject-draft-filing-artifact-routes-wrong-target-back-to-selected-item ()
+  (delib-flow-test--with-temp-zk-root
+      '(("alpha.org" . "#+title: Alpha Project Notes\nKickoff agenda and blockers.\n"))
+    (delib-flow-test--with-temp-project-file
+        "* Alpha Project\n"
+      (cl-letf (((symbol-function 'delib-flow--choose-rejection-reason)
+                 (lambda () 'wrong-filing-target)))
+        (let* ((run (delib-flow--initialize-run
+                     (list :title "Alpha Project kickoff"
+                           :content "* Alpha Project kickoff\nBody line\n")))
+               (inspected (delib-flow-test--accept-inspect
+                           (delib-flow--run-stage-locally run 'inspect-source)))
+               (matched (delib-flow-test--accept-match
+                         (delib-flow--run-stage-locally inspected 'match-project)))
+               (drafted (delib-flow--run-stage-locally matched 'suggest-reference-notes))
+               (integrated (delib-flow--run-stage-locally drafted 'integrate-into-source))
+               (selected (delib-flow-test--set-filing-selection integrated "1"))
+               (prepared (delib-flow--prepare-reject-draft-run selected))
+               (rejected-run
+                (delib-flow--apply-rejection-reason-routing
+                 (delib-flow--run-stage-locally
+                  prepared
+                  'reject-draft-filing-artifact)))
+               (travel (delib-flow--run-travel rejected-run)))
+          (should (eq (plist-get travel :last-rejection-reason)
+                      'wrong-filing-target))
+          (should (equal (plist-get travel :return-anchor)
+                         "Selected item"))
+          (should (eq (plist-get travel :return-surface)
+                      'filing-workspace))
+          (should (plist-get (delib-flow--run-ui rejected-run)
+                             :filing-workspace-open))
+          (should (string-match-p "filing target is wrong"
+                                  (plist-get travel :reroute-reason)))
+          (should (string-match-p
+                   "wrong filing target"
+                   (plist-get (delib-flow--run-session rejected-run)
+                              :current-decision))))))))
+
+(ert-deftest delib-flow-prepare-reject-draft-run-stores-route-metadata-for-all-reasons ()
+  (let* ((run (delib-flow--seed-filing-selection-block
+               (delib-flow--set-artifact-family-state
+                (plist-put
+                 (delib-flow--initialize-run
+                  (list :title "Example"
+                        :content "* Example\nBody line\n"))
+                 :filing
+                 (list :draft-items (list (list :kind 'next-action
+                                                :text "Ship launch checklist"))
+                       :approved-items nil
+                       :rejected-items nil
+                       :preview-text nil
+                       :selection-blocked-item nil
+                       :selection-blocking-warnings nil
+                       :selection-blocked-selection nil
+                       :selection-blocked-notes nil
+                       :conflicts nil
+                       :target-locations nil))
+                'actions
+                (list :candidates (list (list :kind 'next-action
+                                              :text "Ship launch checklist"))
+                      :selected-candidate-id
+                      (delib-flow--artifact-candidate-id
+                       (list :kind 'next-action
+                             :text "Ship launch checklist"))
+                      :selected-draft (list :kind 'next-action
+                                            :text "Ship launch checklist")))))
+         (selected (delib-flow-test--set-filing-selection run "1")))
+    (dolist (spec '((discard-item "Progress" cockpit nil
+                      "discard"
+                      "Return to the queue hub")
+                    (regenerate-item "Recommended" cockpit nil
+                      "regeneration"
+                      "artifact-generation pass")
+                    (needs-more-support "Selected item" filing-workspace t
+                      "needs more support"
+                      "gather stronger evidence")
+                    (wrong-project-context "Now" cockpit nil
+                      "project context is wrong"
+                      "project-context drift")
+                    (wrong-filing-target "Selected item" filing-workspace t
+                      "filing target is wrong"
+                      "wrong filing target")))
+      (pcase-let ((`(,reason ,anchor ,surface ,workspace-open ,phrase ,decision-fragment) spec))
+        (cl-letf (((symbol-function 'delib-flow--choose-rejection-reason)
+                   (lambda () reason)))
+          (let* ((prepared (delib-flow--prepare-reject-draft-run selected))
+                 (routed (delib-flow--apply-rejection-reason-routing prepared))
+                 (travel (delib-flow--run-travel routed)))
+            (should (eq (plist-get travel :last-rejection-reason) reason))
+            (should (equal (plist-get travel :return-anchor) anchor))
+            (should (eq (plist-get travel :return-surface) surface))
+            (should (eq (plist-get (delib-flow--run-ui routed) :filing-workspace-open)
+                        workspace-open))
+            (should (string-match-p phrase (plist-get travel :reroute-reason)))
+            (should (plist-get travel :selected-item-target))
+            (should (string-match-p
+                     decision-fragment
+                     (plist-get (delib-flow--run-session routed)
+                                :current-decision)))))))))
 
 (ert-deftest delib-flow-select-approved-filing-actions-can-select-non_head-artifact ()
   (delib-flow-test--with-temp-zk-root
@@ -636,7 +787,7 @@
           (with-current-buffer buffer
             (goto-char (point-min))
             (should (search-forward "*** Filing actions" nil t))
-            (should (search-forward "- Select Approved Filing Actions [available]" nil t)))
+            (should (search-forward "- Select Approved Filing Actions [blocked]" nil t)))
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
@@ -812,7 +963,7 @@
           (with-current-buffer buffer
             (goto-char (point-min))
             (search-forward "*** Filing actions")
-            (search-forward "- Select Approved Filing Actions [available]")
+            (search-forward "- Select Approved Filing Actions [blocked]")
             (goto-char (line-beginning-position))
             (let ((action (get-text-property (point) 'delib-flow-action)))
               (should action)
@@ -987,6 +1138,41 @@
           (should (search-forward "Review the planned targets, file the approved artifact, or approve another ready item (1)." nil t))
           (goto-char (point-min))
           (should (search-forward "Run `Approve Another Filing Artifact` to approve another ready queue item, or run `File Approved Outputs` to stage the approved item now." nil t)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest delib-flow-filing-selection-guidance-keeps-project-approval-explicit-after-package-approval ()
+  (let* ((project (list :kind 'project
+                        :title "Atlas"
+                        :text "Atlas"
+                        :state 'active
+                        :child-items (list (list :kind 'next-action
+                                                 :text "Draft launch checklist"))
+                        :warnings nil))
+         (extra (list :kind 'next-action
+                      :text "Draft rollout agenda"
+                      :warnings nil))
+         (run (plist-put
+               (delib-flow--initialize-run
+                (list :title "Source"
+                      :content "* Source\nBody\n"))
+               :filing
+               (list :draft-items (list extra)
+                     :approved-items (list project)
+                     :rejected-items nil
+                     :preview-text nil
+                     :selection-blocked-item nil
+                     :selection-blocking-warnings nil
+                     :selection-blocked-selection nil
+                     :selection-blocked-notes nil
+                     :conflicts nil
+                     :target-locations nil)))
+         (buffer (delib-flow--render-control-buffer run)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (let ((text (buffer-string)))
+            (should (string-match-p "Approve Another Project Item" text))
+            (should (string-match-p "Reference notes can .*drafted before filing this project package" text))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
@@ -1388,6 +1574,25 @@
     (should (string-match-p "2 note candidates ready" other))
     (should (string-match-p "Press `s` to choose a different note" other))
     (should (string-match-p "Advisor briefs as reusable inte" other))))
+
+(ert-deftest delib-flow-project-package-merge-children-replaces-placeholder-first-item ()
+  (let* ((placeholder (list :kind 'next-action
+                            :text "No concrete child item could be derived from this source yet"))
+         (project (list :kind 'project
+                        :title "AI Kickoff"
+                        :text "AI Kickoff"
+                        :state 'active
+                        :first-item placeholder
+                        :child-items (list placeholder)))
+         (child (list :kind 'next-action
+                      :text "Draft metadata documentation guidelines for AI-related data"
+                      :warnings nil))
+         (merged (delib-flow--project-package-merged-project project (list child)))
+         (children (delib-flow--project-child-items merged)))
+    (should (equal "Draft metadata documentation guidelines for AI-related data"
+                   (plist-get (delib-flow--project-first-item merged) :text)))
+    (should-not (member "No concrete child item could be derived from this source yet"
+                        (mapcar (lambda (item) (plist-get item :text)) children)))))
 
 (provide 'delib-flow-filing-test)
 

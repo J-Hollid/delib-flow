@@ -243,6 +243,8 @@ Skip the test when the local config file is unavailable."
               (lookup-key delib-flow-control-mode-map (kbd "N"))))
   (should (eq #'delib-flow-control-debug-walkthrough-restart-target
               (lookup-key delib-flow-control-mode-map (kbd "R"))))
+  (should (eq #'delib-flow-control-toggle-debug-visibility
+              (lookup-key delib-flow-control-mode-map (kbd "Y"))))
   (should (eq #'delib-flow-control-dispatch-action
               (lookup-key delib-flow-control-mode-map (kbd "RET"))))
   (should (eq #'delib-flow-control-next-action
@@ -313,6 +315,14 @@ Skip the test when the local config file is unavailable."
     (should (member "Peek Staged Content" labels))
     (should (member "Enable Focus Mode" labels))))
 
+(ert-deftest delib-flow-context-menu-builtins-include-debug-visibility-toggle ()
+  (let* ((run (delib-flow--initialize-run (list :title "Example")))
+         (labels (mapcar (lambda (entry) (plist-get entry :label))
+                         (let ((delib-flow--active-run run))
+                           (delib-flow--context-menu-builtins nil)))))
+    (should (member "Show Debug Actions" labels))
+    (should-not (member "Hide Debug Actions" labels))))
+
 (ert-deftest delib-flow-toggle-focus-mode-preserves-active-loop-visibility ()
   (let* ((run (delib-flow--initialize-run (list :title "Example")))
          (buffer (delib-flow--render-control-buffer run)))
@@ -326,7 +336,7 @@ Skip the test when the local config file is unavailable."
           (goto-char (point-min))
           (should (search-forward "** Now" nil t))
           (goto-char (point-min))
-          (should (search-forward "** Next actions" nil t)))
+          (should (search-forward "** Recommended" nil t)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))
       (setq delib-flow--active-run nil))))
@@ -553,7 +563,7 @@ Skip the test when the local config file is unavailable."
             (setq-local delib-flow--active-run-buffer t))
           (delib-flow--rerender-active-run-buffer)
           (with-current-buffer (get-buffer delib-flow-control-buffer-name)
-            (let ((overlays (overlays-at (delib-flow--heading-position "Loop update"))))
+            (let ((overlays (overlays-at (delib-flow--heading-position "Current result"))))
               (should (seq-some (lambda (overlay)
                                   (overlay-get overlay 'delib-flow-changed-heading))
                                 overlays)))))
@@ -682,7 +692,7 @@ Skip the test when the local config file is unavailable."
             (setq-local delib-flow--active-run-buffer t))
           (delib-flow-refresh-buffer)
           (with-current-buffer (get-buffer delib-flow-control-buffer-name)
-            (should (equal "Filing preview"
+            (should (equal "Progress"
                            (delib-flow--current-section-at-point)))))
       (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
         (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
@@ -768,12 +778,12 @@ Skip the test when the local config file is unavailable."
         (with-current-buffer buffer
           (let ((inhibit-read-only t))
             (goto-char (point-min))
-            (search-forward "#+begin_delib-edit cloud-review")
+            (search-forward "#+begin_delib-edit notes")
             (forward-line 1)
             (insert "Operator note"))
           (let* ((updated-run (delib-flow--sync-editable-blocks run buffer))
                  (block (delib-flow--editable-block updated-run
-                                                    'cloud-package-review)))
+                                                    'operator-notes)))
             (should (equal "Operator note" (plist-get block :current-text)))
             (should (equal 'edited (plist-get block :status)))))
       (when (buffer-live-p buffer)
@@ -1006,7 +1016,7 @@ Skip the test when the local config file is unavailable."
           (with-current-buffer buffer
             (should (equal "Now" (delib-flow--current-section-at-point)))
             (delib-flow-next-section)
-            (should (equal "Current result" (delib-flow--current-section-at-point)))
+            (should (equal "Recommended" (delib-flow--current-section-at-point)))
             (let ((window (get-buffer-window buffer t)))
               (should window)
               (should (= (window-start window)
@@ -1277,6 +1287,38 @@ Skip the test when the local config file is unavailable."
       (should (equal
                "I need to figure out how exercises are actually stored on the website"
                (plist-get raw-output :operator-intent))))))
+
+(ert-deftest delib-flow-local-adapter-extract-actions-retry-surfaces-retry-context ()
+  (delib-flow-test--with-local-test-config
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "End-user note"
+                       :content (string-join
+                                 '("* End-user note"
+                                   "Put self into end users' shoes for dashboard building"
+                                   "Gather success cases with client satisfaction to showcase")
+                                 "\n"))))
+           (inspected (delib-flow-test--accept-inspect
+                       (delib-flow--run-stage-locally run 'inspect-source)))
+           (matched (delib-flow-test--accept-match
+                     (delib-flow--run-stage-locally inspected 'match-project)))
+           once
+           retried
+           entry
+           raw
+           normalized)
+      (cl-letf (((symbol-function 'delib-flow-local-test--ollama-json)
+                 (lambda (_prompt _stage)
+                   ["Put self into end users' shoes for dashboard building"
+                    "Gather success cases with client satisfaction to showcase"])))
+        (setq once (delib-flow--run-stage-locally matched 'extract-actions))
+        (setq retried (delib-flow--run-stage-locally once 'extract-actions)))
+      (setq entry (car (last (plist-get (delib-flow--run-stage-history retried) :entries))))
+      (setq raw (plist-get entry :raw-output))
+      (setq normalized (plist-get entry :normalized-output))
+      (should (= 1 (plist-get raw :previous-attempt-count)))
+      (should (plist-get raw :retry-context-present-p))
+      (should (string-match-p "Prior attempts: 1" normalized))
+      (should (string-match-p "Prior retry context available: yes" normalized)))))
 
 (ert-deftest delib-flow-local-test-canonicalize-org-file-links-strips-file-scheme-and-dedupes ()
   (delib-flow-test--with-local-test-config
@@ -1684,6 +1726,32 @@ Skip the test when the local config file is unavailable."
       (should (equal "Create project support note from Vendor support handoff"
                      (plist-get (nth 1 items) :text))))))
 
+(ert-deftest delib-flow-local-test-reference-note-items-rewrite-title-parroting-newsletter-focus ()
+  (delib-flow-test--with-local-test-config
+    (let* ((package
+            (list :source
+                  (list :title "Data Work Dispatch: Why metadata programs fail to become operational"
+                        :content "* Data Work Dispatch\nBody\n")
+                  :working-context
+                  (list :project-match nil)))
+           (fallback-items nil)
+           (parsed
+            [((title_or_focus . "Data Work Dispatch: Why metadata programs fail to become operational")
+              (note_type . "general-pkm"))])
+           items)
+      (cl-letf (((symbol-function 'delib-flow--suggest-reference-notes-result)
+                 (lambda (_package)
+                   (list :reference-notes fallback-items)))
+                ((symbol-function 'delib-flow--source-reference-note-focus-descriptors)
+                 (lambda (_package)
+                   (list
+                    (delib-flow--reference-note-focus-descriptor
+                     "Metadata maturity becomes real when it changes one handoff, one exception path, or one review ritual")))))
+        (setq items (delib-flow-local-test--reference-note-items parsed package)))
+      (should (equal
+               "Create general PKM note for Metadata maturity becomes real when it changes one handoff, one exception path, or one review ritual"
+               (plist-get (car items) :text))))))
+
 (ert-deftest delib-flow-local-test-reference-note-items-drop-transactional-general-pkm-notes ()
   (delib-flow-test--with-local-test-config
     (let* ((package
@@ -1747,19 +1815,15 @@ Skip the test when the local config file is unavailable."
          (items (plist-get result :reference-notes))
          (titles (mapcar #'delib-flow--reference-note-title items)))
     (should-not (member "Your Consumption Diet Is Your Moat" titles))
-    (should (member "Building personal AI advisors" titles))
-    (should (member "Laying the foundation: the Master Prompt, PARA adapted for the AI era, and a capture system"
-                    titles))
+    (should (equal 1 (length items)))
     (should
      (equal
-      "Captures `Building personal AI advisors` as a repeatable pattern that can inform later tool, workflow, or agent design."
-      (plist-get
-       (seq-find
-        (lambda (item)
-          (equal "Building personal AI advisors"
-                 (delib-flow--reference-note-title item)))
-        items)
-       :reuse-claim)))))
+      '("Laying the foundation: the Master Prompt, PARA adapted for the AI era, and a capture system")
+      titles))
+    (should
+     (string-match-p
+      "reusable"
+      (plist-get (car items) :reuse-claim)))))
 
 (ert-deftest delib-flow-suggest-reference-notes-result-promotes-overlapping-final-items ()
   (let* ((strong (list :kind 'reference-note
@@ -1792,9 +1856,9 @@ Skip the test when the local config file is unavailable."
       (let* ((result (delib-flow--suggest-reference-notes-result package))
              (items (plist-get result :reference-notes))
              (titles (mapcar #'delib-flow--reference-note-title items)))
-        (should (equal 2 (length items)))
-        (should (member "Building personal AI advisors for team workflows" titles))
-        (should (member "Laying the foundation: the Master Prompt" titles))
+        (should (equal 1 (length items)))
+        (should (equal '("Building personal AI advisors for team workflows")
+                       titles))
         (should-not (member "Building personal AI advisors" titles))))))
 
 (ert-deftest delib-flow-local-test-reference-note-items-merge-deterministic-fallback-seeds ()
@@ -1918,6 +1982,86 @@ Skip the test when the local config file is unavailable."
                (regexp-quote
                 "- Create general PKM note for Building personal AI advisors [general-pkm]")
                prompt)))))
+
+(ert-deftest delib-flow-local-test-reference-note-prompt-includes-structural-focus-hints-for-newsletters ()
+  (delib-flow-test--with-local-test-config
+    (let* ((package
+            (list :source
+                  (list :title "Why metadata programs fail to become operational"
+                        :content "* Newsletter\nBody\n")
+                  :working-context (list :project-match nil
+                                         :filtered-context nil
+                                         :retained-context "")))
+           prompt)
+      (cl-letf (((symbol-function 'delib-flow--source-reference-note-focus-descriptors)
+                 (lambda (_package)
+                   (list
+                    (delib-flow--reference-note-focus-descriptor
+                     "Metadata maturity becomes real when it changes one handoff, one exception path, or one review ritual")
+                    (delib-flow--reference-note-focus-descriptor
+                     "One operational loop where missing metadata already hurts"))))
+                ((symbol-function 'delib-flow--suggest-reference-notes-result)
+                 (lambda (_package) (list :reference-notes nil))))
+        (setq prompt (delib-flow-local-test--reference-note-prompt package)))
+      (should (string-match-p "Structural focus hints:" prompt))
+      (should (string-match-p
+               "Metadata maturity becomes real when it changes one handoff, one exception path, or one review ritual"
+               prompt))
+      (should (string-match-p
+               "do not return the newsletter subject as the note focus"
+               (downcase prompt))))))
+
+(ert-deftest delib-flow-local-test-extract-actions-rewrites-title-parroting-newsletter-action ()
+  (delib-flow-test--with-local-test-config
+    (let* ((package
+            (list :source
+                  (list :title "Customer Ops Digest: Escalations that move versus escalations that drift"
+                        :content "* Escalations digest\nBody\n")
+                  :working-context nil
+                  :ui (list :editable-blocks nil)))
+           (descriptor (delib-flow--stage-descriptor 'extract-actions))
+           raw)
+      (cl-letf (((symbol-function 'delib-flow-local-test--ollama-json)
+                 (lambda (_prompt _stage)
+                   [((items . ["Investigate and reproduce Customer Ops Digest: Escalations that move versus escalations that drift"])
+                     (reason . "LLM output"))]))
+                ((symbol-function 'delib-flow--source-reference-note-focus-descriptors)
+                 (lambda (_package)
+                   (list
+                    (delib-flow--reference-note-focus-descriptor
+                     "One lightweight packet that can be forwarded without explanation")))))
+        (setq raw (delib-flow-local-test--run-ollama-stage descriptor package)))
+      (should (equal 1 (plist-get raw :candidate-count)))
+      (should (equal
+               "Draft one lightweight packet that can be forwarded without explanation"
+               (plist-get (car (plist-get raw :actions)) :text))))))
+
+(ert-deftest delib-flow-local-test-extract-actions-fallback-rewrites-title-parroting-newsletter-action ()
+  (delib-flow-test--with-local-test-config
+    (let* ((package
+            (list :source
+                  (list :title "Customer Ops Digest: Escalations that move versus escalations that drift"
+                        :content "* Escalations digest\nBody\n")
+                  :working-context nil
+                  :ui (list :editable-blocks nil)))
+           (descriptor (delib-flow--stage-descriptor 'extract-actions))
+           raw)
+      (cl-letf (((symbol-function 'delib-flow-local-test--ollama-json)
+                 (lambda (_prompt _stage)
+                   (error "parse failure")))
+                ((symbol-function 'delib-flow--extract-actions-result)
+                 (lambda (_package)
+                   (list :actions
+                         (list (list :text "Investigate and reproduce Customer Ops Digest: Escalations that move versus escalations that drift")))))
+                ((symbol-function 'delib-flow--source-reference-note-focus-descriptors)
+                 (lambda (_package)
+                   (list
+                    (delib-flow--reference-note-focus-descriptor
+                     "One lightweight packet that can be forwarded without explanation")))))
+        (setq raw (delib-flow-local-test--run-ollama-stage descriptor package)))
+      (should (equal
+               "Draft one lightweight packet that can be forwarded without explanation"
+               (plist-get (car (plist-get raw :actions)) :text))))))
 
 (ert-deftest delib-flow-local-test-select-approved-filing-actions-stays-operator-owned ()
   (delib-flow-test--with-local-test-config
@@ -2142,7 +2286,8 @@ Skip the test when the local config file is unavailable."
   (delib-flow-test--with-local-test-config
     (delib-flow-test--with-temp-project-file
         "* Active\n** Project Atlas :example:\n"
-      (let* ((run (delib-flow--initialize-run
+      (let* ((delib-flow-local-stage-adapter #'delib-flow--default-local-stage-adapter)
+             (run (delib-flow--initialize-run
                    (list :title "Project Atlas"
                          :content "* Project Atlas\nBody\n")))
              (inspected (delib-flow-test--accept-inspect
@@ -2266,7 +2411,8 @@ Skip the test when the local config file is unavailable."
   (delib-flow-test--with-local-test-config
     (delib-flow-test--with-temp-project-file
         "* Alpha Project\n"
-      (let* ((run (delib-flow--initialize-run
+      (let* ((delib-flow-local-stage-adapter #'delib-flow--default-local-stage-adapter)
+             (run (delib-flow--initialize-run
                    (list :title "[2026-02-10 Tue 20:40] Presentation or article on focusing on the end user"
                          :content "* [2026-02-10 Tue 20:40] Presentation or article on focusing on the end user\n+ Gather a number of success cases with client satisfaction to showcase\n")))
              (inspected (delib-flow-test--accept-inspect
@@ -2284,6 +2430,20 @@ Skip the test when the local config file is unavailable."
             (should (equal "Focusing on the end user" (plist-get project :title)))
             (should (equal "Gather a number of success cases with client satisfaction to showcase"
                            (plist-get (plist-get project :first-item) :text)))))))))
+
+(ert-deftest delib-flow-local-test-proposal-placeholder-first-item-falls-back-to-meeting-summary ()
+  (delib-flow-test--with-local-test-config
+      (let* ((package
+            (list :source
+                  (list :title "[2026-04-10 Fri 10:34] AI Kickoff Testrun"
+                        :content "* [2026-04-10 Fri 10:34] AI Kickoff Testrun\n- Session objectives\n  - Where we are now\n")
+                  :working-context
+                  (list :inspect-output (list :source-type 'meeting-note))))
+           (parsed '((project . ((title . "AI Kickoff")))
+                     (first_item_text . "No concrete child item could be derived from this source yet")))
+           (raw (delib-flow-local-test--proposal-raw-output package parsed)))
+      (should (equal "Draft follow-up summary for AI Kickoff Testrun"
+                     (plist-get (plist-get raw :first-item) :text))))))
 
 (ert-deftest delib-flow-local-test-match-raw-output-rejects-generic-title-term-match ()
   (delib-flow-test--with-local-test-config
@@ -2661,25 +2821,27 @@ Skip the test when the local config file is unavailable."
         '(("beta-brief.org" . "#+title: Beta brief\nNeed to reconcile blockers.\n"))
       (delib-flow-test--with-temp-project-file
           "* Beta Project\n[[file:beta-brief.org][Beta brief]]\n"
-        (let* ((run (delib-flow--initialize-run
-                     (list :title "Open questions from note review"
-                           :content "* Open questions from note review\nNeed to reconcile blockers.\n[[file:beta-brief.org][Beta brief]]\n")))
-               (inspected (delib-flow-test--accept-inspect
-                           (delib-flow--run-stage-locally run 'inspect-source)))
-               (matched (delib-flow-test--accept-match
-                         (delib-flow--run-stage-locally inspected 'match-project)))
-               (package (delib-flow--stage-input-package matched
-                                                         'discover-reference-material))
-               (prompt (delib-flow-local-test--discover-prompt package)))
-          (should (string-match-p "Use only exact titles from the provided candidate list" prompt))
-          (should (string-match-p "Do not return the source title, project title" prompt))
-          (should (string-match-p "Do not return candidate objects, note metadata objects, markdown fences, or explanatory prose" prompt))
-          (should (string-match-p "Invalid example: \\[{" prompt))
-          (should (string-match-p "If nothing is relevant, return an empty `candidate_titles` list" prompt))
-          (should (string-match-p "Do not reproduce source summary fields, UI fields, cloud fields, or package metadata" prompt))
-          (should (string-match-p "\"matched_project_title\"" prompt))
-          (should-not (string-match-p "editable-blocks" prompt))
-          (should-not (string-match-p "cloud-routing-review" prompt)))))))
+        (let ((delib-flow-local-stage-adapter
+               #'delib-flow--default-local-stage-adapter))
+          (let* ((run (delib-flow--initialize-run
+                       (list :title "Open questions from note review"
+                             :content "* Open questions from note review\nNeed to reconcile blockers.\n[[file:beta-brief.org][Beta brief]]\n")))
+                 (inspected (delib-flow-test--accept-inspect
+                             (delib-flow--run-stage-locally run 'inspect-source)))
+                 (matched (delib-flow-test--accept-match
+                           (delib-flow--run-stage-locally inspected 'match-project)))
+                 (package (delib-flow--stage-input-package matched
+                                                           'discover-reference-material))
+                 (prompt (delib-flow-local-test--discover-prompt package)))
+            (should (string-match-p "Use only exact titles from the provided candidate list" prompt))
+            (should (string-match-p "Do not return the source title, project title" prompt))
+            (should (string-match-p "Do not return candidate objects, note metadata objects, markdown fences, or explanatory prose" prompt))
+            (should (string-match-p "Invalid example: \\[{" prompt))
+            (should (string-match-p "If nothing is relevant, return an empty `candidate_titles` list" prompt))
+            (should (string-match-p "Do not reproduce source summary fields, UI fields, cloud fields, or package metadata" prompt))
+            (should (string-match-p "\"matched_project_title\"" prompt))
+            (should-not (string-match-p "editable-blocks" prompt))
+            (should-not (string-match-p "cloud-routing-review" prompt))))))))
 
 (ert-deftest delib-flow-local-test-discover-raw-output-recovers-array-object-titles ()
   (delib-flow-test--with-local-test-config
@@ -2737,26 +2899,28 @@ Skip the test when the local config file is unavailable."
           ("gamma.org" . "#+title: Alpha Constraints\nProject constraint detail.\n"))
       (delib-flow-test--with-temp-project-file
           "* Alpha Project\n"
-        (let* ((run (delib-flow--initialize-run
-                     (list :title "Alpha Project kickoff"
-                           :content "* Alpha Project kickoff\nAgenda\n")))
-               (inspected (delib-flow-test--accept-inspect
-                           (delib-flow--run-stage-locally run 'inspect-source)))
-               (matched (delib-flow-test--accept-match
-                         (delib-flow--run-stage-locally inspected 'match-project)))
-               (package (delib-flow--stage-input-package matched
-                                                         'discover-reference-material))
-               (base (delib-flow--discover-reference-material-result package))
-               (base-candidates (plist-get base :candidates))
-               (parsed '((candidate_titles "Alpha Project kickoff")
-                         (reason . "Using the source title instead of a candidate title.")))
-               (raw (delib-flow-local-test--discover-raw-output package parsed)))
-          (should (> (length base-candidates) 1))
-          (should (equal 1 (plist-get raw :candidate-count)))
-          (should (equal (plist-get (car base-candidates) :title)
-                         (plist-get (car (plist-get raw :candidates)) :title)))
-          (should (string-match-p "did not name valid candidate titles"
-                                  (plist-get raw :reason))))))))
+        (let ((delib-flow-local-stage-adapter
+               #'delib-flow--default-local-stage-adapter))
+          (let* ((run (delib-flow--initialize-run
+                       (list :title "Alpha Project kickoff"
+                             :content "* Alpha Project kickoff\nAgenda\n")))
+                 (inspected (delib-flow-test--accept-inspect
+                             (delib-flow--run-stage-locally run 'inspect-source)))
+                 (matched (delib-flow-test--accept-match
+                           (delib-flow--run-stage-locally inspected 'match-project)))
+                 (package (delib-flow--stage-input-package matched
+                                                           'discover-reference-material))
+                 (base (delib-flow--discover-reference-material-result package))
+                 (base-candidates (plist-get base :candidates))
+                 (parsed '((candidate_titles "Alpha Project kickoff")
+                           (reason . "Using the source title instead of a candidate title.")))
+                 (raw (delib-flow-local-test--discover-raw-output package parsed)))
+            (should (> (length base-candidates) 1))
+            (should (equal 1 (plist-get raw :candidate-count)))
+            (should (equal (plist-get (car base-candidates) :title)
+                           (plist-get (car (plist-get raw :candidates)) :title)))
+            (should (string-match-p "did not name valid candidate titles"
+                                    (plist-get raw :reason)))))))))
 
 (ert-deftest delib-flow-local-test-discover-salvaged-parsed-recovers-titles-from-raw-text ()
   (delib-flow-test--with-local-test-config
@@ -6353,7 +6517,7 @@ Skip the test when the local config file is unavailable."
              (location (car (plist-get (plist-get updated-run :filing)
                                        :target-locations))))
         (should (string-match-p
-                 "\\* Working draft\nAtlas draft body\\."
+                 "\\* Working draft\nAtlas draft body"
                  (delib-flow-test--file-buffer-string
                   (plist-get location :target))))))))
 
@@ -6601,8 +6765,8 @@ Skip the test when the local config file is unavailable."
                  :note-type 'general-pkm)
            package)))
     (should (string-match-p "- Durable claim: The newsletter highlights building personal AI advisors" content))
-    (should (string-match-p "- Why it matters: The newsletter highlights building personal AI advisors" content))
-    (should (string-match-p "- Reuse angle: Reuse this when related notes touch your consumption diet is your moat" content))
+    (should (string-match-p "- Why it matters: Use this to keep related notes, workflows, or decisions aligned without restating the source each time" content))
+    (should (string-match-p "- Reuse angle: Reuse this when you need a concise concept for comparing adjacent decisions, workflows, or patterns" content))
     (should-not (string-match-p "Referenced materials:" content))
     (should-not (string-match-p "3c5984bd\\.click\\.convertkit" content))
     (should-not (string-match-p "- (" content))))
@@ -7285,7 +7449,9 @@ Skip the test when the local config file is unavailable."
          (body (plist-get (delib-flow--artifact-family-selected-draft
                            updated 'reference-notes)
                           :draft-body)))
-    (should (string-match-p "This note captures Friction logs for AI systems" body))
+    (should (string-match-p
+             "Friction logs for AI systems can inform related workflow, design, or decision work"
+             body))
     (should (string-match-p "- Durable claim:" body))
     (should (string-match-p "- Why it matters:" body))
     (should (string-match-p "- Reuse angle: Keep this reuse angle\\." body))
@@ -7818,7 +7984,7 @@ Skip the test when the local config file is unavailable."
           (delib-flow--reference-note-edit-reuse-angle
            (delib-flow-test--reference-note-part-editor-run)
            "Direct reuse.")))
-    (should (string-match-p "Stored body\\."
+    (should (string-match-p "Stored body\\(?:\\.\\)?"
                             (plist-get (delib-flow--artifact-family-selected-draft
                                         stored 'reference-notes)
                                        :draft-body)))
@@ -7945,9 +8111,11 @@ Skip the test when the local config file is unavailable."
     (let ((body (plist-get (delib-flow--artifact-family-selected-draft
                             delib-flow--active-run 'reference-notes)
                            :draft-body)))
-      (should (string-match-p "\\* Source highlights\n- .*Capture friction logs, not just answers.*" body))
+      (should (string-match-p "\\* Source highlights\\(?:\n- .*\\)*\n- Capture friction logs, not just answers\\(?: .*\\)?" body))
       (should (string-match-p "\\* Related material to connect\n- Atlas brief" body))
-      (should (string-match-p "- Reuse angle: Reuse this when related notes touch friction logs for ai systems or adjacent patterns\\." body))
+      (should (string-match-p
+               "- Reuse angle: Reuse this when you need a concise concept for comparing adjacent decisions, workflows, or patterns\\."
+               body))
       (should (string-match-p "Old summary paragraph\\." body)))))
 
 (ert-deftest delib-flow-prompt-and-example-file-helpers-read-configured-content ()
@@ -8337,7 +8505,7 @@ Skip the test when the local config file is unavailable."
     (should (string-match-p "still needs an item-local draft"
                             (delib-flow--staged-content-preview-text selected-run)))))
 
-(ert-deftest delib-flow-project-package-approval-bundles-ready-child-items ()
+(ert-deftest delib-flow-project-package-approval-keeps-ready-child-items-outside-until-approved ()
   (let* ((project (list :kind 'project
                         :title "Steno Exercise Fix"
                         :text "Steno Exercise Fix"
@@ -8372,9 +8540,9 @@ Skip the test when the local config file is unavailable."
                        :target-locations nil))
                 'project-proposals
                 (list :candidates (list project)
-                      :selected-candidate-id
-                      (delib-flow--artifact-candidate-id project)
-                      :selected-draft project))))
+                       :selected-candidate-id
+                       (delib-flow--artifact-candidate-id project)
+                       :selected-draft project))))
          (selected (delib-flow-test--set-filing-selection run "1"))
          (approved (delib-flow--run-stage-locally selected 'select-approved-filing-actions))
          (approved-items (plist-get (plist-get approved :filing) :approved-items))
@@ -8382,10 +8550,15 @@ Skip the test when the local config file is unavailable."
          (remaining (plist-get (plist-get approved :filing) :draft-items)))
     (should (= 1 (length approved-items)))
     (should (eq 'project (plist-get approved-project :kind)))
-    (should (equal "Investigate exercises storage on the website"
+    (should (equal "Investigate and fix steno exercise"
                    (plist-get (plist-get approved-project :first-item) :text)))
-    (should (= 1 (length remaining)))
-    (should (eq 'reference-note (plist-get (car remaining) :kind)))))
+    (should (= 2 (length remaining)))
+    (should (seq-some (lambda (item)
+                        (eq 'next-action (plist-get item :kind)))
+                      remaining))
+    (should (seq-some (lambda (item)
+                        (eq 'reference-note (plist-get item :kind)))
+                      remaining))))
 
 (ert-deftest delib-flow-file-approved-project-package-uses-active-state-bucket ()
   (delib-flow-test--with-temp-project-file
@@ -8396,10 +8569,7 @@ Skip the test when the local config file is unavailable."
                           :state 'active
                           :child-items
                           (list (list :kind 'next-action
-                                      :text "Investigate and fix steno exercise"))
-                          :warnings nil))
-           (action (list :kind 'next-action
-                         :text "Investigate exercises storage on the website"
+                                      :text "Investigate exercises storage on the website"))
                          :warnings nil))
            (run (delib-flow--seed-filing-selection-block
                  (delib-flow--set-artifact-family-state
@@ -8408,7 +8578,7 @@ Skip the test when the local config file is unavailable."
                     (list :title "Broken steno exercise"
                           :content "* Broken steno exercise\nBody line\n"))
                    :filing
-                   (list :draft-items (list project action)
+                   (list :draft-items (list project)
                          :approved-items nil
                          :rejected-items nil
                          :preview-text nil
@@ -8464,8 +8634,8 @@ Skip the test when the local config file is unavailable."
                         (buffer-string)))
            (planned (delib-flow--planned-file-locations selected-child))
            (outside (delib-flow--project-package-outside-items selected-child)))
-      (should (string-match-p "Project: Fix broken steno website exercises" workspace))
-      (should (string-match-p "PROJECT Fix broken steno website exercises" workspace))
+      (should (string-match-p "Project: Fix broken steno exercise on website" workspace))
+      (should (string-match-p "PROJECT Fix broken steno exercise on website" workspace))
       (should (string-match-p "TODO " workspace))
       (should-not (string-match-p "TODO Investigate and fix broken steno website exercises"
                                   workspace))
@@ -8559,8 +8729,10 @@ Skip the test when the local config file is unavailable."
            (selected (delib-flow-test--set-filing-selection proposed "1"))
            (drafted (delib-flow--run-stage-locally selected 'draft-selected-project))
            (extracted (delib-flow--run-stage-locally drafted 'extract-actions))
+           (selected-child (delib-flow-test--set-filing-selection extracted "2"))
+           (drafted-child (delib-flow--run-stage-locally selected-child 'draft-selected-action))
            (approved (delib-flow--run-stage-locally
-                      (delib-flow-test--set-filing-selection extracted "1")
+                      drafted-child
                       'select-approved-filing-actions))
            (project (car (plist-get (plist-get approved :filing) :approved-items)))
            (first-item (plist-get project :first-item)))
@@ -8645,8 +8817,8 @@ Skip the test when the local config file is unavailable."
                        :target-locations nil))
                 'project-proposals
                 (list :candidates (list project)
-                      :selected-candidate-id nil
-                      :selected-draft nil))))
+                       :selected-candidate-id nil
+                       :selected-draft nil))))
          (approved (delib-flow--run-stage-locally run 'select-approved-filing-actions))
          (approved-items (plist-get (plist-get approved :filing) :approved-items)))
     (should (= 1 (length approved-items)))
@@ -8717,6 +8889,285 @@ Skip the test when the local config file is unavailable."
       (should (string-match-p "Refinement warning: Extraction retries are yielding weak or repetitive action candidates" text))
       (should (string-match-p "Why this step: Extraction retries are yielding weak or repetitive action candidates" text)))))
 
+(ert-deftest delib-flow-project-workflow-keeps-retry-extract-actions-available-after-rejecting-generated-action ()
+  (delib-flow-test--with-temp-project-file
+      "* Alpha Project\n"
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "[2026-02-10 Tue 20:40] Presentation or article on focusing on the end user"
+                       :content
+                       (concat
+                        "* [2026-02-10 Tue 20:40] Presentation or article on focusing on the end user\n"
+                        "+ No longer treating my role as divorced from the actual analytics dashboards created by the end user.\n"
+                        "+ More than just what are the requirements, put myself into their shoes for how do we build these dashboards.\n"
+                        "+ Before devs are handed instructions, check with the end users/business stakeholders representing their interests with a visualisation of how their requirements will be covered.\n"
+                        "+ Gather a number of success cases with client satisfaction to showcase\n"
+                        "+ Look into Empathetic design\n"))))
+           (inspected (delib-flow-test--accept-inspect
+                       (delib-flow--run-stage-locally run 'inspect-source)))
+           (matched (delib-flow-test--accept-match
+                     (delib-flow--run-stage-locally inspected 'match-project)))
+           (proposed (delib-flow--run-stage-locally matched 'propose-new-project))
+           (selected (delib-flow-test--set-filing-selection proposed "1"))
+           (drafted (delib-flow--run-stage-locally selected 'draft-selected-project))
+           (extracted (delib-flow--run-stage-locally drafted 'extract-actions))
+           (selected-action (delib-flow-test--set-filing-selection extracted "2"))
+           (rejected (delib-flow--run-stage-locally selected-action
+                                                    'reject-draft-filing-artifact))
+           (seeded (delib-flow--seed-actions rejected))
+           (global-actions (plist-get (delib-flow--run-actions seeded) :items))
+           (workspace-actions (delib-flow--focused-project-workspace-actions rejected))
+           (global-retry
+            (seq-find (lambda (action)
+                        (eq (plist-get action :id) 'extract-actions))
+                      global-actions))
+           (workspace-retry
+            (seq-find (lambda (action)
+                        (eq (plist-get action :id) 'extract-actions))
+                      workspace-actions)))
+      (should global-retry)
+      (should workspace-retry)
+      (should (eq 'available (plist-get global-retry :status)))
+      (should (eq 'available (plist-get workspace-retry :status)))
+      (should (equal "Retry Extract Actions" (plist-get global-retry :label)))
+      (should (equal "Retry Extract Actions" (plist-get workspace-retry :label))))))
+
+(ert-deftest delib-flow-project-package-child-approval-keeps-project-selectable-and-extraction-open ()
+  (delib-flow-test--with-temp-project-file
+      "* Alpha Project\n"
+    (let* ((run (delib-flow-test--set-operator-intent
+                 (delib-flow--initialize-run
+                  (list :title "Broken steno exercise"
+                        :content (string-join
+                                  '("* Broken steno exercise"
+                                    "https://example.com/drill?id=one"
+                                    "https://example.com/drill?id=two")
+                                  "\n")))
+                 "I need to figure out how the website stores exercises"))
+           (inspected (delib-flow-test--accept-inspect
+                       (delib-flow--run-stage-locally run 'inspect-source)))
+           (matched (delib-flow-test--accept-match
+                     (delib-flow--run-stage-locally inspected 'match-project)))
+           (proposed (delib-flow--run-stage-locally matched 'propose-new-project))
+           (selected-project (delib-flow-test--set-filing-selection proposed "1"))
+           (drafted-project (delib-flow--run-stage-locally selected-project 'draft-selected-project))
+           (extracted (delib-flow--run-stage-locally drafted-project 'extract-actions))
+           (selected-child (delib-flow-test--set-filing-selection extracted "2"))
+           (drafted-child (delib-flow--run-stage-locally selected-child 'draft-selected-action))
+           (approved-child (delib-flow--run-stage-locally drafted-child 'select-approved-filing-actions))
+           (draft-items (plist-get (plist-get approved-child :filing) :draft-items))
+           (labels (delib-flow--filing-selection-labels approved-child))
+           (workspace-actions (delib-flow--focused-project-workspace-actions approved-child))
+           (workspace-retry
+            (seq-find (lambda (action)
+                        (eq (plist-get action :id) 'extract-actions))
+                      workspace-actions)))
+      (should (seq-some (lambda (item)
+                          (eq 'project (plist-get item :kind)))
+                        draft-items))
+      (should (seq-some (lambda (label)
+                          (string-match-p "\\[1\\] PROJECT" (car label)))
+                        labels))
+      (should workspace-retry)
+      (should (eq 'available (plist-get workspace-retry :status)))
+      (should (equal "Retry Extract Actions" (plist-get workspace-retry :label))))))
+
+(ert-deftest delib-flow-project-package-child-approval-keeps-approval-action-explicit ()
+  (let* ((project (list :kind 'project
+                        :title "Focusing on the end user"
+                        :text "Focusing on the end user"
+                        :state 'active
+                        :child-items
+                        (list (list :kind 'next-action
+                                    :text "Reach out to clients for dashboard workflow examples"))
+                        :warnings nil))
+         (extra-action (list :kind 'next-action
+                             :text "Draft applicability note for Empathetic design"
+                             :warnings nil))
+         (run (delib-flow--initialize-run
+               (list :title "Presentation"
+                     :content "* Presentation\n+ Look into [[id:empathetic-design][Empathetic design]]\n")))
+         (run (plist-put run
+                         :filing
+                         (list :draft-items (list extra-action)
+                               :approved-items (list project)
+                               :rejected-items nil
+                               :preview-text nil
+                               :selection-blocked-item nil
+                               :selection-blocking-warnings nil
+                               :selection-blocked-selection nil
+                               :selection-blocked-notes nil
+                               :conflicts nil
+                               :target-locations nil)))
+         (action (delib-flow--select-approved-filing-actions-action run))
+         (text (with-current-buffer
+                   (delib-flow--render-focused-filing-workspace-buffer run)
+                 (buffer-string))))
+    (should (equal "Approve Another Project Item"
+                   (plist-get action :label)))
+    (should (string-match-p "Package progress: 1 included, 1 outside, 1 ready to approve now" text))
+    (should (string-match-p "Reference notes can be selected and drafted before filing this project package" text))))
+
+(ert-deftest delib-flow-project-workspace-reviews-package-when-selected-child-is-already-included-and-more-items-remain ()
+  (let* ((project (list :kind 'project
+                        :title "Focusing on the end user"
+                        :text "Focusing on the end user"
+                        :state 'active
+                        :child-items
+                        (list (list :kind 'next-action
+                                    :text "Create a list of successful cases with client satisfaction data to showcase"))
+                        :warnings nil))
+         (approved-child (list :kind 'next-action
+                               :text "Create a list of successful cases with client satisfaction data to showcase"
+                               :warnings nil))
+         (outside-ready (list :kind 'next-action
+                              :text "Analyze end user analytics dashboards"
+                              :warnings nil))
+         (run (delib-flow--initialize-run
+               (list :title "Presentation"
+                     :content "* Presentation\n+ Gather success cases with client satisfaction to showcase\n+ Analyze end user analytics dashboards\n")))
+         (run (plist-put run
+                         :filing
+                         (list :draft-items (list outside-ready)
+                               :approved-items (list project approved-child)
+                               :rejected-items nil
+                               :preview-text nil
+                               :selection-blocked-item nil
+                               :selection-blocking-warnings nil
+                               :selection-blocked-selection nil
+                               :selection-blocked-notes nil
+                               :conflicts nil
+                               :target-locations nil)))
+         (run (delib-flow--set-artifact-family-state
+               run
+               'actions
+               (list :candidates (list outside-ready approved-child)
+                     :selected-candidate-id
+                     (delib-flow--artifact-candidate-id approved-child)
+                     :selected-draft approved-child)))
+         (action (delib-flow--select-approved-filing-actions-action run))
+         (text (with-current-buffer
+                   (delib-flow--render-focused-filing-workspace-buffer run)
+                 (buffer-string))))
+    (should (eq 'review-package
+                (delib-flow--project-workflow-current-step run)))
+    (should (equal "Approve Another Project Item"
+                   (plist-get action :label)))
+    (should (< (plist-get action :priority) 41))
+    (should (string-match-p "Primary next action: Approve Another Project Item" text))
+    (should (string-match-p "Approve Another Project Item" text))))
+
+(ert-deftest delib-flow-project-workspace-keeps-draft-selected-action-available-for-blocked-child-in-package-review ()
+  (let* ((project (list :kind 'project
+                        :title "Focusing on the end user"
+                        :text "Focusing on the end user"
+                        :state 'active
+                        :child-items
+                        (list (list :kind 'next-action
+                                    :text "Reach out to 3-5 clients for dashboard workflow examples"))
+                        :warnings nil))
+         (blocked-action
+          (list :kind 'next-action
+                :text "Explore Empathetic design"
+                :action-evidence-line
+                "Look into [[id:empathetic-design][Empathetic design]]"
+                :warnings
+                (list (delib-flow--make-artifact-warning
+                       'exploratory-next-action
+                       "Reads like open-ended checking or exploration without naming the concrete deliverable."
+                       'blocking))))
+         (run (delib-flow--initialize-run
+               (list :title "Presentation or article on focusing on the end user"
+                     :content
+                     "* Presentation or article on focusing on the end user\n+ Look into [[id:empathetic-design][Empathetic design]]\n")))
+         (run (plist-put run
+                         :filing
+                         (list :draft-items (list blocked-action)
+                               :approved-items (list project)
+                               :rejected-items nil
+                               :preview-text nil
+                               :selection-blocked-item nil
+                               :selection-blocking-warnings nil
+                               :selection-blocked-selection nil
+                               :selection-blocked-notes nil
+                               :conflicts nil
+                               :target-locations nil)))
+         (run (delib-flow--set-artifact-family-state
+               run
+               'actions
+               (list :candidates (list blocked-action)
+                     :selected-candidate-id
+                     (delib-flow--artifact-candidate-id blocked-action)
+                     :selected-draft nil)))
+         (workspace-actions (delib-flow--focused-project-workspace-actions run))
+         (draft-action
+          (seq-find (lambda (action)
+                      (eq (plist-get action :id) 'draft-selected-action))
+                    workspace-actions))
+         (text (with-current-buffer
+                   (delib-flow--render-focused-filing-workspace-buffer run)
+                 (buffer-string))))
+    (should (eq 'draft-items
+                (delib-flow--project-workflow-current-step run)))
+    (should draft-action)
+    (should (eq 'available (plist-get draft-action :status)))
+    (should (string-match-p "Draft Selected Action" text))
+    (should (string-match-p "Primary next action: Draft Selected Action" text))
+    (should (string-match-p "- \\[1\\] Draft Selected Action" text))))
+
+(ert-deftest delib-flow-project-workspace-prioritizes-selected-reference-note-before-filing ()
+  (let* ((project (list :kind 'project
+                        :title "Focusing on the end user"
+                        :text "Focusing on the end user"
+                        :state 'active
+                        :child-items
+                        (list (list :kind 'next-action
+                                    :text "Reach out to clients for dashboard workflow examples"))
+                        :warnings nil))
+         (note (list :kind 'reference-note
+                     :text "Create general PKM note for Empathetic Design in Practice"
+                     :note-type 'general-pkm
+                     :warnings
+                     (list (delib-flow--make-artifact-warning
+                            'reference-note-candidate-identity
+                            "Source-local."
+                            'advisory))))
+         (run (delib-flow--initialize-run
+               (list :title "Presentation"
+                     :content "* Presentation\n+ Look into [[id:empathetic-design][Empathetic design]]\n")))
+         (run (plist-put run
+                         :filing
+                         (list :draft-items (list note)
+                               :approved-items (list project)
+                               :rejected-items nil
+                               :preview-text nil
+                               :selection-blocked-item nil
+                               :selection-blocking-warnings nil
+                               :selection-blocked-selection nil
+                               :selection-blocked-notes nil
+                               :conflicts nil
+                               :target-locations nil)))
+         (run (delib-flow--set-artifact-family-state
+               run
+               'reference-notes
+               (list :candidates (list note)
+                     :selected-candidate-id
+                     (delib-flow--artifact-candidate-id note)
+                     :selected-draft nil)))
+         (actions (delib-flow--focused-project-workspace-actions run))
+         (draft-note
+          (seq-find (lambda (action)
+                      (eq (plist-get action :id) 'draft-selected-reference-note))
+                    actions))
+         (text (with-current-buffer
+                   (delib-flow--render-focused-filing-workspace-buffer run)
+                 (buffer-string))))
+    (should (eq 'draft-items (delib-flow--project-workflow-current-step run)))
+    (should draft-note)
+    (should (eq 'available (plist-get draft-note :status)))
+    (should (equal "Draft Selected Note"
+                   (plist-get draft-note :label)))
+    (should (string-match-p "Reference notes can be selected and drafted before filing this project package" text))))
+
 (ert-deftest delib-flow-extract-actions-reports-operator-intent-and-proposed-project-context ()
   (delib-flow-test--with-temp-project-file
       "* Alpha Project\n"
@@ -8747,13 +9198,13 @@ Skip the test when the local config file is unavailable."
                   (plist-get raw :project-context-kind)))
       (should (equal 0 (plist-get raw :previous-attempt-count)))
       (should-not (plist-get raw :similar-to-previous-p))
-      (should (string-match-p "Project context: proposed-project-draft (Fix broken steno website exercises)"
+      (should (string-match-p "Project context: proposed-project-draft (Fix broken steno exercise on website)"
                               normalized))
       (should (string-match-p "Prior attempts: 0" normalized))
       (should (string-match-p "Similar to previous attempt: no" normalized))
       (should (string-match-p "Operator intent: this is about fixing a broken website"
                               normalized))
-      (should (string-match-p "Investigate and reproduce broken steno website exercises"
+      (should (string-match-p "Investigate and reproduce broken steno exercise on website"
                               (plist-get (car actions) :text))))))
 
 (ert-deftest delib-flow-extract-waiting-for-reports-proposed-project-context-and-speculative-warning ()
@@ -8785,6 +9236,28 @@ Skip the test when the local config file is unavailable."
       (should (delib-flow--draft-item-has-warning-code-p
                item 'waiting-for-speculative-owner))
       (should (string-match-p "project owner" (plist-get item :text))))))
+
+(ert-deftest delib-flow-extract-actions-retry-reports-real-prior-attempts-and-retry-context ()
+  (let* ((run (delib-flow--initialize-run
+               (list :title "End-user note"
+                     :content (string-join
+                               '("* End-user note"
+                                 "Put myself into end users' shoes for how do we build dashboards"
+                                 "Gather success cases with client satisfaction to showcase")
+                               "\n"))))
+         (inspected (delib-flow-test--accept-inspect
+                     (delib-flow--run-stage-locally run 'inspect-source)))
+         (matched (delib-flow-test--accept-match
+                   (delib-flow--run-stage-locally inspected 'match-project)))
+         (once (delib-flow--run-stage-locally matched 'extract-actions))
+         (retried (delib-flow--run-stage-locally once 'extract-actions))
+         (entry (car (last (plist-get (delib-flow--run-stage-history retried) :entries))))
+         (raw (plist-get entry :raw-output))
+         (normalized (plist-get entry :normalized-output)))
+    (should (= 1 (plist-get raw :previous-attempt-count)))
+    (should (plist-get raw :retry-context-present-p))
+    (should (string-match-p "Prior attempts: 1" normalized))
+    (should (string-match-p "Prior retry context available: yes" normalized))))
 
 (ert-deftest delib-flow-current-filing-choice-explains-selected-action-next-step ()
   (delib-flow-test--with-temp-project-file
@@ -9050,7 +9523,7 @@ Skip the test when the local config file is unavailable."
                      drafted-two))
               (delib-flow--render-active-run-buffer delib-flow--active-run "Filing preview")
               (with-current-buffer delib-flow-staged-content-preview-buffer-name
-                (should (string-match-p "Second draft\\." (buffer-string)))
+                (should (string-match-p "Second draft\\(?:\\.\\)?" (buffer-string)))
                 (should-not (string-match-p "First draft\\." (buffer-string)))))
           (when (buffer-live-p (get-buffer delib-flow-staged-content-preview-buffer-name))
             (kill-buffer (get-buffer delib-flow-staged-content-preview-buffer-name))))))))
@@ -9771,16 +10244,98 @@ Skip the test when the local config file is unavailable."
                    (plist-get outcome :summary)))))
 
 (ert-deftest delib-flow-local-test-selected-reference-note-prompts-follow-filing-selection ()
-  (let* ((run (delib-flow-test--reference-note-candidate-only-run))
-         (body-prompt
-          (delib-flow-local-test--draft-selected-reference-note-prompt run))
-         (part-prompt
-          (delib-flow-local-test--draft-selected-reference-note-related-material-prompt
-           run)))
-    (should (string-match-p "Selected note title: Project Atlas Pattern" body-prompt))
-    (should (string-match-p "Deterministic seed structure to improve:" body-prompt))
-    (should (string-match-p "Selected note title: Project Atlas Pattern" part-prompt))
-    (should (string-match-p "Current related material:" part-prompt))))
+  (delib-flow-test--with-local-test-config
+    (let* ((run (delib-flow-test--reference-note-candidate-only-run))
+           (package
+            (delib-flow--stage-input-package
+             run 'draft-selected-reference-note))
+           (part-package
+            (delib-flow--stage-input-package
+             run 'draft-selected-reference-note-related-material))
+           (body-prompt
+            (delib-flow-local-test--draft-selected-reference-note-prompt package))
+           (part-prompt
+            (delib-flow-local-test--draft-selected-reference-note-related-material-prompt
+             part-package)))
+      (should (string-match-p "Selected note title: Project Atlas Pattern" body-prompt))
+      (should (string-match-p "Deterministic seed structure to improve:" body-prompt))
+      (should (string-match-p "Selected note title: Project Atlas Pattern" part-prompt))
+      (should (string-match-p "Current related material:" part-prompt)))))
+
+(ert-deftest delib-flow-local-test-draft-selected-action-prompt-includes-warnings-evidence-and-linked-concepts ()
+  (delib-flow-test--with-local-test-config
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "End-user presentation"
+                       :content
+                       (concat
+                        "* End-user presentation\n"
+                        "+ Look into [[id:empathetic-design][Empathetic design]]\n"))))
+           (action (list :kind 'next-action
+                         :text "Explore Empathetic design"
+                         :action-evidence-line "Look into [[id:empathetic-design][Empathetic design]]"
+                         :warnings
+                         (list (delib-flow--make-artifact-warning
+                                'exploratory-next-action
+                                "Reads like open-ended checking or exploration without naming the concrete deliverable."
+                                'blocking))))
+           (run (plist-put run
+                           :filing
+                           (list :draft-items (list action)
+                                 :approved-items nil
+                                 :rejected-items nil
+                                 :preview-text nil
+                                 :selection-blocked-item nil
+                                 :selection-blocking-warnings nil
+                                 :selection-blocked-selection nil
+                                 :selection-blocked-notes nil
+                                 :conflicts nil
+                                 :target-locations nil)))
+           (run (delib-flow--set-artifact-family-state
+                 run
+                 'actions
+                 (list :candidates (list action)
+                       :selected-candidate-id (delib-flow--artifact-candidate-id action)
+                       :selected-draft nil)))
+           (package (delib-flow--stage-input-package run 'draft-selected-action))
+           (prompt (delib-flow-local-test--draft-selected-action-prompt package)))
+      (should (string-match-p "Selected action: Explore Empathetic design" prompt))
+      (should (string-match-p "Selected action evidence: Look into \\[\\[id:empathetic-design\\]\\[Empathetic design\\]\\]" prompt))
+      (should (string-match-p "Selected action warnings:" prompt))
+      (should (string-match-p "Linked source concepts:" prompt))
+      (should (string-match-p "Empathetic design" prompt))
+      (should (string-match-p "rewrite it into one observable step with a named output" prompt))
+      (should (string-match-p "Avoid compound verbs like \"review and extract\"" prompt)))))
+
+(ert-deftest delib-flow-local-test-artifact-prompt-guides-meeting-note-extraction-away-from-headings ()
+  (delib-flow-test--with-local-test-config
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "AI Kickoff"
+                       :content
+                       (concat
+                        "* AI Kickoff\n"
+                        "- Session objectives\n"
+                        "  - Where we are now\n"
+                        "  - Draft pilot outline for next session.\n"))))
+           (run (plist-put run
+                           :working-context
+                           (list :inspect-output
+                                 (list :source-type 'meeting-note))))
+           (package (delib-flow--stage-input-package run 'extract-actions))
+           (prompt (delib-flow-local-test--artifact-prompt package 'actions)))
+      (should (string-match-p "Source type: meeting-note" prompt))
+      (should (string-match-p "do not turn agenda headings, themes, or planning labels into next actions" prompt))
+      (should (string-match-p "prefer fewer stronger follow-up outputs such as agenda, summary note, checklist, pilot outline, applicability note, or decision log" prompt)))))
+
+(ert-deftest delib-flow-local-test-draft-selected-reference-note-prompt-discourages-template-prose ()
+  (delib-flow-test--with-local-test-config
+    (let* ((run (delib-flow-test--reference-note-candidate-only-run))
+           (package
+            (delib-flow--stage-input-package
+             run 'draft-selected-reference-note))
+           (prompt
+            (delib-flow-local-test--draft-selected-reference-note-prompt package)))
+      (should (string-match-p "Write 2-4 plain sentences that state the idea directly" prompt))
+      (should (string-match-p "Avoid meta phrases like `This note captures`, `reusable framing`, or `durable concept`" prompt)))))
 
 
 
@@ -9846,3 +10401,15 @@ Skip the test when the local config file is unavailable."
            "Building personal AI advisors by defining a named advisor")))
     (should (string-match-p "Building personal AI advisors by defining a named advisor" excerpt))
     (should-not (string-match-p "Preview:" excerpt))))
+
+(ert-deftest delib-flow-local-test-filter-output-salvages-malformed-json ()
+  (delib-flow-test--with-local-test-config
+    (let ((delib-flow-local-test--last-ollama-response
+           "{\"retained_titles\":[\"Atlas brief\"],\"items\":[{\"title\":\"Atlas brief\",\"reasons\":[\"direct-source-link\"],\"score\":211.}],\"retained_context\":\"- Relevant note: Atlas brief - revised rollout brief\",\"reason\":\"keeps the linked brief\"}"))
+      (let ((parsed (delib-flow-local-test--salvaged-filter-parsed)))
+        (should (equal '("Atlas brief")
+                       (cdr (assoc 'retained_titles parsed))))
+        (should (equal "Atlas brief"
+                       (cdr (assoc 'title (car (cdr (assoc 'items parsed)))))))
+        (should (string-match-p "revised rollout brief"
+                                (cdr (assoc 'retained_context parsed))))))))

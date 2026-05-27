@@ -137,15 +137,15 @@ For selection-heavy checkpoints:
 - use =m= to populate the manual-project chooser from the shortlist shown in
   `Now > Manual project selection`
 - use =s= to populate the filing chooser from the shortlist shown in
-  `Filing preview > Artifact selection`
+  `Progress > Filing preview > Artifact selection`
 - treat the editable =Selection:= blocks as fallback paths rather than the
   primary way to make those choices
 
 For filing verification:
 
-- inspect `Filing preview > Planned file targets` before writing
-- inspect `Filing preview > Staged content preview` to confirm the exact text
-  that will be inserted
+- inspect `Progress > Filing preview > Planned file targets` before writing
+- inspect `Progress > Filing preview > Staged content preview` to confirm the
+  exact text that will be inserted
 - after `File Approved Outputs`, verify the opened target buffers and the
   `Filed target locations` section; those buffers are staged but intentionally
   unsaved until you decide to save them

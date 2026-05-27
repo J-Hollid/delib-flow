@@ -15,8 +15,8 @@
   '(cockpit filing-workspace))
 
 (defconst delib-flow-ui-contract-test--allowed-zones
-  '(recommended-next-pass quick-actions next-actions family-local-actions
-    filing-actions local-actions))
+  '(recommended alternatives local-primary local-secondary global
+    recovery destructive debug local-actions))
 
 (defconst delib-flow-ui-contract-test--surface-command-map
   '((open-filing-workspace . delib-flow-open-filing-workspace)
@@ -262,11 +262,14 @@
   (pcase surface
     ('cockpit
      (cond
-      ((equal heading "Recommended next pass") 'recommended-next-pass)
-      ((equal heading "Quick actions") 'quick-actions)
-      ((equal heading "Next actions") 'next-actions)
-      ((string-prefix-p "Local action palette:" heading) 'family-local-actions)
-      ((equal heading "Filing actions") 'filing-actions)))
+      ((equal heading "Recommended action") 'recommended)
+      ((equal heading "Nearby alternatives") 'alternatives)
+      ((equal heading "Local primary actions") 'local-primary)
+      ((equal heading "Local secondary actions") 'local-secondary)
+      ((equal heading "Global actions") 'global)
+      ((equal heading "Recovery actions") 'recovery)
+      ((equal heading "Destructive actions") 'destructive)
+      ((equal heading "Debug actions") 'debug)))
     ('filing-workspace
      (when (string-prefix-p "Do here:" heading)
        'local-actions))))
@@ -419,11 +422,11 @@
 
 (ert-deftest delib-flow-ui-contract-doc-loads-and-validates ()
   (let ((contracts (delib-flow-ui-contract-test--load-contracts)))
-    (should (= 7 (length contracts)))))
+    (should (= 5 (length contracts)))))
 
 (ert-deftest delib-flow-ui-contract-loader-errors-for_duplicate-key ()
   (let ((file (make-temp-file "delib-flow-ui-contract" nil ".org"
-                              "* One\n:PROPERTIES:\n:SCENARIO_ID: alpha-followup\n:CHECKPOINT: source\n:SURFACE: cockpit\n:END:\n** Sections\n| order | heading | required |\n|-------+---------+----------|\n| 1 | Now | yes |\n** Actions\n| zone | label | action_id | required |\n|------+-------+-----------+----------|\n| next-actions | Abort Run | abort-run | yes |\n** Transitions\n| action_id | destination_surface | destination_anchor | latest_stage | selected_family | workspace_open |\n|-----------+---------------------+--------------------+--------------+-----------------+----------------|\n* Two\n:PROPERTIES:\n:SCENARIO_ID: alpha-followup\n:CHECKPOINT: source\n:SURFACE: cockpit\n:END:\n** Sections\n| order | heading | required |\n|-------+---------+----------|\n| 1 | Now | yes |\n** Actions\n| zone | label | action_id | required |\n|------+-------+-----------+----------|\n| next-actions | Abort Run | abort-run | yes |\n** Transitions\n| action_id | destination_surface | destination_anchor | latest_stage | selected_family | workspace_open |\n|-----------+---------------------+--------------------+--------------+-----------------+----------------|\n")))
+                              "* One\n:PROPERTIES:\n:SCENARIO_ID: alpha-followup\n:CHECKPOINT: source\n:SURFACE: cockpit\n:END:\n** Sections\n| order | heading | required |\n|-------+---------+----------|\n| 1 | Now | yes |\n** Actions\n| zone | label | action_id | required |\n|------+-------+-----------+----------|\n| global | Abort Run | abort-run | yes |\n** Transitions\n| action_id | destination_surface | destination_anchor | latest_stage | selected_family | workspace_open |\n|-----------+---------------------+--------------------+--------------+-----------------+----------------|\n* Two\n:PROPERTIES:\n:SCENARIO_ID: alpha-followup\n:CHECKPOINT: source\n:SURFACE: cockpit\n:END:\n** Sections\n| order | heading | required |\n|-------+---------+----------|\n| 1 | Now | yes |\n** Actions\n| zone | label | action_id | required |\n|------+-------+-----------+----------|\n| global | Abort Run | abort-run | yes |\n** Transitions\n| action_id | destination_surface | destination_anchor | latest_stage | selected_family | workspace_open |\n|-----------+---------------------+--------------------+--------------+-----------------+----------------|\n")))
     (unwind-protect
         (should-error (delib-flow-ui-contract-test--load-contracts file))
       (delete-file file))))
@@ -437,7 +440,7 @@
 
 (ert-deftest delib-flow-ui-contract-loader-errors-for_unknown-action-id ()
   (let ((file (make-temp-file "delib-flow-ui-contract" nil ".org"
-                              "* One\n:PROPERTIES:\n:SCENARIO_ID: alpha-followup\n:CHECKPOINT: source\n:SURFACE: cockpit\n:END:\n** Sections\n| order | heading | required |\n|-------+---------+----------|\n| 1 | Now | yes |\n** Actions\n| zone | label | action_id | required |\n|------+-------+-----------+----------|\n| next-actions | Bad | missing-action | yes |\n** Transitions\n| action_id | destination_surface | destination_anchor | latest_stage | selected_family | workspace_open |\n|-----------+---------------------+--------------------+--------------+-----------------+----------------|\n")))
+                              "* One\n:PROPERTIES:\n:SCENARIO_ID: alpha-followup\n:CHECKPOINT: source\n:SURFACE: cockpit\n:END:\n** Sections\n| order | heading | required |\n|-------+---------+----------|\n| 1 | Now | yes |\n** Actions\n| zone | label | action_id | required |\n|------+-------+-----------+----------|\n| global | Bad | missing-action | yes |\n** Transitions\n| action_id | destination_surface | destination_anchor | latest_stage | selected_family | workspace_open |\n|-----------+---------------------+--------------------+--------------+-----------------+----------------|\n")))
     (unwind-protect
         (should-error (delib-flow-ui-contract-test--load-contracts file))
       (delete-file file))))

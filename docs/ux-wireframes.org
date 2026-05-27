@@ -4,29 +4,31 @@ These sketches are the canonical buffer-surface contracts for the architecture
 refactor. They are intentionally text-first and terminal-friendly.
 
 For the editable, testable main-scenario contract layer, see
-[[file:ui-scenario-contracts.org][ui-scenario-contracts.org]].
+[[file:ui-scenario-contracts.org][ui-scenario-contracts.org]]. For the
+phase-travel overview diagram, see
+[[file:stage-flow-overview.org][stage-flow-overview.org]].
 
 * Main cockpit
 
 #+begin_example
 * Now
-  Current loop state and immediate recommendation.
+  Current phase, goal, readiness, and block state.
+
+* Recommended
+  One recommended action, nearby alternatives, and grouped action roles.
+
+* Progress
+  Checklist, queue hub, selected-item summary, and detour return.
 
 * Current result
   Latest stage outcome.
 
-* Filing preview
-  Destination appears before any file action.
-
-* Next actions
-  1. Local action
-  2. Secondary action
-
-* Current context
-  Retrieved and retained supporting material.
-
 * Details
-  Stage history, diagnostics, and expanded notes.
+  Phase-relevant detail view plus stage history and audit diagnostics.
+
+Operator controls:
+- `z` toggles narrow-screen focus mode.
+- `Y` toggles whether debug-only cockpit actions are visible.
 #+end_example
 
 * Project package workspace
@@ -63,7 +65,7 @@ For the editable, testable main-scenario contract layer, see
 * Support for this draft
   Evidence, excerpts, and target note type.
 
-* Next actions
+* Save or discard
   1. Save
   2. Discard
 #+end_example
@@ -80,7 +82,7 @@ For the editable, testable main-scenario contract layer, see
 * Support for this draft
   Evidence and destination context.
 
-* Next actions
+* Do here now
   1. Approve
   2. File
 #+end_example
@@ -91,7 +93,7 @@ For the editable, testable main-scenario contract layer, see
 * Field
   Saved value appears before the edit action.
 
-* Next actions
+* Do here now
   1. Apply
   2. Cancel
 #+end_example

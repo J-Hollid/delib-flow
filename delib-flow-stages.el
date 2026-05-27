@@ -6,6 +6,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'org)
 (require 'rx)
 (require 'seq)
@@ -52,29 +53,179 @@
     (list :previous-attempt-count (length entries)
           :similar-to-previous-p similar-p)))
 
+(defun delib-flow--stage-prior-warning-summary (items)
+  "Return structured warning summary for prior stage ITEMS."
+  (delq nil
+        (mapcar
+         (lambda (item)
+           (let ((warnings (delib-flow--draft-item-warnings item)))
+             (when warnings
+               (list :text (plist-get item :text)
+                     :warning-codes
+                     (mapcar (lambda (warning)
+                               (plist-get warning :code))
+                             warnings)
+                     :warning-messages
+                     (mapcar (lambda (warning)
+                               (plist-get warning :message))
+                             warnings)))))
+         items)))
+
+(defun delib-flow--stage-prior-attempt-summary (run stage-id)
+  "Return retry summary for RUN STAGE-ID."
+  (let* ((entries (delib-flow--stage-history-entries-for-stage run stage-id))
+         (previous-entry (car (last entries)))
+         (previous-items (delib-flow--extract-stage-items-from-entry
+                          previous-entry
+                          stage-id))
+         (filtered (plist-get (plist-get previous-entry :raw-output)
+                              :retained-candidates)))
+    (list :attempt-count (length entries)
+          :previous-candidate-texts
+          (delq nil
+                (mapcar (lambda (item)
+                          (plist-get item :text))
+                        previous-items))
+          :previous-candidate-evidence-lines
+          (delq nil
+                (mapcar (lambda (item)
+                          (plist-get item :action-evidence-line))
+                        previous-items))
+          :previous-warning-summary
+          (delib-flow--stage-prior-warning-summary previous-items)
+          :previous-review-feedback
+          (or (plist-get previous-entry :review-notes)
+              (plist-get previous-entry :normalized-output))
+          :previous-retained-titles
+          (delq nil
+                (mapcar (lambda (candidate)
+                          (plist-get candidate :title))
+                        filtered))
+          :previous-filter-reasons
+          (delq nil
+                (mapcar (lambda (candidate)
+                          (list :title (plist-get candidate :title)
+                                :status (plist-get candidate :filter-status)
+                                :reasons (plist-get candidate :filter-reasons)))
+                        filtered)))))
+
+(defun delib-flow--retry-context-attempt-count (retry-context)
+  "Return retry attempt count from RETRY-CONTEXT."
+  (or (plist-get retry-context :attempt-count) 0))
+
+(defun delib-flow--extract-retry-similar-p (items)
+  "Return non-nil when retry-annotated ITEMS are not materially improved."
+  (and items
+       (seq-every-p
+        (lambda (item)
+          (and (not (plist-get item :materially-different-from-previous-p))
+               (not (plist-get item :resolved-prior-warning-p))))
+        items)))
+
+(defun delib-flow--annotate-action-retry-state
+    (item previous-text previous-evidence-line)
+  "Return ITEM annotated with retry metadata from PRIOR values."
+  (let* ((copy (copy-tree item))
+         (current-text (or (plist-get copy :text) ""))
+         (current-evidence-line
+          (or (plist-get copy :action-evidence-line) "")))
+    (when previous-text
+      (setq copy (plist-put copy :previous-text previous-text))
+      (setq copy
+            (plist-put copy
+                       :previous-evidence-line
+                       previous-evidence-line))
+      (setq copy
+            (plist-put copy
+                       :materially-different-from-previous-p
+                       (not
+                        (or (and previous-evidence-line
+                                 (string=
+                                  (downcase (string-trim previous-evidence-line))
+                                  (downcase (string-trim current-evidence-line))))
+                            (string=
+                             (downcase (string-trim previous-text))
+                             (downcase (string-trim current-text))))))))
+    copy))
+
+(defun delib-flow--annotate-action-warning-resolution (item warning-summary)
+  "Return ITEM annotated with prior WARNING-SUMMARY resolution status."
+  (let ((copy (copy-tree item)))
+    (when warning-summary
+      (setq copy
+            (plist-put copy
+                       :resolved-prior-warning-p
+                       (= 0 (length (plist-get copy :warnings))))))
+    copy))
+
+(defun delib-flow--annotate-action-retry-batch
+    (actions prior-texts prior-evidence-lines prior-warnings)
+  "Return ACTIONS annotated with retry metadata from PRIOR lists."
+  (cl-loop for action in actions
+           for index from 0
+           collect
+           (let ((annotated
+                  (delib-flow--annotate-action-retry-state
+                   action
+                   (nth index prior-texts)
+                   (nth index prior-evidence-lines))))
+             (delib-flow--annotate-action-warning-resolution
+              annotated
+              (nth index prior-warnings)))))
+
 (defun delib-flow--extract-actions-result (package)
   "Return raw action-extraction result for PACKAGE."
   (let* ((source-action (delib-flow--source-title-action package))
          (retained-actions (delib-flow--retained-candidate-actions package))
-         (actions (delib-flow--annotate-draft-actions
-                   (delib-flow--annotate-draft-item-tags
-                    (cons source-action retained-actions)
-                    package)))
-         (comparison
-          (delib-flow--extract-result-comparison
-           package 'extract-actions actions :actions)))
-    (list :candidate-count (length actions)
-          :operator-intent (delib-flow--operator-intent-text-from-package package)
-          :project-context-kind (delib-flow--effective-project-context-kind package)
-          :project-context-title (delib-flow--effective-project-title package)
-          :previous-attempt-count (plist-get comparison :previous-attempt-count)
-          :similar-to-previous-p (plist-get comparison :similar-to-previous-p)
-          :warning-count (delib-flow--item-warning-total actions)
-          :warning-item-count (delib-flow--items-with-warnings-count actions)
-          :blocking-warning-count (delib-flow--item-blocking-warning-total actions)
-          :blocking-warning-item-count
-          (delib-flow--items-with-blocking-warnings-count actions)
-          :actions actions)))
+         (actions (delib-flow--annotate-draft-item-tags
+                   (cons source-action retained-actions)
+                   package))
+         (retry-context (plist-get package :retry-context))
+         (prior-texts (plist-get retry-context :previous-candidate-texts))
+         (prior-evidence-lines
+          (plist-get retry-context :previous-candidate-evidence-lines))
+         (prior-warnings (plist-get retry-context :previous-warning-summary)))
+    (setq actions (delib-flow--annotate-draft-actions actions package))
+    (setq actions
+          (delib-flow--annotate-action-retry-batch
+           actions
+           prior-texts
+           prior-evidence-lines
+           prior-warnings))
+    (let* ((suppression
+            (delib-flow--suppress-duplicate-weak-actions actions))
+           (actions (plist-get suppression :actions))
+           (comparison
+            (delib-flow--extract-result-comparison
+             package 'extract-actions actions :actions)))
+      (list :candidate-count (length actions)
+            :operator-intent
+            (delib-flow--operator-intent-text-from-package package)
+            :project-context-kind
+            (delib-flow--effective-project-context-kind package)
+            :project-context-title
+            (delib-flow--effective-project-title package)
+            :previous-attempt-count
+            (max (plist-get comparison :previous-attempt-count)
+                 (delib-flow--retry-context-attempt-count retry-context))
+            :similar-to-previous-p
+            (and (> (delib-flow--retry-context-attempt-count retry-context) 0)
+                 (or (plist-get comparison :similar-to-previous-p)
+                     (delib-flow--extract-retry-similar-p actions)))
+            :retry-context retry-context
+            :retry-context-present-p (and retry-context t)
+            :suppressed-candidate-count
+            (length (plist-get suppression :suppressed-candidates))
+            :suppressed-candidates
+            (plist-get suppression :suppressed-candidates)
+            :warning-count (delib-flow--item-warning-total actions)
+            :warning-item-count
+            (delib-flow--items-with-warnings-count actions)
+            :blocking-warning-count
+            (delib-flow--item-blocking-warning-total actions)
+            :blocking-warning-item-count
+            (delib-flow--items-with-blocking-warnings-count actions)
+            :actions actions))))
 
 (defun delib-flow--extract-waiting-for-result (package)
   "Return raw waiting-for extraction result for PACKAGE."
@@ -84,6 +235,7 @@
                  (delib-flow--annotate-draft-item-tags
                   (cons source-item retained-items)
                   package)))
+         (retry-context (plist-get package :retry-context))
          (comparison
           (delib-flow--extract-result-comparison
            package 'extract-waiting-for items :waiting-fors)))
@@ -91,8 +243,12 @@
           :operator-intent (delib-flow--operator-intent-text-from-package package)
           :project-context-kind (delib-flow--effective-project-context-kind package)
           :project-context-title (delib-flow--effective-project-title package)
-          :previous-attempt-count (plist-get comparison :previous-attempt-count)
+          :previous-attempt-count
+          (max (plist-get comparison :previous-attempt-count)
+               (delib-flow--retry-context-attempt-count retry-context))
           :similar-to-previous-p (plist-get comparison :similar-to-previous-p)
+          :retry-context retry-context
+          :retry-context-present-p (and retry-context t)
           :warning-count (delib-flow--item-warning-total items)
           :warning-item-count (delib-flow--items-with-warnings-count items)
           :blocking-warning-count (delib-flow--item-blocking-warning-total items)
@@ -110,7 +266,7 @@
                   (append source-items retained-items)
                   package)
                  package))
-         (items (delib-flow--promote-reference-note-items items)))
+         (items (delib-flow--curate-reference-note-items items)))
     (list :candidate-count (length items)
           :warning-count (delib-flow--item-warning-total items)
           :warning-item-count (delib-flow--items-with-warnings-count items)
@@ -892,7 +1048,9 @@
       next-action
       ("Concrete next step or deliverable"
        "Scoped to one focused work session"
-       "Avoid vague follow-up wording"))
+       "Avoid vague follow-up wording"
+       "Name an observable step, artifact, conversation, or decision output"
+       "Do not surface introspective or exploratory phrasing without a deliverable"))
      (extract-waiting-for
       waiting-for
       ("Name the blocked dependency owner"
@@ -952,16 +1110,21 @@
 
 (defun delib-flow--stage-input-package (run stage-id)
   "Return assembled input package for STAGE-ID from RUN."
-  (delib-flow--plain-value
-   (list :stage-id stage-id
-         :prompt-id (delib-flow--stage-prompt-id stage-id)
-         :prompt (delib-flow--resolved-prompt stage-id)
-         :source (delib-flow--run-source run)
-         :working-context (delib-flow--run-working-context run)
-         :filing (plist-get run :filing)
-         :artifacts (plist-get run :artifacts)
-         :routing (delib-flow--run-routing run)
-         :ui (delib-flow--run-ui-package run))))
+  (let ((retry-context
+         (when (memq stage-id '(extract-actions extract-waiting-for
+                                 filter-reference-material))
+           (delib-flow--stage-prior-attempt-summary run stage-id))))
+    (delib-flow--plain-value
+     (list :stage-id stage-id
+           :prompt-id (delib-flow--stage-prompt-id stage-id)
+           :prompt (delib-flow--resolved-prompt stage-id)
+           :source (delib-flow--run-source run)
+           :working-context (delib-flow--run-working-context run)
+           :filing (plist-get run :filing)
+           :artifacts (plist-get run :artifacts)
+           :routing (delib-flow--run-routing run)
+           :retry-context retry-context
+           :ui (delib-flow--run-ui-package run)))))
 
 (defun delib-flow--default-local-stage-adapter (descriptor package)
   "Execute DESCRIPTOR locally with PACKAGE and return raw output."

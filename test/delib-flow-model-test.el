@@ -19,10 +19,9 @@
 (ert-deftest delib-flow-initial-section-anchors-contains-required-sections ()
   (let ((anchors (delib-flow--initial-section-anchors)))
     (dolist (section '(now
-                       next-actions
+                       recommended
+                       progress
                        current-result
-                       current-context
-                       filing-preview
                        details))
       (should (assoc section anchors)))))
 
@@ -103,12 +102,59 @@
   (let* ((run (delib-flow--initialize-run (list :title "Example")))
          (anchors (plist-get (delib-flow--run-ui run) :section-anchors)))
     (dolist (section '(now
-                       next-actions
+                       recommended
+                       progress
                        current-result
-                       current-context
-                       filing-preview
                        details))
       (should (assoc section anchors)))))
+
+(ert-deftest delib-flow-travel-summary-derives-phase-and-readiness ()
+  (let* ((run (delib-flow--initialize-run (list :title "Example")))
+         (summary (delib-flow--travel-summary run)))
+    (should (eq (plist-get summary :phase) 'source-review))
+    (should (equal (plist-get summary :readiness-label) "minimal"))
+    (should (equal (plist-get summary :progress-string) "0/8 checkpoints"))))
+
+(ert-deftest delib-flow-travel-summary-promotes-queue-phase-when-drafts-exist ()
+  (let* ((run (delib-flow--initialize-run (list :title "Example")))
+         (run (plist-put run :filing
+                         (plist-put (plist-get run :filing)
+                                    :draft-items
+                                    (list (list :kind 'next-action :text "Do thing")))))
+         (summary (delib-flow--travel-summary run)))
+    (should (eq (plist-get summary :phase) 'queue-review))
+    (should (equal 1 (plist-get (plist-get summary :queue) :available)))))
+
+(ert-deftest delib-flow-travel-summary-includes-detour-metadata ()
+  (let* ((run (delib-flow--initialize-run (list :title "Example")))
+         (run (plist-put
+               run :travel
+               (list :detour-kind 'conflict
+                     :origin-phase 'selected-item
+                     :origin-action 'file-approved-outputs
+                     :origin-stage 'file-approved-outputs
+                     :return-surface 'filing-workspace
+                     :return-anchor "Selected item"
+                     :selected-item-target "Create follow-up note"
+                     :reroute-reason "Conflict needs review."
+                     :cloud-sanitized-status nil
+                     :cloud-result-status nil
+                     :cloud-reintegration-status nil
+                     :conflict-target "alpha.org::Alpha Project"
+                     :conflict-action-summary "Retry or retarget."
+                     :last-rejection-reason 'wrong-filing-target
+                     :debug-visibility nil)))
+         (summary (delib-flow--travel-summary run)))
+    (should (eq (plist-get summary :detour-kind) 'conflict))
+    (should (eq (plist-get summary :origin-stage) 'file-approved-outputs))
+    (should (equal (plist-get summary :selected-item-target)
+                   "Create follow-up note"))
+    (should (equal (plist-get summary :conflict-target)
+                   "alpha.org::Alpha Project"))
+    (should (equal (plist-get summary :conflict-action-summary)
+                   "Retry or retarget."))
+    (should (eq (plist-get summary :last-rejection-reason)
+                'wrong-filing-target))))
 
 (ert-deftest delib-flow-initialize-run-seeds-session-state ()
   (let* ((run (delib-flow--initialize-run (list :title "Example")))

@@ -279,10 +279,9 @@ and returns raw stage output."
 
 (defconst delib-flow--control-sections
   '("Now"
+    "Recommended"
+    "Progress"
     "Current result"
-    "Filing preview"
-    "Next actions"
-    "Current context"
     "Details")
   "Top-level sections rendered in the control buffer.")
 
@@ -308,10 +307,9 @@ and returns raw stage output."
 
 (defconst delib-flow--initial-section-anchor-alist
   '((now . "delib-section-now")
-    (next-actions . "delib-section-next-actions")
+    (recommended . "delib-section-recommended")
+    (progress . "delib-section-progress")
     (current-result . "delib-section-current-result")
-    (current-context . "delib-section-current-context")
-    (filing-preview . "delib-section-filing-preview")
     (details . "delib-section-details"))
   "Stable anchor identifiers for top-level control-buffer sections.")
 
@@ -334,6 +332,7 @@ and returns raw stage output."
     ("m" . "Open completion for manual project selection.")
     ("s" . "Open completion for filing artifact selection.")
     ("z" . "Toggle narrow-screen focus mode for the active decision loop.")
+    ("Y" . "Toggle whether debug-only actions are shown in the cockpit.")
     ("r" . "Retry the current inspect or project-match stage.")
     ("g" . "Refresh the control buffer.")
     ("j" . "Open the audit log at the active run.")

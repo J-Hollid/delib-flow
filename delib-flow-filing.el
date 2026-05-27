@@ -226,6 +226,7 @@
 
 (defun delib-flow--filing-with-updated-draft-queue (filing remaining-items)
   "Return FILING with REMAINING-ITEMS and shared queue state refreshed."
+  (setq remaining-items (delib-flow--prioritize-draft-items remaining-items))
   (plist-put
    (plist-put
     (plist-put
@@ -490,22 +491,34 @@ selection before the legacy Selection block has been seeded."
   "Return operator guidance lines for filing selection ITEMS."
   (let ((ready-indexes
          (delib-flow--draft-item-selection-indexes items
-                                                   #'delib-flow--draft-item-ready-p))
+                                                   (lambda (item)
+                                                     (eq (delib-flow--draft-item-readiness item)
+                                                         'ready))))
+        (warning-indexes
+         (delib-flow--draft-item-selection-indexes items
+                                                   (lambda (item)
+                                                     (eq (delib-flow--draft-item-readiness item)
+                                                         'warning))))
         (blocked-indexes
          (delib-flow--draft-item-selection-indexes
           items
           (lambda (item)
-            (not (delib-flow--draft-item-ready-p item))))))
+            (eq (delib-flow--draft-item-readiness item)
+                'blocked)))))
     (list
      (format "Enter exactly one ready index after Selection:. Example: %s"
-             (if ready-indexes
-                 (number-to-string (car ready-indexes))
+             (if (or ready-indexes warning-indexes)
+                 (number-to-string (or (car ready-indexes)
+                                       (car warning-indexes)))
                "1"))
      (format "Ready selections: %s"
              (delib-flow--selection-index-list ready-indexes))
+     (format "Advisory-only selections: %s"
+             (delib-flow--selection-index-list warning-indexes))
      (format "Blocked selections: %s"
              (delib-flow--selection-index-list blocked-indexes))
-     "Selecting a ready queue artifact approves only that item and leaves the rest in draft state."
+     "Selecting a ready or advisory queue artifact approves only that item and leaves the rest in draft state."
+     "Advisory-only artifacts are approvable, but they are weaker than fully ready items and usually benefit from drafting or verification first."
      "Blocked artifacts must be fixed, skipped by choosing a different ready item, or rejected from this run.")))
 
 (delib-flow--define-function delib-flow--filing-target-summary
@@ -536,9 +549,10 @@ selection before the legacy Selection block has been seeded."
 
 (defun delib-flow--filing-readiness-badge (item)
   "Return short readiness badge text for filing ITEM."
-  (if (delib-flow--draft-item-ready-p item)
-      "READY"
-    "BLOCKED"))
+  (pcase (delib-flow--draft-item-readiness item)
+    ('ready "READY")
+    ('warning "REVIEW")
+    (_ "BLOCKED")))
 
 (defun delib-flow--filing-selection-shortlist-cards (run)
   "Return compact filing-selection shortlist text for RUN."
@@ -553,12 +567,15 @@ selection before the legacy Selection block has been seeded."
         (setq index (1+ index))
         (let ((selected-p (string-equal selection (number-to-string index))))
           (push
-           (format "- [%s]%s %s\n  %s\n  Files to: %s\n  Warnings: %s | Kind: %s"
+           (format "- [%s]%s %s (%s)\n  %s\n  Files to: %s\n  Warnings: %s | Kind: %s"
                    index
                    (if selected-p " selected" "")
                    (if (delib-flow--draft-item-ready-p item)
                        "Ready to approve"
-                     "Needs fixes before approval")
+                     (if (eq (delib-flow--draft-item-readiness item) 'warning)
+                         "Review before approval"
+                       "Needs fixes before approval"))
+                   (delib-flow--filing-readiness-badge item)
                    (delib-flow--compact-summary
                     (format "%s %s"
                             (delib-flow--draft-item-keyword item)
@@ -906,7 +923,9 @@ selection before the legacy Selection block has been seeded."
 (defun delib-flow--selected-filing-items (package)
   "Return the operator-selected filing item from PACKAGE."
   (if-let ((item (delib-flow--selected-filing-item package)))
-      (if (delib-flow--project-package-selection-p package item)
+      (if (and (delib-flow--project-flow-active-p package)
+               (or (delib-flow--project-package-selection-p package item)
+                   (delib-flow--project-package-bundle-child-p item)))
           (delib-flow--project-package-selected-items package item)
         (list item))
     (when-let ((project (and (delib-flow--project-flow-active-p package)
@@ -932,11 +951,39 @@ selection before the legacy Selection block has been seeded."
                 root-child-items
                 ready-children)))
 
-(defun delib-flow--project-package-selected-items (package project)
-  "Return the approved project bundle items for PROJECT in PACKAGE."
-  (cons (or (delib-flow--project-package-root-for-filing package)
-            project)
-        (delib-flow--project-package-bundle-items package)))
+(defun delib-flow--project-package-merged-project (project child-items)
+  "Return PROJECT updated with CHILD-ITEMS merged into its package children."
+  (delib-flow--project-with-child-items
+   project
+   (delib-flow--project-package-merge-children project child-items)))
+
+(defun delib-flow--project-package-selected-project (package item)
+  "Return the project package root implied by selecting ITEM in PACKAGE."
+  (let ((project (or (delib-flow--approved-project-item package)
+                     (delib-flow--project-package-root-for-filing package))))
+    (when project
+      (if (delib-flow--project-package-bundle-child-p item)
+          (delib-flow--project-package-merged-project project (list item))
+        (delib-flow--project-with-child-items
+         project
+         (delib-flow--project-child-items project))))))
+
+(defun delib-flow--project-package-selected-items (package item)
+  "Return the preview project bundle items implied by selecting ITEM in PACKAGE."
+  (when-let ((project (delib-flow--project-package-selected-project package item)))
+    (delib-flow--project-package-expanded-items project nil)))
+
+(defun delib-flow--selected-approved-filing-items (package)
+  "Return filing items that approval should persist for PACKAGE."
+  (if-let ((item (delib-flow--selected-filing-item package)))
+      (if (and (delib-flow--project-flow-active-p package)
+               (or (delib-flow--project-package-selection-p package item)
+                   (delib-flow--project-package-bundle-child-p item)))
+          (when-let ((project
+                      (delib-flow--project-package-selected-project package item)))
+            (list project))
+        (list item))
+    nil))
 
 (defun delib-flow--item-kind-requires-draft-p (kind)
   "Return non-nil when filing KIND should require item-local drafting first."
@@ -1021,11 +1068,16 @@ selection before the legacy Selection block has been seeded."
   (if-let ((selected-items (delib-flow--selected-filing-items package)))
       (let* ((selected-item (delib-flow--selected-filing-item package))
              (removal-items
-              (if (delib-flow--project-package-selection-p package selected-item)
-                  (append selected-items
-                          (delib-flow--project-child-items
-                           (delib-flow--project-package-root-for-filing package)))
-                selected-items)))
+              (cond
+               ((and selected-item
+                     (delib-flow--project-package-selection-p package selected-item))
+                (list selected-item))
+               ((and selected-item
+                     (delib-flow--project-flow-active-p package)
+                     (delib-flow--project-package-bundle-child-p selected-item))
+                (list selected-item))
+               (t
+                selected-items))))
         (seq-reduce #'delib-flow--remove-first-matching-item
                     removal-items
                     (delib-flow--draft-items package)))
@@ -1262,6 +1314,8 @@ KIND may be a symbol or a list of symbols."
           :approval-blocked-p approval-blocked-p
           :selected-items (unless approval-blocked-p
                             (delib-flow--selected-filing-items package))
+          :approved-items (unless approval-blocked-p
+                            (delib-flow--selected-approved-filing-items package))
           :remaining-items (if approval-blocked-p
                                (delib-flow--draft-items package)
                              (delib-flow--remaining-draft-items package)))))
@@ -1282,6 +1336,7 @@ KIND may be a symbol or a list of symbols."
        (delib-flow--blocked-filing-selection-indexes package))
       (approval-blocked-p (plist-get state :approval-blocked-p))
       (selected-items (plist-get state :selected-items))
+      (approved-items (plist-get state :approved-items))
       (remaining-items (plist-get state :remaining-items))
       (planned-target-locations
        (unless approval-blocked-p
@@ -1291,7 +1346,7 @@ KIND may be a symbol or a list of symbols."
 		(delib-flow--planned-file-location item package))
 	      selected-items)
 	   (error nil)))))
-   (list :approved-items selected-items :approval-blocked-p
+   (list :approved-items approved-items :approval-blocked-p
 	 approval-blocked-p :blocking-warnings blocking-warnings
 	 :ready-selection-indexes ready-indexes
 	 :blocked-selection-indexes blocked-indexes
@@ -1372,12 +1427,14 @@ KIND may be a symbol or a list of symbols."
 (defun delib-flow--effective-project-item (package)
   "Return the effective project context item from PACKAGE."
   (or (delib-flow--matched-project package)
+      (delib-flow--approved-project-item package)
       (delib-flow--selected-project-draft-from-package package)))
 
 (defun delib-flow--effective-project-context-kind (package)
   "Return the source of effective project context in PACKAGE."
   (cond
    ((delib-flow--matched-project package) 'matched-project)
+   ((delib-flow--approved-project-item package) 'approved-project-package)
    ((delib-flow--selected-project-draft-from-package package)
     'proposed-project-draft)
    (t nil)))
@@ -1424,13 +1481,13 @@ KIND may be a symbol or a list of symbols."
           (null (delib-flow--draft-item-blocking-warnings item))))
    (delib-flow--draft-items package)))
 
-(defun delib-flow--project-package-merge-child-items (project package)
-  "Return child items that should stay attached to PROJECT in PACKAGE."
+(defun delib-flow--project-package-merge-children (project children)
+  "Return PROJECT child items merged with CHILDREN."
   (let* ((existing (copy-tree (delib-flow--project-child-items project)))
-         (ready (copy-tree (delib-flow--project-package-ready-child-items package)))
+         (ready (copy-tree children))
          (first-item (car existing)))
     (when (and first-item
-               (delib-flow--project-proposal-goal-like-first-item-p first-item)
+               (delib-flow--project-first-item-needs-replacement-p first-item)
                ready)
       (setq existing (append (cdr existing) ready))
       (setq ready nil))
@@ -1443,6 +1500,12 @@ KIND may be a symbol or a list of symbols."
          (append items (list child))))
      ready
      existing)))
+
+(defun delib-flow--project-package-merge-child-items (project package)
+  "Return child items that should stay attached to PROJECT in PACKAGE."
+  (delib-flow--project-package-merge-children
+   project
+   (delib-flow--project-package-ready-child-items package)))
 
 (defun delib-flow--project-package-expanded-items (project extra-items)
   "Return PROJECT package items with PROJECT children and EXTRA-ITEMS expanded."
@@ -1478,12 +1541,10 @@ KIND may be a symbol or a list of symbols."
 
 (defun delib-flow--project-package-root-for-filing (package)
   "Return the effective project root item for filing PACKAGE."
-  (if-let ((project (delib-flow--current-project-package-item package)))
-      (if-let ((child-items
-                (delib-flow--project-package-merge-child-items project package)))
-          (delib-flow--project-with-child-items project child-items)
-        project)
-    nil))
+  (when-let ((project (delib-flow--current-project-package-item package)))
+    (delib-flow--project-with-child-items
+     project
+     (delib-flow--project-child-items project))))
 
 (defun delib-flow--filing-project-title (package)
   "Return the project title that filing should use in PACKAGE."
@@ -2200,9 +2261,47 @@ KIND may be a symbol or a list of symbols."
       (delib-flow--waiting-for-flow-active-p run)
       (delib-flow--reference-note-workspace-active-p run)))
 
+(defun delib-flow--project-followon-item-selected-p (run)
+  "Return non-nil when RUN has a selected extracted item needing local refinement."
+  (or (delib-flow--selected-action-candidate-for-drafting run)
+      (delib-flow--selected-action-drafted-p run)
+      (delib-flow--selected-waiting-for-candidate-for-drafting run)
+      (delib-flow--selected-waiting-for-drafted-p run)
+      (delib-flow--selected-reference-note-candidate-for-drafting run)
+      (delib-flow--reference-note-selected-draft run)))
+
+(defun delib-flow--selected-project-package-child-p (run)
+  "Return non-nil when the selected follow-on item in RUN is already inside the active project package."
+  (when (delib-flow--approved-project-package-p run)
+    (let* ((project (delib-flow--approved-project-item run))
+           (child-items (and project (delib-flow--project-child-items project)))
+           (selected-item (delib-flow--selected-filing-item run))
+           (selected-draft
+            (or (delib-flow--artifact-family-selected-draft run 'actions)
+                (delib-flow--artifact-family-selected-draft run 'waiting-fors))))
+      (or (and selected-item
+               (delib-flow--project-package-bundle-child-p selected-item))
+          (and selected-draft
+               (seq-some
+                (lambda (item)
+                  (delib-flow--same-artifact-item-p item selected-draft))
+                child-items))))))
+
+(defun delib-flow--selected-project-package-child-needs-review-p (run)
+  "Return non-nil when RUN should stay in package review despite a selected child item.
+
+This applies when the currently selected item is already included in the
+approved package and there is still meaningful outside-package work to curate."
+  (and (delib-flow--selected-project-package-child-p run)
+       (> (length (delib-flow--project-outside-followon-items run)) 0)))
+
 (defun delib-flow--project-workflow-current-step (run)
   "Return the current guided project workflow step for RUN."
   (cond
+   ((and (delib-flow--project-flow-active-p run)
+         (not (delib-flow--selected-project-package-child-needs-review-p run))
+         (delib-flow--project-followon-item-selected-p run))
+    'draft-items)
    ((delib-flow--project-extraction-soft-warning run)
     'review-package)
    ((delib-flow--approved-project-package-p run)
@@ -2222,13 +2321,30 @@ KIND may be a symbol or a list of symbols."
    (t
     'propose)))
 
+(defun delib-flow--project-outside-followon-items (run)
+  "Return extracted non-project draft items still outside the active project package in RUN."
+  (seq-filter
+   (lambda (item)
+     (not (eq (plist-get item :kind) 'project)))
+   (plist-get (plist-get run :filing) :draft-items)))
+
+(defun delib-flow--project-outside-ready-items (run)
+  "Return ready extracted non-project draft items outside the active package in RUN."
+  (seq-filter #'delib-flow--draft-item-ready-p
+              (delib-flow--project-outside-followon-items run)))
+
 (defun delib-flow--project-workflow-next-action-label (run)
   "Return the primary next action label for the active project loop in RUN."
   (pcase (delib-flow--project-workflow-current-step run)
     ('draft-project "Draft Selected Project")
     ('extract-work "Extract Actions / Waiting / Notes")
     ('review-package
-     (or (delib-flow--project-refinement-action-label run)
+     (or (and (delib-flow--approved-project-package-p run)
+              (> (length (delib-flow--project-outside-ready-items run)) 0)
+              "Approve Another Project Item")
+         (and (delib-flow--approved-project-package-p run)
+              "File Package")
+         (delib-flow--project-refinement-action-label run)
          "Review package"))
     ('draft-items
      (cond
@@ -2277,9 +2393,11 @@ KIND may be a symbol or a list of symbols."
 
 (defun delib-flow--selected-project-drafted-p (run)
   "Return non-nil when RUN has a drafted selected project."
-  (eq (plist-get (delib-flow--artifact-family-selected-draft run 'project-proposals)
-                 :kind)
-      'project))
+  (or (eq (plist-get (delib-flow--artifact-family-selected-draft run 'project-proposals)
+                     :kind)
+          'project)
+      (eq (plist-get (delib-flow--approved-project-item run) :kind)
+          'project)))
 
 (defun delib-flow--project-extraction-context-ready-p (run)
   "Return non-nil when RUN can extract follow-on work from project context."
@@ -2304,6 +2422,9 @@ KIND may be a symbol or a list of symbols."
   (pcase (delib-flow--effective-project-context-kind run)
     ('matched-project
      (format "- Project context: matched existing project `%s`."
+             (delib-flow--effective-project-title run)))
+    ('approved-project-package
+     (format "- Project context: approved project package `%s` remains available for further extraction and filing."
              (delib-flow--effective-project-title run)))
     ('proposed-project-draft
      (format "- Project context: drafted proposed project package `%s` (original match remains %s)."
@@ -2369,18 +2490,22 @@ KIND may be a symbol or a list of symbols."
     (or
      (let ((entries (delib-flow--stage-history-entries-for-stage run 'extract-actions)))
        (when (and (>= (length entries) 2)
-                  (delib-flow--extract-stage-weak-p (car (last entries)) 'extract-actions)
-                  (or (>= (length entries) 3)
-                      (delib-flow--extract-stage-repetitive-p entries 'extract-actions)))
+                  (or (delib-flow--extract-stage-repetitive-p entries 'extract-actions)
+                      (and (delib-flow--extract-stage-weak-p
+                            (car (last entries))
+                            'extract-actions)
+                           (>= (length entries) 3))))
          (list :stage-id 'extract-actions
                :message
                (format "Extraction retries are yielding weak or repetitive action candidates. %s before retrying extraction."
                        (delib-flow--project-refinement-action-label run)))))
      (let ((entries (delib-flow--stage-history-entries-for-stage run 'extract-waiting-for)))
        (when (and (>= (length entries) 2)
-                  (delib-flow--extract-stage-weak-p (car (last entries)) 'extract-waiting-for)
-                  (or (>= (length entries) 3)
-                      (delib-flow--extract-stage-repetitive-p entries 'extract-waiting-for)))
+                  (or (delib-flow--extract-stage-repetitive-p entries 'extract-waiting-for)
+                      (and (delib-flow--extract-stage-weak-p
+                            (car (last entries))
+                            'extract-waiting-for)
+                           (>= (length entries) 3))))
          (list :stage-id 'extract-waiting-for
                :message
                (format "Waiting-for extraction retries are yielding weak or repetitive candidates. %s before retrying extraction."
@@ -2403,6 +2528,14 @@ KIND may be a symbol or a list of symbols."
              (format "- Primary next action: %s"
                      (delib-flow--project-workflow-next-action-label run))
              (delib-flow--project-context-status-line run)
+             (when (delib-flow--approved-project-package-p run)
+               (format "- Package progress: %s included, %s outside, %s ready to approve now."
+                       (length (delib-flow--project-child-items
+                                (or (delib-flow--approved-project-item run)
+                                    (delib-flow--selected-project-draft-from-package run))))
+                       (length (delib-flow--project-outside-followon-items run))
+                       (length (delib-flow--project-outside-ready-items run))))
+             "- Reference notes can be selected and drafted before filing this project package."
              (when-let ((warning (delib-flow--project-extraction-soft-warning run)))
                (format "- Refinement warning: %s" (plist-get warning :message)))
              "- Workflow steps:"))
@@ -2531,6 +2664,7 @@ KIND may be a symbol or a list of symbols."
       (when-let ((warning (delib-flow--project-extraction-soft-warning run)))
         (list (format "- Soft warning: %s" (plist-get warning :message))))
       '("- Run `Extract Actions`, `Extract Waiting-For`, or `Suggest Reference Notes` next to expand this drafted project package."
+        "- Reference notes are parallel follow-on work here; select one and draft it before filing if it belongs with this project."
         "- Use `Regenerate Selected Project` only when the project title, tags, or seeded first action are still wrong."
         "- Keep this selected project in focus until the project package and immediate work set are usable."))
      "\n"))
@@ -2824,8 +2958,13 @@ KIND may be a symbol or a list of symbols."
   "Return refreshed working-draft lines for selected note CANDIDATE and DRAFT in RUN."
   (let* ((summary (delib-flow--reference-note-draft-summary candidate run))
          (highlights (delib-flow--reference-note-source-highlights candidate run))
-         (durable-claim (or (car highlights) summary))
-         (why-it-matters (or (cadr highlights) summary)))
+         (durable-claim
+          (delib-flow--reference-note-durable-claim-text
+           candidate highlights summary))
+         (why-it-matters
+          (or (cadr highlights)
+              (delib-flow--reference-note-why-it-matters-text
+               candidate summary))))
     (list
      summary
      (format "- Durable claim: %s" durable-claim)
@@ -3100,56 +3239,22 @@ KIND may be a symbol or a list of symbols."
   (replace-regexp-in-string "%\\?" "" (or text "") t t))
 
 (delib-flow--define-function delib-flow--fill-org-roam-template
-			     (template context &optional
-				       ensure-newline)
-			     "Return org-roam TEMPLATE expanded against CONTEXT.\n\nWhen ENSURE-NEWLINE is non-nil, ensure the rendered text ends in a newline."
-			     (when (functionp template)
-			       (error
-				"delib-flow org-roam filing does not support interactive template functions"))
-			     (unless (stringp template)
-			       (error
-				"delib-flow org-roam filing requires string-based templates"))
-			     (let*
-				 ((rendered
-				   (if
-				       (and
-					(require 'org-roam-capture nil
-						 t)
-					(require 'org-roam-node nil t)
-					(fboundp
-					 'org-roam-capture--fill-template)
-					(fboundp 'org-roam-node-create))
-				       (let
-					   ((delib-flow--capture-context
-					     (plist-get context
-							:capture-context))
-					    (org-capture-plist
-					     (list :default-time
-						   (plist-get context
-							      :default-time)))
-					    (org-roam-capture--node
-					     (org-roam-node-create
-					      :title
-					      (plist-get context
-							 :title)))
-					    (org-roam-capture--info
-					     (list :title
-						   (plist-get context
-							      :title)
-						   :slug
-						   (plist-get context
-							      :slug))))
-					 (org-roam-capture--fill-template
-					  template ensure-newline))
-				     (let
-					 ((fallback
-					   (delib-flow--fill-org-roam-template-fallback
-					    template context)))
-				       (if ensure-newline
-					   (concat fallback "\n")
-					 fallback)))))
-			       (delib-flow--strip-org-capture-point-markers
-				rendered)))
+				     (template context &optional
+					       ensure-newline)
+				     "Return org-roam TEMPLATE expanded against CONTEXT.\n\nWhen ENSURE-NEWLINE is non-nil, ensure the rendered text ends in a newline."
+				     (when (functionp template)
+				       (error
+					"delib-flow org-roam filing does not support interactive template functions"))
+				     (unless (stringp template)
+				       (error
+					"delib-flow org-roam filing requires string-based templates"))
+				     (let ((rendered
+					    (delib-flow--fill-org-roam-template-fallback
+					     template context)))
+				       (delib-flow--strip-org-capture-point-markers
+					(if ensure-newline
+					    (concat rendered "\n")
+					  rendered))))
 
 
 (defun delib-flow--reference-note-org-roam-target-path (path context)
@@ -3171,60 +3276,78 @@ KIND may be a symbol or a list of symbols."
       (target-spec
        (or (plist-get (nthcdr 4 template) :if-new)
 	   (plist-get (nthcdr 4 template) :target))))
-   (let*
-       ((context
-	 (delib-flow--reference-note-org-roam-context item package))
-	(override
-	 (delib-flow--normalize-reference-note-target-override
-	  (delib-flow--reference-note-effective-target-override
-	   package)))
-	(body-template (nth 3 template))
-	(body
-	 (delib-flow--fill-org-roam-template body-template context)))
-     (pcase target-spec
-       (`(file+head ,path ,head)
-	(let*
-	    ((resolved-path
-	      (cond (override override)
-		    ((stringp path)
-		     (delib-flow--reference-note-org-roam-target-path
-		      path context))
-		    ((functionp path)
-		     (error
-		      "The selected org-roam template requires a target path. Fill `Target path:` before filing this note."))
-		    (t
-		     (error
-		      "Unsupported org-roam target path in template"))))
-	     (target
-	      (if (file-name-absolute-p resolved-path) resolved-path
-		(expand-file-name resolved-path
-				  (or
-				   (delib-flow--org-roam-directory-root)
-				   default-directory)))))
-	  (list :target target :title (plist-get context :title)
-		:context context :body-template body-template
-		:target-spec `(file+head ,target ,head) :content
-		(concat
-		 (delib-flow--fill-org-roam-template head context t)
-		 body))))
-       (`(file ,path)
-	(let*
-	    ((resolved-path
-	      (cond (override override)
-		    ((stringp path)
-		     (delib-flow--reference-note-org-roam-target-path
-		      path context))
-		    ((functionp path)
-		     (error
-		      "The selected org-roam template requires a target path. Fill `Target path:` before filing this note."))
-		    (t
-		     (error
-		      "Unsupported org-roam target path in template"))))
-	     (target
-	      (if (file-name-absolute-p resolved-path) resolved-path
-		(expand-file-name resolved-path
-				  (or
-				   (delib-flow--org-roam-directory-root)
+	   (let*
+	       ((context
+		 (delib-flow--reference-note-org-roam-context item package))
+		(override
+		 (delib-flow--normalize-reference-note-target-override
+		  (delib-flow--reference-note-effective-target-override
+		   package)))
+		(body-template (nth 3 template)))
+	     (pcase target-spec
+		       (`(file+head ,path ,head)
+			(let*
+			    ((path-needs-override-p (functionp path))
+		     (resolved-path
+		      (cond (override override)
+			    ((stringp path)
+			     (delib-flow--reference-note-org-roam-target-path
+			      path context))
+			    (path-needs-override-p
+			     (error
+			      "The selected org-roam template requires a target path. Fill `Target path:` before filing this note."))
+			    (t
+			     (error
+			      "Unsupported org-roam target path in template"))))
+		     (fill-template
+		      (lambda (template &optional ensure-newline)
+			(if (and path-needs-override-p override)
+			    (let ((fallback
+				   (delib-flow--fill-org-roam-template-fallback
+				    template context)))
+			      (if ensure-newline
+				  (concat fallback "\n")
+				fallback))
+				  (delib-flow--fill-org-roam-template
+				   template context ensure-newline))))
+			     (body
+			      (funcall fill-template body-template nil))
+			     (target
+			      (if (file-name-absolute-p resolved-path) resolved-path
+				(expand-file-name resolved-path
+					  (or
+					   (delib-flow--org-roam-directory-root)
+					   default-directory)))))
+		  (list :target target :title (plist-get context :title)
+			:context context :body-template body-template
+			:target-spec `(file+head ,target ,head) :content
+			(concat
+			 (funcall fill-template head t)
+			 body))))
+	       (`(file ,path)
+		(let*
+		    ((path-needs-override-p (functionp path))
+		     (resolved-path
+		      (cond (override override)
+			    ((stringp path)
+			     (delib-flow--reference-note-org-roam-target-path
+			      path context))
+			    (path-needs-override-p
+			     (error
+			      "The selected org-roam template requires a target path. Fill `Target path:` before filing this note."))
+			    (t
+			     (error
+			      "Unsupported org-roam target path in template"))))
+		     (body
+		      (if (and path-needs-override-p override)
+			  (delib-flow--fill-org-roam-template-fallback
+			   body-template context)
+			body))
+		     (target
+		      (if (file-name-absolute-p resolved-path) resolved-path
+			(expand-file-name resolved-path
+					  (or
+					   (delib-flow--org-roam-directory-root)
 				   default-directory)))))
 	  (list :target target :title (plist-get context :title)
 		:context context :body-template body-template

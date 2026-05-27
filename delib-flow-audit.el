@@ -297,11 +297,16 @@
   "Return refreshed audit run record from RUN."
   (let* ((audit (plist-get run :audit))
          (run-record (plist-get audit :run-record))
-         (session (delib-flow--run-session run)))
+         (session (delib-flow--run-session run))
+         (run-status (delib-flow--audit-run-status run))
+         (ended-at (plist-get session :ended-at)))
     (setq run-record
-          (plist-put run-record :run-status (delib-flow--audit-run-status run)))
+          (plist-put run-record :run-status run-status))
     (setq run-record
-          (plist-put run-record :ended-at (plist-get session :ended-at)))
+          (plist-put run-record :ended-at
+                     (or ended-at
+                         (and (not (eq run-status 'active))
+                              (current-time)))))
     (setq run-record
           (plist-put run-record :current-decision
                      (plist-get session :current-decision)))

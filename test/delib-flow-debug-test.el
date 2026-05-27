@@ -330,7 +330,7 @@ Skip the test when the local config file is unavailable."
         (progn
           (delib-flow-debug-start-scenario 'filing-selection-mixed 'filing-ready)
           (delib-flow-debug-apply-helper 'select-first-blocked)
-          (should (string-match-p "Selection: 2"
+          (should (string-match-p "Selection: 1"
                                   (delib-flow--editable-block-text
                                    (delib-flow--editable-block delib-flow--active-run
                                                                'filing-selection-review))))

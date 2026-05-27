@@ -267,6 +267,17 @@
   "Return the top-level heading text for SECTION."
   (format "** %s" section))
 
+(defconst delib-flow--legacy-control-section-aliases
+  '(("Next actions" . "Recommended")
+    ("Current context" . "Details")
+    ("Filing preview" . "Progress"))
+  "Legacy top-level cockpit headings mapped to phase-travel sections.")
+
+(defun delib-flow--normalize-surface-heading (heading)
+  "Return canonical visible heading for HEADING."
+  (or (cdr (assoc heading delib-flow--legacy-control-section-aliases))
+      heading))
+
 (defun delib-flow--next-section-heading-regexp ()
   "Return the regexp matching the next top-level control section."
   "^\\*\\* [^\n]+$")
@@ -433,6 +444,7 @@
     (define-key map (kbd "K") #'delib-flow-control-jump-latest-preview)
     (define-key map (kbd "U") #'delib-flow-control-jump-stage-history)
     (define-key map (kbd "m") #'delib-flow-control-choose-manual-project)
+    (define-key map (kbd "Y") #'delib-flow-control-toggle-debug-visibility)
     (define-key map (kbd "r") #'delib-flow-control-retry-current)
     (define-key map (kbd "q") #'delib-flow-control-abort-run)
     (define-key map (kbd "s") #'delib-flow-control-choose-filing-selection)
@@ -629,6 +641,8 @@
   "Choose reference-note template or insert `T' when editing a block.")
 (delib-flow--define-control-edit-command delib-flow-control-toggle-focus-mode delib-flow-toggle-focus-mode
   "Toggle narrow-screen focus mode or insert `z' when editing a block.")
+(delib-flow--define-control-edit-command delib-flow-control-toggle-debug-visibility delib-flow-toggle-debug-visibility
+  "Toggle debug visibility or insert `Y' when editing a block.")
 (delib-flow--define-control-edit-command delib-flow-control-context-menu delib-flow-control-menu
   "Open a local context menu or insert `.' when editing a block.")
 (delib-flow--define-control-edit-command delib-flow-control-help-command delib-flow-control-help
@@ -741,29 +755,35 @@
 (defun delib-flow--annotate-action-lines (run)
   "Attach action metadata for RUN to rendered lines in the current buffer."
   (delib-flow--annotate-rendered-action-group
-   (delib-flow--subtree-content-bounds "Recommended next pass")
+   (delib-flow--subtree-content-bounds "Recommended action")
    (if-let ((action (delib-flow--recommended-action run)))
        (list action)
      nil))
+  (dolist (heading '("Nearby alternatives"
+                     "Local primary actions"
+                     "Local secondary actions"
+                     "Global actions"
+                     "Recovery actions"
+                     "Debug actions"
+                     "Destructive actions"))
+    (delib-flow--annotate-rendered-action-group
+     (delib-flow--subtree-content-bounds heading)
+     (pcase heading
+       ("Nearby alternatives" (delib-flow--recommended-alternative-actions run))
+       ("Local primary actions" (delib-flow--actions-for-role run 'local-primary))
+       ("Local secondary actions" (delib-flow--actions-for-role run 'local-secondary))
+       ("Global actions" (delib-flow--actions-for-role run 'global))
+       ("Recovery actions" (delib-flow--actions-for-role run 'recovery))
+       ("Debug actions" (delib-flow--actions-for-role run 'debug))
+       ("Destructive actions" (delib-flow--actions-for-role run 'destructive)))))
   (delib-flow--annotate-rendered-action-group
-   (delib-flow--subtree-content-bounds "Quick actions")
-   (delib-flow--quick-actions run))
-  (delib-flow--annotate-rendered-action-group
-   (delib-flow--section-content-bounds "Next actions")
-   (delib-flow--sorted-actions run))
-  (delib-flow--annotate-rendered-action-group
-   (delib-flow--subtree-content-bounds "Recommended next filing pass")
-   (if-let ((action (delib-flow--recommended-filing-action run)))
-       (list action)
-     nil))
-  (dolist (family '(project-proposals actions waiting-fors reference-notes))
+   (delib-flow--subtree-content-bounds "Filing actions")
+   (delib-flow--filing-preview-actions run))
+  (dolist (family '(actions waiting-fors reference-notes project-proposals))
     (delib-flow--annotate-rendered-action-group
      (delib-flow--subtree-content-bounds
       (delib-flow--family-local-action-palette-heading family))
-     (delib-flow--family-local-actions run family)))
-  (delib-flow--annotate-rendered-action-group
-   (delib-flow--subtree-content-bounds "Filing actions")
-   (delib-flow--filing-preview-actions run)))
+     (delib-flow--family-local-actions run family))))
 
 (defun delib-flow--annotate-focused-filing-workspace-action-lines (run)
   "Attach action metadata for RUN to the focused filing workspace."
@@ -886,40 +906,18 @@
 
 (defun delib-flow--preferred-anchor-section (run)
   "Return preferred anchor heading for RUN."
-  (delib-flow--active-loop-heading run))
+  (if (delib-flow--cloud-detour-active-p run)
+      "Progress"
+    "Recommended"))
 
 (delib-flow--define-function delib-flow--changed-heading-for-run
   (run)
   "Return the most relevant changed heading for RUN."
-  (if-let ((entry (delib-flow--latest-stage-entry run)))
-      (pcase (plist-get entry :stage-id)
-        ((or 'inspect-source 'match-project 'run-cloud-stage)
-         "Loop update")
-        ('manual-project-match
-         "Manual project selection")
-        ((or 'extract-actions
-             'extract-waiting-for
-             'suggest-reference-notes
-             'draft-selected-reference-note-body
-             'draft-selected-reference-note-source-highlights
-             'draft-selected-reference-note-related-material
-             'draft-selected-reference-note-reuse-angle
-             'propose-new-project
-             'find-support-for-selected-action
-             'find-support-for-selected-waiting-for
-             'find-support-for-selected-reference-note
-             'find-support-for-selected-project
-             'integrate-into-source
-             'select-approved-filing-actions
-             'reject-draft-filing-artifact
-             'file-approved-outputs
-             'resolve-filing-conflict)
-         "Filing update")
-        ((or 'discover-reference-material 'filter-reference-material)
-         "Current context")
-        (_
-         (delib-flow--active-loop-heading run)))
-    "Decision strip"))
+  (pcase (delib-flow--run-phase run)
+    ((or 'source-review 'project-context) "Now")
+    ((or 'reference-context 'artifact-generation) "Current result")
+    ((or 'queue-review 'selected-item 'filing 'conflict-resolution 'cloud-reroute) "Progress")
+    (_ "Recommended")))
 
 (defun delib-flow--highlight-changed-heading (run)
   "Highlight the most relevant changed heading for RUN in the current buffer."
@@ -947,8 +945,7 @@
     (dolist (section
              (if delib-flow-control-focus-mode
                  '("Now")
-               '("Now" "Current result" "Filing preview" "Next actions"
-                 "Current context")))
+               '("Now" "Recommended" "Progress" "Current result")))
       (when-let ((position (delib-flow--section-heading-position section)))
         (goto-char position)
         (org-show-subtree)))
@@ -957,35 +954,17 @@
                   (delib-flow--section-heading-position
                    (cond
                     ((delib-flow--run-in-flight-p run) "Current result")
-                    ((or (delib-flow--inspect-review-pending-p run)
-                         (delib-flow--match-review-pending-p run))
-                     "Current result")
-                    ((delib-flow--filing-preview-visible-p run)
-                     "Filing preview")
-                    (t "Next actions")))))
+                    ((memq (delib-flow--run-phase run)
+                           '(queue-review selected-item filing
+                                          conflict-resolution cloud-reroute))
+                     "Progress")
+                    (t "Recommended")))))
         (goto-char position)
         (org-show-subtree)))
-    (when (delib-flow--filing-preview-visible-p run)
-      (dolist (heading
-               '("What to do next"
-                 "Current filing plan"
-                 "Selected action workspace"
-                 "Selected waiting-for workspace"
-                 "Selected note workspace"
-                 "Selected project workspace"
-                 "Filing actions"
-                 "Staged content preview"))
-        (when-let ((position (delib-flow--heading-position heading)))
-          (goto-char position)
-          (org-show-subtree))))
-    (when (delib-flow--filing-selection-active-p run)
-      (when-let ((position (delib-flow--heading-position "Artifact selection")))
-        (goto-char position)
-        (org-show-subtree)))
-    (when (delib-flow--filing-conflict-resolution-active-p run)
-      (when-let ((position (delib-flow--heading-position "Conflict resolution")))
-        (goto-char position)
-        (org-show-subtree)))))
+    (when-let ((position (delib-flow--heading-position
+                          (delib-flow--changed-heading-for-run run))))
+      (goto-char position)
+      (org-show-subtree))))
 
 (defun delib-flow--apply-focused-filing-workspace-visibility-policy (run)
   "Apply visibility policy for the focused filing workspace for RUN."
@@ -1009,7 +988,10 @@
 
 (defun delib-flow--goto-section (heading)
   "Move point to HEADING when present."
-  (when-let ((position (or (delib-flow--section-heading-position heading)
+  (when-let ((position (or (delib-flow--section-heading-position
+                            (delib-flow--normalize-surface-heading heading))
+                           (delib-flow--heading-position
+                            (delib-flow--normalize-surface-heading heading))
                            (delib-flow--heading-position heading))))
     (goto-char position)
     t))
@@ -1110,7 +1092,11 @@
   "Return the control buffer freshly rendered from RUN.
 
 When ANCHOR-SECTION is non-nil, move point to that top-level section."
-  (delib-flow--render-surface-buffer 'cockpit run anchor-section))
+  (delib-flow--render-surface-buffer
+   'cockpit
+   run
+   (and anchor-section
+        (delib-flow--normalize-surface-heading anchor-section))))
 
 (defun delib-flow--render-filing-workspace-buffer (run &optional anchor-section)
   "Return the focused filing workspace freshly rendered from RUN."
@@ -1343,6 +1329,13 @@ the current local heading."
       "Keep only the active decision loop visible on a narrow screen."
       #'delib-flow-toggle-focus-mode)
      (delib-flow--menu-entry
+      (if (and delib-flow--active-run
+               (delib-flow--debug-visibility-enabled-p delib-flow--active-run))
+          "Hide Debug Actions"
+        "Show Debug Actions")
+      "Toggle whether debug-only actions are shown in the cockpit."
+      #'delib-flow-toggle-debug-visibility)
+     (delib-flow--menu-entry
       "Refresh Buffer"
       "Rerender the cockpit from the current run state."
       #'delib-flow-refresh-buffer)
@@ -1499,9 +1492,11 @@ the current local heading."
   "Return local context-menu entries for RUN based on point location."
   (if (eq delib-flow--surface-kind 'filing-workspace)
       (delib-flow--focused-filing-workspace-menu-entries run)
-    (let ((section (or (delib-flow--current-top-level-section-at-point)
-                       "Now")))
-      (if (and (equal section "Filing preview")
+    (let ((section
+           (delib-flow--normalize-surface-heading
+            (or (delib-flow--current-top-level-section-at-point)
+                "Now"))))
+      (if (and (equal section "Progress")
                (delib-flow--selected-family-workspace-at-point))
           (delib-flow--context-menu-builtins
            (append
@@ -1570,7 +1565,7 @@ the current local heading."
           "Jump to the active run subtree in the audit log."
           #'delib-flow-open-audit-run))))
 
-(defun delib-flow--context-menu-details-entries ()
+(defun delib-flow--context-menu-details-entries (&optional _run)
   "Return local context-menu entries for the Details section."
   (list
    (delib-flow--menu-entry
@@ -1592,15 +1587,15 @@ the current local heading."
 
 (defconst delib-flow--context-menu-section-dispatch
   '(("Now" . delib-flow--context-menu-now-entries)
+    ("Recommended" . delib-flow--context-menu-next-actions-entries)
+    ("Progress" . delib-flow--filing-preview-general-menu-entries)
     ("Current result" . delib-flow--context-menu-current-result-entries)
-    ("Filing preview" . delib-flow--filing-preview-general-menu-entries)
-    ("Next actions" . delib-flow--context-menu-next-actions-entries)
-    ("Current context" . delib-flow--context-menu-current-context-entries)
     ("Details" . delib-flow--context-menu-details-entries))
   "Mapping from top-level sections to context-menu entry builders.")
 
 (defun delib-flow--context-menu-entries (run section)
   "Return local context-menu entries for RUN in SECTION."
+  (setq section (delib-flow--normalize-surface-heading section))
   (delib-flow--context-menu-builtins
    (if-let ((builder (cdr (assoc section delib-flow--context-menu-section-dispatch))))
        (funcall builder run)
@@ -1608,11 +1603,12 @@ the current local heading."
 
 (defun delib-flow--local-action-entries-for-surface (run section)
   "Return local action entries for RUN at SECTION on the current surface."
+  (setq section (delib-flow--normalize-surface-heading section))
   (cond
    ((eq delib-flow--surface-kind 'filing-workspace)
     (delib-flow--focused-filing-workspace-menu-entries run))
    ((and (derived-mode-p 'delib-flow-control-mode)
-         (equal section "Filing preview"))
+         (equal section "Progress"))
     (delib-flow--context-menu-entries-for-current-point run))
    (t
     (delib-flow--context-menu-entries run section))))
@@ -1644,9 +1640,12 @@ the current local heading."
   (unless (delib-flow--focused-filing-workspace-p delib-flow--active-run)
     (user-error "No focused filing workspace is available for the current run"))
   (setq delib-flow--active-run
-        (delib-flow--set-filing-workspace-suppressed
-         (delib-flow--set-filing-workspace-open delib-flow--active-run t)
-         nil))
+        (delib-flow--set-travel-field
+         (delib-flow--set-filing-workspace-suppressed
+          (delib-flow--set-filing-workspace-open delib-flow--active-run t)
+          nil)
+         :return-anchor
+         "Recommended"))
   (pop-to-buffer
    (delib-flow--render-filing-workspace-buffer delib-flow--active-run)))
 
@@ -1664,9 +1663,12 @@ the current local heading."
   (unless delib-flow--active-run
     (user-error "No active delib-flow run"))
   (setq delib-flow--active-run
-        (delib-flow--set-filing-workspace-suppressed
-         (delib-flow--set-filing-workspace-open delib-flow--active-run nil)
-         t))
+        (delib-flow--set-travel-field
+         (delib-flow--set-filing-workspace-suppressed
+          (delib-flow--set-filing-workspace-open delib-flow--active-run nil)
+          t)
+         :return-anchor
+         "Recommended"))
   (when (buffer-live-p (delib-flow--filing-workspace-buffer))
     (kill-buffer (delib-flow--filing-workspace-buffer)))
   (pop-to-buffer
@@ -2131,6 +2133,12 @@ the current local heading."
                (if run
                    (delib-flow--current-blockage-text run)
                  "unknown")))
+      (when run
+        (princ
+         (format "Debug actions visible: %s\n\n"
+                 (if (delib-flow--debug-visibility-enabled-p run)
+                     "yes"
+                   "no"))))
       (princ "Local actions here:\n")
       (princ
        (if run
@@ -2188,6 +2196,21 @@ the current local heading."
       (message "Delib-Flow focus mode %s"
                (if delib-flow-control-focus-mode "enabled" "disabled")))))
 
+(defun delib-flow-toggle-debug-visibility ()
+  "Toggle whether debug-only cockpit actions are visible."
+  (interactive)
+  (unless delib-flow--active-run
+    (user-error "No active delib-flow run"))
+  (setq delib-flow--active-run
+        (delib-flow--set-debug-visibility
+         delib-flow--active-run
+         (not (delib-flow--debug-visibility-enabled-p delib-flow--active-run))))
+  (delib-flow--rerender-active-run-buffer)
+  (message "Delib-Flow debug actions %s"
+           (if (delib-flow--debug-visibility-enabled-p delib-flow--active-run)
+               "visible"
+             "hidden")))
+
 (defun delib-flow-abort-run ()
   "Abort the active delib-flow run and close the control buffer."
   (interactive)
@@ -2231,6 +2254,22 @@ the current local heading."
       (delib-flow--run-stage-in-cloud run stage-id)
     (delib-flow--run-stage-locally run stage-id)))
 
+(defun delib-flow--post-stage-travel-state (run stage-id)
+  "Return RUN with travel state adjusted after STAGE-ID."
+  (cond
+   ((memq stage-id '(decide-cloud-pass sanitize-for-cloud approve-cloud-send
+                     retry-rerouted-cloud-stage run-cloud-stage
+                     resolve-cloud-failure approve-candidate-reintegration))
+    (delib-flow--sync-cloud-travel-state run stage-id))
+   ((eq stage-id 'file-approved-outputs)
+    (delib-flow--sync-conflict-travel-state run stage-id))
+   ((eq stage-id 'resolve-filing-conflict)
+    (delib-flow--travel-clear-detour run))
+   ((eq stage-id 'reject-draft-filing-artifact)
+    (delib-flow--apply-rejection-reason-routing run))
+   (t
+    run)))
+
 (defconst delib-flow--stage-command-runner-alist
   '((execute-local-stage . delib-flow--execute-local-stage)
     (run-stage-locally . delib-flow--run-stage-locally)
@@ -2266,7 +2305,9 @@ before the stage executes."
          (runner (delib-flow--stage-command-runner stage-id)))
     (setq delib-flow--active-run
           (delib-flow--seed-actions
-           (funcall runner prepared-run stage-id)))
+           (delib-flow--post-stage-travel-state
+            (funcall runner prepared-run stage-id)
+            stage-id)))
     (delib-flow--rerender-after-stage-command stage-id)))
 
 (defun delib-flow--apply-review-command
@@ -2839,6 +2880,187 @@ Require the selected artifact to have EXPECTED-KIND or raise ERROR-MESSAGE."
   (interactive)
   (delib-flow--run-stage-command 'approve-candidate-reintegration))
 
+(defconst delib-flow--rejection-reasons
+  '(("Discard item" . discard-item)
+    ("Regenerate item" . regenerate-item)
+    ("Needs more support" . needs-more-support)
+    ("Wrong project context" . wrong-project-context)
+    ("Wrong filing target" . wrong-filing-target))
+  "Supported rejection reasons for draft filing artifacts.")
+
+(defconst delib-flow--rejection-routing-specs
+  '((discard-item
+     :return-anchor "Progress"
+     :workspace-open nil
+     :surface cockpit
+     :reason "Rejected for discard. Return to the queue hub and continue with another item."
+     :decision "Item discarded. Return to the queue hub and choose another draft.")
+    (regenerate-item
+     :return-anchor "Recommended"
+     :workspace-open nil
+     :surface cockpit
+     :reason "Rejected for regeneration. Return to artifact generation and create a better draft."
+     :decision "Item rejected for regeneration. Run another artifact-generation pass before reviewing the queue again.")
+    (needs-more-support
+     :return-anchor "Selected item"
+     :workspace-open t
+     :surface filing-workspace
+     :reason "Rejected because the selected item needs more support before approval."
+     :decision "Item needs more support. Stay with the selected item and gather stronger evidence before approving again.")
+    (wrong-project-context
+     :return-anchor "Now"
+     :workspace-open nil
+     :surface cockpit
+     :reason "Rejected because the project context is wrong. Return to project and reference review."
+     :decision "Item rejected due to project-context drift. Recheck the matched project and supporting references before drafting again.")
+    (wrong-filing-target
+     :return-anchor "Selected item"
+     :workspace-open t
+     :surface filing-workspace
+     :reason "Rejected because the filing target is wrong. Reopen the selected item and adjust the target preview."
+     :decision "Item rejected due to the wrong filing target. Reopen the selected item, fix the target, then approve again.")))
+
+(defun delib-flow--rejection-routing-spec (reason)
+  "Return routing plist for rejection REASON."
+  (cdr (assq reason delib-flow--rejection-routing-specs)))
+
+(defun delib-flow--travel-selected-item-target (run)
+  "Return compact selected-item travel target text for RUN."
+  (when-let ((item (delib-flow--selected-item run)))
+    (or (plist-get item :title)
+        (plist-get item :text)
+        (plist-get item :target-file)
+        "selected item")))
+
+(defun delib-flow--travel-return-surface (run)
+  "Return operator-facing return surface for RUN."
+  (if (or (delib-flow--filing-workspace-open-p run)
+          (eq (delib-flow--run-phase run) 'selected-item))
+      'filing-workspace
+    'cockpit))
+
+(defun delib-flow--sync-cloud-travel-state (run stage-id)
+  "Return RUN with cloud-travel state synced after STAGE-ID."
+  (let* ((routing (delib-flow--run-routing run))
+         (updated
+          (if (delib-flow--cloud-detour-active-p run)
+              (let ((detour (delib-flow--travel-enter-detour
+                             run 'cloud "Cloud reroute is active.")))
+                (setq detour (delib-flow--set-travel-field
+                              detour :origin-stage stage-id))
+                (setq detour (delib-flow--set-travel-field
+                              detour :origin-action stage-id))
+                (setq detour (delib-flow--set-travel-field
+                              detour :return-surface
+                              (delib-flow--travel-return-surface run)))
+                (setq detour (delib-flow--set-travel-field
+                              detour :selected-item-target
+                              (delib-flow--travel-selected-item-target run)))
+                detour)
+            (delib-flow--travel-clear-detour run))))
+    (setq updated
+          (delib-flow--set-travel-field
+           updated :cloud-sanitized-status
+           (or (plist-get routing :sanitization-status)
+               (when (plist-get (plist-get updated :working-context)
+                                :cloud-sanitized-context)
+                 'prepared))))
+    (setq updated
+          (delib-flow--set-travel-field
+           updated :cloud-result-status
+           (cond
+            ((plist-get (plist-get updated :working-context) :cloud-returned-context)
+             'returned)
+            ((plist-get routing :cloud-failure-stage)
+             'failed)
+            (t nil))))
+    (delib-flow--set-travel-field
+     updated :cloud-reintegration-status
+     (plist-get routing :reintegration-status))))
+
+(defun delib-flow--sync-conflict-travel-state (run stage-id)
+  "Return RUN with filing-conflict travel state synced after STAGE-ID."
+  (if-let ((conflict (car (plist-get (plist-get run :filing) :conflicts))))
+      (let ((updated (delib-flow--travel-enter-detour
+                      run 'conflict "Deterministic filing conflicts need resolution.")))
+        (setq updated (delib-flow--set-travel-field
+                       updated :origin-stage stage-id))
+        (setq updated (delib-flow--set-travel-field
+                       updated :origin-action stage-id))
+        (setq updated (delib-flow--set-travel-field
+                       updated :return-surface
+                       (delib-flow--travel-return-surface run)))
+        (setq updated (delib-flow--set-travel-field
+                       updated :selected-item-target
+                       (delib-flow--travel-selected-item-target run)))
+        (setq updated (delib-flow--set-travel-field
+                       updated :conflict-target
+                       (or (plist-get conflict :target)
+                           (plist-get conflict :item-text)
+                           "unknown target")))
+        (delib-flow--set-travel-field
+         updated :conflict-action-summary
+         (or (plist-get conflict :reason)
+             "Choose a new target, merge, retry filing, or abandon the item.")))
+    run))
+
+(defun delib-flow--choose-rejection-reason ()
+  "Prompt for and return a rejection reason symbol."
+  (if noninteractive
+      'discard-item
+    (let* ((labels (mapcar #'car delib-flow--rejection-reasons))
+           (choice (completing-read "Reject reason: " labels nil t)))
+      (or (cdr (assoc choice delib-flow--rejection-reasons))
+          'discard-item))))
+
+(defun delib-flow--prepare-reject-draft-run (run)
+  "Return RUN prepared for a draft rejection."
+  (let* ((reason (delib-flow--choose-rejection-reason))
+         (spec (delib-flow--rejection-routing-spec reason))
+         (updated (delib-flow--set-travel-field
+                   (delib-flow--set-travel-field
+                    (delib-flow--set-travel-field
+                     (delib-flow--set-travel-field
+                      run
+                      :last-rejection-reason
+                      reason)
+                     :origin-action 'reject-draft-filing-artifact)
+                    :origin-stage 'reject-draft-filing-artifact)
+                   :selected-item-target
+                   (delib-flow--travel-selected-item-target run))))
+    (setq updated
+          (delib-flow--set-travel-field
+           updated :return-surface
+           (or (plist-get spec :surface)
+               (delib-flow--travel-return-surface run))))
+    (delib-flow--set-travel-field
+     updated :reroute-reason
+     (or (plist-get spec :reason)
+         (symbol-name reason)))))
+
+(defun delib-flow--apply-rejection-reason-routing (run)
+  "Return RUN adjusted to the stored rejection-reason route."
+  (if-let* ((reason (plist-get (delib-flow--run-travel run) :last-rejection-reason))
+            (spec (delib-flow--rejection-routing-spec reason)))
+      (let ((updated (delib-flow--set-filing-workspace-open
+                      run
+                      (plist-get spec :workspace-open))))
+        (setq updated
+              (delib-flow--set-travel-field
+               updated :return-anchor
+               (plist-get spec :return-anchor)))
+        (setq updated
+              (delib-flow--set-travel-field
+               updated :return-surface
+               (or (plist-get spec :surface)
+                   (delib-flow--travel-return-surface updated))))
+        (plist-put
+         updated :session
+         (plist-put (delib-flow--run-session updated)
+                    :current-decision
+                    (plist-get spec :decision))))
+    run))
+
 (defun delib-flow-action-integrate-into-source ()
   "Execute the integrate-into-source stage for the active run."
   (interactive)
@@ -2849,7 +3071,9 @@ Require the selected artifact to have EXPECTED-KIND or raise ERROR-MESSAGE."
   (interactive)
   (delib-flow--run-stage-command
    'reject-draft-filing-artifact
-   #'delib-flow--validate-filing-selection-entry))
+   (lambda (run)
+     (delib-flow--prepare-reject-draft-run
+      (delib-flow--validate-filing-selection-entry run)))))
 
 (defun delib-flow-choose-filing-selection ()
   "Choose a valid filing artifact selection with completion."
@@ -3654,16 +3878,24 @@ Require the selected artifact to have EXPECTED-KIND or raise ERROR-MESSAGE."
     (let* ((selected-item (condition-case nil
                               (delib-flow--selected-filing-item run)
                             (error nil)))
+           (priority
+            (if (and (delib-flow--project-flow-active-p run)
+                     (delib-flow--approved-project-package-p run)
+                     (> (length (delib-flow--project-outside-ready-items run)) 0)
+                     (delib-flow--selected-project-package-child-needs-review-p run))
+                39
+              88))
            (action
             (delib-flow--make-action
              'select-approved-filing-actions
              (cond
               ((and (delib-flow--project-flow-active-p run)
+                    (delib-flow--approved-project-package-p run))
+               "Approve Another Project Item")
+              ((and (delib-flow--project-flow-active-p run)
                     (or (eq (plist-get selected-item :kind) 'project)
                         (delib-flow--project-package-root-for-filing run)))
-               (if (delib-flow--stage-executed-p run 'select-approved-filing-actions)
-                   "Refresh Approved Package"
-                 "Approve Package"))
+               "Approve Package")
               ((delib-flow--stage-executed-p run 'select-approved-filing-actions)
                "Approve Another Filing Artifact")
               (t
@@ -3671,7 +3903,7 @@ Require the selected artifact to have EXPECTED-KIND or raise ERROR-MESSAGE."
              'available
              nil
              #'delib-flow-action-select-approved-filing-actions
-             88)))
+             priority)))
       (if-let ((warning (delib-flow--selected-filing-item-draft-warning run)))
           (plist-put
            (plist-put action :status 'blocked)

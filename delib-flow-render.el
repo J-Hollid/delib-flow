@@ -22,10 +22,9 @@
 
 (defconst delib-flow--section-renderer-alist
   '(("Now" . delib-flow--render-now-section)
-    ("Next actions" . delib-flow--render-valid-next-actions-section)
+    ("Recommended" . delib-flow--render-recommended-section)
+    ("Progress" . delib-flow--render-progress-section)
     ("Current result" . delib-flow--render-current-result-section)
-    ("Current context" . delib-flow--render-working-context-section)
-    ("Filing preview" . delib-flow--render-filing-preview-section)
     ("Details" . delib-flow--render-details-section))
   "Renderer functions keyed by section title.")
 
@@ -144,6 +143,7 @@
              (run-cloud-stage . "Execute the configured cloud stage.")
              (approve-candidate-reintegration . "Approve reintegration of returned cloud output.")
              (integrate-into-source . "Fold accepted context back into the source working state.")
+             (toggle-debug-visibility . "Show or hide debug-only cockpit actions while keeping the underlying debug commands callable.")
              (reject-draft-filing-artifact . "Choose which single draft filing artifact to reject from this run.")
              (select-approved-filing-actions . "Choose which single filing artifact to approve next.")
              (file-approved-outputs . "Write the approved artifact to deterministic targets.")
@@ -357,10 +357,14 @@
         "One project package is selected. Draft it before drifting into broader recovery or queue work.")
        (t
         "A project package is active. Continue the local project loop instead of the broader cockpit flow."))
-    (if-let ((action (delib-flow--recommended-action run)))
+    (if-let ((reason-text (or (delib-flow--latest-rejection-route-text run)
+                              (delib-flow--conflict-resolution-consequence-text run)
+                              (delib-flow--cloud-detour-consequence-text run))))
+        reason-text
+      (if-let ((action (delib-flow--recommended-action run)))
         (or (plist-get action :reason)
             "This is the highest-priority currently legal workflow pass.")
-      "The run currently has no workflow pass available beyond refresh or abort.")))
+        "The run currently has no workflow pass available beyond refresh or abort."))))
 
 (defun delib-flow--recommended-alternatives-text (run)
   "Return compact alternative-action text for RUN."
@@ -524,6 +528,14 @@ DEFAULT-HEADING is used when no predicate matches."
     (manual-project-match . "Project context changed for downstream drafting and filing.")
     (discover-reference-material . "Relevant context changed for downstream extraction and note suggestions.")
     (filter-reference-material . "Relevant context changed for downstream extraction and note suggestions.")
+    (decide-cloud-pass . "A cloud reroute path was selected and now needs sanitization review.")
+    (sanitize-for-cloud . "The cloud package changed and now needs operator review before sending.")
+    (approve-cloud-send . "The reviewed cloud package was approved for execution.")
+    (run-cloud-stage . "The cloud reroute path advanced and may now need reintegration or recovery.")
+    (resolve-cloud-failure . "Cloud recovery changed the reroute path and follow-up action set.")
+    (approve-candidate-reintegration . "The cloud-returned result was approved for reintegration into the local run.")
+    (reject-draft-filing-artifact . "One draft artifact was rejected and the run was rerouted according to the chosen reason.")
+    (resolve-filing-conflict . "Conflict resolution changed the filing path and returned control to the local filing loop.")
     (find-support-for-selected-action . "Focused support changed for the selected artifact.")
     (find-support-for-selected-waiting-for . "Focused support changed for the selected artifact.")
     (find-support-for-selected-reference-note . "Focused support changed for the selected artifact.")
@@ -775,11 +787,12 @@ DEFAULT-HEADING is used when no predicate matches."
 (defun delib-flow--decision-strip-text (run)
   "Return compact decision-strip text for RUN."
   (format
-   "- Run status: %s\n- Current stage: %s\n- Blocked: %s\n- Recommended next step: %s\n- Active project: %s\n- Active filing item: %s\n- Planned target preview: %s"
+   "- Run status: %s\n- Current stage: %s\n- Blocked: %s\n- Recommended next step: %s\n- Active loop: %s\n- Active project: %s\n- Active filing item: %s\n- Planned target preview: %s"
    (delib-flow--summary-field-text run :run-status)
    (delib-flow--summary-field-text run :current-stage)
    (delib-flow--compact-summary-field-text run :blocked)
    (delib-flow--compact-summary-field-text run :recommended-next-step)
+   (delib-flow--summary-field-text run :active-loop)
    (delib-flow--compact-summary-field-text run :active-project)
    (delib-flow--compact-summary-field-text run :active-filing-item)
    (delib-flow--summary-field-text run :planned-target-preview)))
@@ -801,6 +814,306 @@ DEFAULT-HEADING is used when no predicate matches."
   (if-let ((actions (delib-flow--quick-actions run)))
       (delib-flow--render-action-lines actions)
     "No quick workflow actions are currently available."))
+
+(defconst delib-flow--debug-action-ids
+  '(open-latest-stage-inspection debug-start-scenario debug-start-walkthrough)
+  "Action ids treated as debug-only in the cockpit.")
+
+(defconst delib-flow--recovery-action-ids
+  '(resolve-cloud-failure
+    approve-candidate-reintegration
+    integrate-into-source
+    resolve-filing-conflict
+    restart-cloud-path
+    retry-rerouted-cloud-stage
+    run-cloud-stage
+    sanitize-for-cloud
+    approve-cloud-send
+    decide-cloud-pass)
+  "Action ids treated as recovery or detour actions.")
+
+(defconst delib-flow--local-secondary-action-ids
+  '(find-support-for-selected-action
+    find-support-for-selected-waiting-for
+    find-support-for-selected-reference-note
+    find-support-for-selected-project
+    choose-support-for-selected-reference-note
+    clear-selected-reference-note-support
+    edit-selected-reference-note-title
+    choose-reference-note-template
+    edit-selected-reference-note-target-path
+    edit-selected-reference-note-draft-body
+    refresh-selected-reference-note-draft-body
+    edit-selected-reference-note-source-highlights
+    refresh-selected-reference-note-source-highlights
+    edit-selected-reference-note-related-material
+    refresh-selected-reference-note-related-material
+    edit-selected-reference-note-reuse-angle
+    refresh-selected-reference-note-reuse-angle
+    choose-saved-selected-reference-note-draft
+    restore-previous-selected-reference-note-draft
+    choose-saved-selected-action-draft
+    restore-previous-selected-action-draft
+    choose-saved-selected-waiting-for-draft
+    restore-previous-selected-waiting-for-draft
+    choose-saved-selected-project-draft
+    restore-previous-selected-project-draft)
+  "Action ids treated as local secondary work.")
+
+(defconst delib-flow--local-primary-action-ids
+  '(draft-selected-action
+    draft-selected-waiting-for
+    draft-selected-reference-note
+    draft-selected-project
+    extract-actions
+    extract-waiting-for
+    suggest-reference-notes
+    propose-new-project
+    select-approved-filing-actions
+    file-approved-outputs
+    reject-draft-filing-artifact
+    manual-project-match
+    match-project
+    discover-reference-material
+    filter-reference-material)
+  "Action ids treated as local primary work.")
+
+(defun delib-flow--action-role (run action)
+  "Return role symbol for ACTION in RUN."
+  (let ((id (plist-get action :id)))
+    (cond
+     ((memq id delib-flow--debug-action-ids) 'debug)
+     ((eq id 'abort-run) 'destructive)
+     ((eq id 'refresh-buffer) 'global)
+     ((memq id delib-flow--recovery-action-ids) 'recovery)
+     ((memq id delib-flow--local-secondary-action-ids) 'local-secondary)
+     ((memq id delib-flow--local-primary-action-ids) 'local-primary)
+     (t 'global))))
+
+(defun delib-flow--actions-for-role (run role)
+  "Return visible actions for RUN in ROLE."
+  (seq-filter
+   (lambda (action)
+     (and (eq (plist-get action :status) 'available)
+          (eq (delib-flow--action-role run action) role)
+          (or (not (eq role 'debug))
+              (delib-flow--debug-visibility-enabled-p run))))
+   (delib-flow--sorted-actions run)))
+
+(defun delib-flow--render-role-group (heading actions empty-text)
+  "Return structured block for HEADING with ACTIONS or EMPTY-TEXT."
+  (delib-flow--render-structured-block
+   "***"
+   heading
+   nil
+   (if actions
+       (delib-flow--render-action-lines actions)
+     empty-text)))
+
+(defun delib-flow--checklist-lines (run)
+  "Return rendered progress checklist lines for RUN."
+  (mapconcat
+   (lambda (item)
+     (format "- [%s] %s"
+             (if (plist-get item :done) "x" " ")
+             (plist-get item :label)))
+   (delib-flow--progress-checklist run)
+   "\n"))
+
+(defun delib-flow--queue-summary-text (run)
+  "Return compact queue summary text for RUN."
+  (let ((queue (delib-flow--queue-summary run)))
+    (format "- Available: %d\n- Selected: %d\n- Approved: %d\n- Rejected: %d\n- Staged: %d\n- Conflicts: %d"
+            (plist-get queue :available)
+            (plist-get queue :selected)
+            (plist-get queue :approved)
+            (plist-get queue :rejected)
+            (plist-get queue :staged)
+            (plist-get queue :conflicts))))
+
+(defun delib-flow--selected-item-summary-text (run)
+  "Return compact selected-item summary text for RUN."
+  (if-let ((item (delib-flow--selected-item run)))
+      (string-join
+       (delq nil
+             (list
+              (format "- Family: %s" (or (delib-flow--selected-item-family run) 'unknown))
+              (format "- Item: %s %s"
+                      (or (ignore-errors (delib-flow--draft-item-keyword item)) "ITEM")
+                      (or (plist-get item :text)
+                          (plist-get item :title)
+                          "Untitled"))
+              (format "- Target preview: %s"
+                      (delib-flow--planned-target-summary-text run))
+              (when-let ((reason-text (delib-flow--latest-rejection-route-text run)))
+                (format "- Routing note: %s" reason-text))))
+       "\n")
+    "No selected item is active right now."))
+
+(defun delib-flow--rejection-reason-label (reason)
+  "Return operator-facing label for rejection REASON."
+  (replace-regexp-in-string "-" " " (symbol-name reason)))
+
+(defun delib-flow--latest-rejection-route-text (run)
+  "Return recent rejection route text for RUN, or nil."
+  (when (eq (plist-get (delib-flow--latest-stage-entry run) :stage-id)
+            'reject-draft-filing-artifact)
+    (when-let* ((reason (plist-get (delib-flow--run-travel run) :last-rejection-reason))
+                (spec (delib-flow--rejection-routing-spec reason))
+                (text (plist-get spec :reason)))
+      text)))
+
+(defun delib-flow--conflict-resolution-consequence-text (run)
+  "Return conflict-resolution consequence text for RUN, or nil."
+  (when (eq (plist-get (delib-flow--run-stage-history run) :latest-stage)
+            'resolve-filing-conflict)
+    (let ((travel (delib-flow--run-travel run)))
+      (format "Conflict resolution updated `%s` and returned control toward %s."
+              (or (plist-get travel :conflict-target) "the filing target")
+              (or (plist-get travel :return-anchor) "the local filing loop")))))
+
+(defun delib-flow--cloud-detour-consequence-text (run)
+  "Return cloud-detour consequence text for RUN, or nil."
+  (let ((stage-id (plist-get (delib-flow--run-stage-history run) :latest-stage)))
+    (when (memq stage-id '(decide-cloud-pass sanitize-for-cloud approve-cloud-send
+                           run-cloud-stage resolve-cloud-failure
+                           approve-candidate-reintegration))
+      (let ((travel (delib-flow--run-travel run)))
+        (format "Cloud detour status is now sanitized=%s, result=%s, reintegration=%s."
+                (or (plist-get travel :cloud-sanitized-status) 'not-ready)
+                (or (plist-get travel :cloud-result-status) 'not-returned)
+                (or (plist-get travel :cloud-reintegration-status) 'pending))))))
+
+(defun delib-flow--detour-summary-text (run)
+  "Return detour summary text for RUN, or nil."
+  (let* ((summary (delib-flow--travel-summary run))
+         (travel (delib-flow--run-travel run))
+         (kind (plist-get travel :detour-kind)))
+    (when kind
+      (string-join
+       (delq nil
+             (list
+              (format "- Detour: %s" kind)
+              (format "- Origin phase: %s"
+                      (or (plist-get summary :origin-phase) "unknown"))
+              (when-let ((origin-stage (plist-get summary :origin-stage)))
+                (format "- Origin stage: %s"
+                        (delib-flow--stage-label origin-stage)))
+              (when-let ((origin-action (plist-get summary :origin-action)))
+                (format "- Origin action: %s" origin-action))
+              (format "- Reason: %s"
+                      (or (plist-get summary :detour-reason) "No reason recorded."))
+              (format "- Return target: %s / %s"
+                      (or (plist-get travel :return-surface) 'cockpit)
+                      (or (plist-get travel :return-anchor) "Recommended"))
+              (when-let ((target (plist-get summary :selected-item-target)))
+                (format "- Selected item target: %s" target))
+              (when (eq kind 'cloud)
+                (format "- Cloud statuses: sanitized=%s, result=%s, reintegration=%s"
+                        (or (plist-get summary :cloud-sanitized-status) 'not-ready)
+                        (or (plist-get summary :cloud-result-status) 'not-returned)
+                        (or (plist-get summary :cloud-reintegration-status) 'pending)))
+              (when (eq kind 'conflict)
+                (format "- Conflict target: %s"
+                        (or (plist-get summary :conflict-target) "unknown")))
+              (when (eq kind 'conflict)
+                (format "- Conflict action: %s"
+                        (or (plist-get summary :conflict-action-summary)
+                            "Choose a resolution path.")))
+              (when-let ((reason (plist-get summary :last-rejection-reason)))
+                (format "- Last rejection reason: %s"
+                        (delib-flow--rejection-reason-label reason)))))
+       "\n"))))
+
+(defun delib-flow--render-recommended-section (run)
+  "Return Org text for the Recommended section from RUN."
+  (string-join
+   (list
+    (delib-flow--render-structured-block
+     "***"
+     "Recommended action"
+     nil
+     (if-let ((action (delib-flow--recommended-action run)))
+         (format "%s- Reason: %s\n- Nearby alternatives: %s"
+                 (delib-flow--format-action-line action)
+                 (delib-flow--compact-summary
+                  (delib-flow--recommended-action-why-text run)
+                  (+ 12 (delib-flow--mobile-summary-limit)))
+                 (delib-flow--recommended-alternatives-text run))
+       "No recommended action is currently available."))
+    (delib-flow--render-role-group
+     "Nearby alternatives"
+     (delib-flow--recommended-alternative-actions run)
+     "No nearby alternatives are available.")
+    (delib-flow--render-role-group
+     "Local primary actions"
+     (delib-flow--actions-for-role run 'local-primary)
+     "No local primary actions are currently available.")
+    (delib-flow--render-role-group
+     "Local secondary actions"
+     (delib-flow--actions-for-role run 'local-secondary)
+     "No local secondary actions are currently available.")
+    (delib-flow--render-role-group
+     "Global actions"
+     (delib-flow--actions-for-role run 'global)
+     "No global actions are currently available.")
+    (delib-flow--render-role-group
+     "Recovery actions"
+     (delib-flow--actions-for-role run 'recovery)
+     "No recovery actions are currently available.")
+    (delib-flow--render-role-group
+     "Destructive actions"
+     (delib-flow--actions-for-role run 'destructive)
+     "No destructive actions are currently available.")
+    (when (delib-flow--debug-visibility-enabled-p run)
+      (delib-flow--render-role-group
+       "Debug actions"
+       (delib-flow--actions-for-role run 'debug)
+       "No debug actions are currently available.")))
+   "\n\n"))
+
+(defun delib-flow--render-progress-section (run)
+  "Return Org text for the Progress section from RUN."
+  (string-join
+   (delq nil
+         (list
+          (delib-flow--render-structured-block
+           "***"
+           "Checklist"
+           (format "Readiness: %s" (delib-flow--readiness-label-text run))
+           (delib-flow--checklist-lines run))
+          (delib-flow--render-structured-block
+           "***"
+           "Queue hub"
+           nil
+           (delib-flow--queue-summary-text run))
+          (delib-flow--render-structured-block
+           "***"
+           "Selected item"
+           nil
+           (delib-flow--selected-item-summary-text run))
+          (when (or (plist-get (plist-get run :filing) :draft-items)
+                    (plist-get (plist-get run :filing) :approved-items)
+                    (plist-get (plist-get run :filing) :rejected-items)
+                    (plist-get (plist-get run :filing) :conflicts)
+                    (plist-get (plist-get run :filing) :target-locations)
+                    (delib-flow--staged-content-preview-text-available-p run)
+                    (delib-flow--focused-filing-workspace-p run)
+                    (delib-flow--project-focused-filing-workspace-available-p run))
+            (delib-flow--render-structured-block
+             "***"
+             "Filing preview"
+             "Legacy filing-preview compatibility surface"
+             (delib-flow--render-filing-preview-section run)))
+          (when (delib-flow--project-flow-active-p run)
+            (delib-flow--render-valid-next-actions-section run))
+          (when-let ((detour (delib-flow--detour-summary-text run)))
+            (delib-flow--render-structured-block
+             "***"
+             "Detour return"
+             nil
+             detour))))
+   "\n\n"))
 
 (defun delib-flow--control-keys-text ()
   "Return rendered control-key help text for the Now section."
@@ -2425,6 +2738,7 @@ DEFAULT-HEADING is used when no predicate matches."
 
 (defun delib-flow--section-content (section run)
   "Return Org text for SECTION using RUN state."
+  (setq section (delib-flow--normalize-surface-heading section))
   (let ((renderer (cdr (assoc section delib-flow--section-renderer-alist))))
     (if renderer
         (funcall renderer run)
@@ -2509,42 +2823,50 @@ DEFAULT-HEADING is used when no predicate matches."
 
 (defun delib-flow--render-now-section (run)
   "Return Org text for the Now section from RUN."
-  (let* ((latest-entry (delib-flow--latest-stage-entry run))
+  (let* ((summary (delib-flow--travel-summary run))
+         (latest-entry (delib-flow--latest-stage-entry run))
          (current-entry (delib-flow--current-result-entry run)))
-    (concat
-     (format "*** Decision strip\n%s%s"
-             (delib-flow--decision-strip-text run)
-             (if-let ((extra-lines
-                       (delib-flow--now-status-extra-lines
-                        latest-entry current-entry)))
-                 (concat "\n" (string-join extra-lines "\n"))
-               ""))
-     (format "\n\n*** Recommended next pass\n%s"
-             (delib-flow--recommended-next-pass-text run))
-     (format "\n\n*** Quick actions\n%s"
-             (delib-flow--quick-actions-text run))
-     (format "\n\n*** Recovery snapshot\n%s"
-             (delib-flow--recovery-snapshot-text run))
-     (format "\n\n*** Resume guide\n%s"
-             (delib-flow--resume-guide-text run))
-     (format "\n\n*** Operator notes\n%s"
-             (delib-flow--render-editable-block-with-editor-help run 'operator-notes))
-     (format "\n\n*** Control keys\n%s"
-             (delib-flow--control-keys-text))
-     (delib-flow--render-now-optional-section
-      run
-      (delib-flow--cloud-routing-review-active-p run)
-      "Cloud routing review"
-      'cloud-routing-review)
-     (if (delib-flow--manual-project-selection-active-p run)
-         (concat "\n\n"
-                 (delib-flow--manual-project-selection-section-text run))
-       "")
-     (delib-flow--render-now-optional-section
-      run
-     (delib-flow--cloud-failure-active-p run)
-      "Cloud failure review"
-      'cloud-failure-review))))
+    (string-join
+     (delq nil
+           (list
+            (delib-flow--render-structured-block
+             "***"
+             "Phase"
+             (format "Readiness: %s" (plist-get summary :readiness-label))
+             (format "- Phase: %s\n- Goal: %s\n- Progress: %s"
+                     (plist-get summary :phase-label)
+                     (plist-get summary :phase-goal)
+                     (plist-get summary :progress-string)))
+            (delib-flow--render-structured-block
+             "***"
+             "Status"
+             nil
+             (concat
+              (format "- Run status: %s\n- Last accepted change: %s\n- Blocked: %s"
+                      (delib-flow--summary-field-text run :run-status)
+                      (delib-flow--summary-field-text run :latest-change)
+                      (delib-flow--compact-summary-field-text run :blocked))
+              (if-let ((extra-lines
+                        (delib-flow--now-status-extra-lines
+                         latest-entry current-entry)))
+                  (concat "\n" (string-join extra-lines "\n"))
+                "")))
+            (delib-flow--render-structured-block
+             "***"
+             "Decision strip"
+             nil
+             (delib-flow--decision-strip-text run))
+            (when-let ((detour (delib-flow--detour-summary-text run)))
+              (delib-flow--render-structured-block "***" "Detour" nil detour))
+            (delib-flow--render-structured-block
+             "***"
+             "Operator notes"
+             nil
+             (delib-flow--render-editable-block-with-editor-help
+              run 'operator-notes))
+            (when (delib-flow--manual-project-selection-active-p run)
+              (delib-flow--manual-project-selection-section-text run))))
+     "\n\n")))
 
 (defun delib-flow--current-result-filing-snapshot-text (run)
   "Return compact action-relevant filing snapshot from the current result for RUN."
@@ -2574,7 +2896,7 @@ DEFAULT-HEADING is used when no predicate matches."
                                                    'inspect-source))
         (match-review (delib-flow--review-record (delib-flow--run-working-context run)
                                                  'match-project)))
-    (format "*** Accepted working context\n%s\n- Inspect review state: %s\n- Match review state: %s\n- Retrieved candidate count: %s\n- Filtered context: %s\n- Cloud target stage: %s\n- Cloud-sanitized context: %s\n- Cloud failure: %s\n\n**** Cloud routing review\n%s\n\n**** Reviewed cloud package\n%s\n%s"
+    (format "*** Accepted working context\n%s\n- Inspect review state: %s\n- Match review state: %s\n- Retrieved candidate count: %s\n- Filtered context: %s\n- Cloud target stage: %s\n- Cloud-sanitized context: %s\n- Cloud-returned context: %s\n- Cloud failure: %s\n%s\n\n**** Cloud routing review\n%s\n\n**** Reviewed cloud package\n%s\n%s"
             (delib-flow--accepted-working-context-text run)
             (delib-flow--review-record-status inspect-review)
             (delib-flow--review-record-status match-review)
@@ -2584,7 +2906,11 @@ DEFAULT-HEADING is used when no predicate matches."
              (delib-flow--cloud-target-stage
               (delib-flow--run-routing run)))
             (delib-flow--cloud-context-status run)
+            (delib-flow--cloud-returned-context-status working)
             (delib-flow--cloud-failure-status run)
+            (if-let ((lines (delib-flow--default-context-detail-lines run working)))
+                (concat "\n" (string-join lines "\n"))
+              "")
             (delib-flow--render-editable-block run 'cloud-routing-review)
             (delib-flow--render-editable-block run 'cloud-package-review)
             (delib-flow--details-cloud-failure-review-text run))))
@@ -2598,17 +2924,34 @@ DEFAULT-HEADING is used when no predicate matches."
 
 (defun delib-flow--render-details-section (run)
   "Return Org text for the Details section from RUN."
-  (concat
-   (delib-flow--render-source-section run)
-   "\n"
-   (delib-flow--details-working-context-text run)
-   (delib-flow--latest-stage-input-text run)
-   "\n"
-   (delib-flow--latest-stage-raw-output-text run)
-   "\n"
-   (delib-flow--render-stage-history-section run)
-   "\n"
-   (delib-flow--details-audit-text run)))
+  (let ((phase (delib-flow--run-phase run)))
+    (concat
+     (pcase phase
+       ((or 'source-review 'project-context 'reference-context)
+        (concat
+         (delib-flow--render-source-section run)
+         "\n"
+         (delib-flow--render-working-context-section run)))
+       ((or 'artifact-generation 'queue-review 'selected-item 'filing 'conflict-resolution)
+        (delib-flow--render-filing-preview-section run))
+       ('cloud-reroute
+        (delib-flow--details-working-context-text run))
+       (_
+        (delib-flow--render-source-section run)))
+     "\n"
+     (delib-flow--latest-stage-input-text run)
+     "\n"
+     (delib-flow--latest-stage-raw-output-text run)
+     "\n"
+     (delib-flow--render-stage-history-section run)
+     "\n"
+     (delib-flow--details-audit-text run)
+     "\n"
+     (delib-flow--render-structured-block
+      "***"
+      "Key help"
+      nil
+      (delib-flow--control-keys-text)))))
 
 (defun delib-flow--project-recovery-actions (run)
   "Return secondary recovery actions for project mode in RUN."
@@ -2718,6 +3061,11 @@ DEFAULT-HEADING is used when no predicate matches."
     (when tags
       (format "  Suggested tags: %s" (string-join tags ", ")))))
 
+(defun delib-flow--draft-item-evidence-line (item)
+  "Return compact evidence line for draft ITEM, or nil when absent."
+  (when-let ((summary (delib-flow--draft-action-evidence item)))
+    (format "  Evidence: %s" summary)))
+
 (defun delib-flow--draft-item-preview-lines (item)
   "Return preview lines for draft ITEM including warnings."
   (delq nil
@@ -2725,7 +3073,8 @@ DEFAULT-HEADING is used when no predicate matches."
          (list (delib-flow--draft-item-preview-line item)
                (format "  Status: %s"
                        (delib-flow--draft-item-readiness-text item))
-               (delib-flow--draft-item-tag-suggestion-line item))
+               (delib-flow--draft-item-tag-suggestion-line item)
+               (delib-flow--draft-item-evidence-line item))
          (delib-flow--draft-item-warning-lines item)
          (delib-flow--draft-item-remediation-lines item))))
 
@@ -3382,7 +3731,9 @@ Each entry is a cons of display text and match text."
 
 (defun delib-flow--approved-item-text (run)
   "Return approved-artifact body text for RUN."
-  (let ((items (plist-get (plist-get run :filing) :approved-items)))
+  (let ((items (if (delib-flow--approved-project-package-p run)
+                   (delib-flow--project-package-included-items run)
+                 (delib-flow--approved-items run))))
     (if items
         (delib-flow--draft-item-preview-text items)
       "No approved artifacts are available yet.")))
@@ -3480,7 +3831,7 @@ Each entry is a cons of display text and match text."
                                  (if (> (length items) 1)
                                      (concat
                                       (delib-flow--draft-item-preview-text items)
-                                      "\n- Bundle state: this project package will stage the project together with the included ready child work items.\n- Next move: review the included items, then file the package when the bundle looks right.")
+                                      "\n- Bundle state: this project package will stage the project together with the currently included child work items.\n- Next move: review the included items, then file the package when the bundle looks right.")
                                    (let ((single-item (car items)))
 				     (if
 				         (eq (plist-get single-item :kind)
@@ -3759,28 +4110,38 @@ Each entry is a cons of display text and match text."
          (ready-indexes
           (delib-flow--draft-item-selection-indexes
            items
-           #'delib-flow--draft-item-ready-p))
+           (lambda (item)
+             (eq (delib-flow--draft-item-readiness item) 'ready))))
+         (warning-indexes
+          (delib-flow--draft-item-selection-indexes
+           items
+           (lambda (item)
+             (eq (delib-flow--draft-item-readiness item) 'warning))))
          (blocked-indexes
           (delib-flow--draft-item-selection-indexes
            items
            (lambda (item)
-             (not (delib-flow--draft-item-ready-p item))))))
+             (eq (delib-flow--draft-item-readiness item) 'blocked)))))
     (concat
      (format "- Pick one queue item at a time. Type exactly one ready index after `Selection:`. Example: `%s`.\n"
-             (if ready-indexes
-                 (format "Selection: %s" (car ready-indexes))
+             (if (or ready-indexes warning-indexes)
+                 (format "Selection: %s" (or (car ready-indexes)
+                                             (car warning-indexes)))
                "Selection: 1"))
      (format "- Ready to approve now: %s\n"
              (delib-flow--selection-index-list ready-indexes))
+     (format "- Advisory but approvable: %s\n"
+             (delib-flow--selection-index-list warning-indexes))
      (format "- Needs fixes or rejection first: %s\n"
              (delib-flow--selection-index-list blocked-indexes))
      "- Press `s` or run `M-x delib-flow-choose-filing-selection` to choose from valid queue items with completion.\n"
      "- Multiple indexes such as `1, 3` are invalid here.\n"
      "- Add optional text under `Notes:` if you want the reason kept with this approval or rejection.\n"
+     "- Advisory queue items are weaker than fully ready ones; draft or verify them first when possible.\n"
      (if (delib-flow--project-flow-active-p run)
          (if (delib-flow--approved-project-package-p run)
-             "- The selected project package is approved. Run `File Package` to stage the whole bundle, or keep refining the project loop before filing."
-           "- Select the project row to approve the drafted project bundle together with its ready child work items. Use the local project workspace actions instead of the broader cockpit queue.")
+             "- The selected project package is approved. Run `Approve Another Project Item` to add one more extracted item, or run `File Package` to stage the current included bundle. Reference notes can also be drafted before filing the project."
+           "- Project child items stay outside the package until you approve them. Select the project row to approve the package shell, or select a child row to add only that item into the package.")
        (if (plist-get (plist-get run :filing) :approved-items)
            "- Run `Approve Another Filing Artifact` to approve another ready queue item, or run `File Approved Outputs` to stage the approved item now."
          "- Run `Select Approved Filing Actions` to approve the chosen ready item, or run `Reject Draft Filing Artifact` if you want to discard it instead.")))))
@@ -3856,9 +4217,11 @@ Each entry is a cons of display text and match text."
 
 (defun delib-flow--planned-file-preview-items (run)
   "Return filing items that should drive deterministic target preview for RUN."
-  (or (delib-flow--approved-items run)
-      (and (delib-flow--project-flow-active-p run)
+  (or (and (delib-flow--approved-project-package-p run)
            (delib-flow--project-package-included-items run))
+      (delib-flow--approved-items run)
+      (and (delib-flow--project-flow-active-p run)
+	   (delib-flow--project-package-included-items run))
       (and (delib-flow--filing-selection-active-p run)
            (delib-flow--preview-selected-filing-items run))))
 
@@ -3885,8 +4248,10 @@ Each entry is a cons of display text and match text."
          (delib-flow--project-package-root-for-filing run))
     "If you file now, delib-flow will stage the active project package bundle into these targets.")
    ((delib-flow--preview-selected-filing-items run)
-    (if (delib-flow--project-package-selection-p run (delib-flow--selected-filing-item run))
-        "If you approve the currently selected project package, delib-flow will file the project and its ready child work into these targets."
+    (if (and (delib-flow--project-flow-active-p run)
+             (or (delib-flow--project-package-selection-p run (delib-flow--selected-filing-item run))
+                 (delib-flow--project-package-bundle-child-p (delib-flow--selected-filing-item run))))
+        "If you approve the current project selection, delib-flow will file the project together with the items currently included in that package preview."
       "If you approve the currently selected queue item, it will file to these targets."))
    ((delib-flow--non-empty-string-p
      (delib-flow--filing-selection-value run))
@@ -4143,16 +4508,16 @@ Each entry is a cons of display text and match text."
      :resume "review targets below, then file it or approve another item."
      :state counts)
     (reject-draft-filing-artifact
-     :consequence "one queue item was removed from this run."
-     :resume "choose another item or run another drafting pass."
+     :consequence delib-flow--latest-rejection-route-text
+     :resume "follow the rejection route, then continue from the queue or selected-item workspace."
      :state counts)
     (file-approved-outputs
      :consequence "target buffers were staged and opened, but not saved."
      :resume "inspect the staged targets, save if correct, or continue drafting."
      :state approved-only)
     (resolve-filing-conflict
-     :consequence "conflict handling changed the approved item or retry path."
-     :resume "retry filing or review the updated approved item.")
+     :consequence delib-flow--conflict-resolution-consequence-text
+     :resume "retry filing or review the updated approved item in the returned workspace.")
     (extract-actions
      :consequence "this stage refreshed the filing queue."
      :resume "choose one ready item, approve it, then review where it will go."
@@ -4192,13 +4557,17 @@ Each entry is a cons of display text and match text."
   (if-let* ((entry (delib-flow--latest-stage-entry run))
             (stage-id (plist-get entry :stage-id))
             (spec (delib-flow--filing-loop-stage-spec stage-id)))
-      (string-join
-       (delq nil
-             (list
-              (format "- Local consequence: %s" (plist-get spec :consequence))
-              (delib-flow--filing-loop-state-line run (plist-get spec :state))
-              (format "- Resume here: %s" (plist-get spec :resume))))
-       "\n")
+      (let ((consequence (plist-get spec :consequence)))
+        (string-join
+         (delq nil
+               (list
+                (format "- Local consequence: %s"
+                        (if (functionp consequence)
+                            (funcall consequence run)
+                          consequence))
+                (delib-flow--filing-loop-state-line run (plist-get spec :state))
+                (format "- Resume here: %s" (plist-get spec :resume))))
+         "\n"))
     (if entry
         (format "- Local consequence: %s\n- Resume here: %s"
                 (delib-flow--compact-summary
@@ -5108,13 +5477,16 @@ broader filing numbering."
        reject-draft-filing-artifact
        resolve-filing-conflict))
     ('review-package
-     '(edit-operator-intent
+     '(draft-selected-action
+       draft-selected-waiting-for
+       draft-selected-reference-note
+       select-approved-filing-actions
+       file-approved-outputs
+       edit-operator-intent
        draft-selected-project
        extract-actions
        extract-waiting-for
        suggest-reference-notes
-       select-approved-filing-actions
-       file-approved-outputs
        reject-draft-filing-artifact
        resolve-filing-conflict))
     (_
@@ -5124,7 +5496,15 @@ broader filing numbering."
 
 (defun delib-flow--project-package-included-items (run)
   "Return the current included project package items for RUN."
-  (let* ((project (delib-flow--project-package-root-for-filing run))
+  (let* ((selected-item (delib-flow--selected-filing-item run))
+         (selected-project
+          (and selected-item
+               (delib-flow--project-flow-active-p run)
+               (or (delib-flow--project-package-selection-p run selected-item)
+                   (delib-flow--project-package-bundle-child-p selected-item))
+               (delib-flow--project-package-selected-project run selected-item)))
+         (project (or selected-project
+                      (delib-flow--project-package-root-for-filing run)))
          (approved (plist-get (plist-get run :filing) :approved-items))
          (preview (and (delib-flow--filing-selection-active-p run)
                        (delib-flow--preview-selected-filing-items run))))

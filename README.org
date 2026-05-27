@@ -69,7 +69,7 @@ in a stabilization and hardening phase.
 - Filtered retained context now updates the downstream working-context artifact
 - Filtered context now preserves salient constraint, decision, and preference
   notes even when raw score overlap is weak
-- Retrieval review in `Current context` now renders first-class `Retrieved
+- Retrieval review in `Details` now renders first-class `Retrieved
   candidates`, `Retained context`, and `Rejected context` subsections with
   explicit keep/drop reasons
 - No-match project decisions now can produce a draft project plus first next action
@@ -162,9 +162,10 @@ in a stabilization and hardening phase.
 - Audit logging now also reflects post-stage inspect/match review-state
   transitions such as accept, reject, and supersede
 - Draft next actions, waiting-for items, and reference-note suggestions now
-  render in `Filing preview`
+  render in the `Progress` filing-preview subtree
 - Draft next actions, waiting-for items, and reference-note suggestions now
-  also carry visible quality warnings in both stage results and `Filing preview`
+  also carry visible quality warnings in both stage results and the
+  `Progress` filing-preview subtree
 - Filing review now distinguishes advisory warnings from blocking
   filing-readiness issues, renders per-artifact readiness and fix guidance, and
   preserves blocked approval attempts until the operator chooses a ready
@@ -183,7 +184,7 @@ in a stabilization and hardening phase.
 - Milestone 7 is implemented:
   deterministic filing now resolves approved artifacts into concrete Org
   targets, preflights duplicate targets, and surfaces filed locations plus
-  conflicts in `Filing preview`
+  conflicts in the `Progress` filing-preview subtree
 - Milestone 8 is implemented:
   cloud routing now runs through reviewed sanitization, provider-aware policy
   checks, explicit send and reintegration approvals, and reviewable returned
@@ -226,20 +227,19 @@ At a high level, the package does this:
 The control buffer is organized around these top-level sections:
 
 - `Now`
+- `Recommended`
+- `Progress`
 - `Current result`
-- `Filing preview`
-- `Next actions`
-- `Current context`
 - `Details`
 
-`Now` now starts with a compact decision strip plus a recommended-next-pass
-block and quick actions, so the first screen answers the current stage,
-blockage, recommendation, active selection, and filing-target questions more
-directly. `Current result`,
-`Filing preview`, `Next actions`, and `Current context` stay expanded after
-refresh and action execution. `Details` stays folded by default and holds
-verbose material such as the source snapshot, accepted working context, latest
-prompt/input, latest raw output, grouped stage history, and audit status.
+`Now` answers the current phase, blockage, recommendation, active selection,
+and filing-target questions directly. `Recommended` groups the next best move,
+nearby alternatives, and local/global action palettes. `Progress` holds the
+checklist, queue hub, selected-item summary, and the filing-preview
+compatibility subtree. `Current result` stays centered on the latest executed
+stage. `Details` stays folded by default and holds verbose material such as
+the source snapshot, accepted working context, latest prompt/input, latest raw
+output, grouped stage history, and audit status.
 
 Internally, stage actions, cockpit rerendering, focused filing surfaces, and
 shared filing-state mutation now run through common infrastructure rather than
@@ -267,14 +267,15 @@ Control-buffer usage:
 - Use `TAB` and `S-TAB` to move between rendered actions.
 - Press `RET` or `a` to run the action at point.
 - Work from the nearest action cluster:
-  `Recommended next pass` or `Quick actions` in `Now`, `Filing actions` in
-  `Filing preview`, or the
-  broader `Next actions` list when you want the full downstream menu.
+  `Recommended action` and nearby alternatives in `Recommended`, or local
+  filing actions inside the selected-item workspace and filing-preview
+  subtree when you are already working one artifact.
 - Press `z` to toggle narrow-screen focus mode when you want the cockpit to
   keep only the current decision loop open.
+- Press `Y` to show or hide debug-only cockpit actions.
 - Use the compact shortlist surfaces for selection-heavy steps:
   `Manual project selection` now shows a candidate table in `Now`, and
-  `Artifact selection` now shows a filing shortlist in `Filing preview`.
+  `Artifact selection` now shows a filing shortlist in `Progress`.
 - Treat the editable `Selection:` blocks in those areas as fallback entry
   paths when the chooser commands are not sufficient.
 - In the filing workspace, `Staged content preview` now shows the exact text
@@ -293,7 +294,7 @@ Point behavior after rerender:
 
 - If inspect or project match is pending review, point moves to
   `Current result`.
-- Otherwise point moves to `Next actions`.
+- Otherwise point moves to `Recommended`.
 - A manual refresh preserves the current top-level cockpit section when no
   stronger workflow anchor applies.
 
@@ -615,6 +616,7 @@ project proposals.
 For architecture and UX evaluation, use:
 
 - [[file:docs/design.org][docs/design.org]] for design principles
+- [[file:docs/stage-flow-overview.org][docs/stage-flow-overview.org]] for the supported stage-path overview
 - [[file:docs/ux-wireframes.org][docs/ux-wireframes.org]] for current render contracts
 - [[file:docs/implementation-plan.org][docs/implementation-plan.org]] for the historical build record and current
   architecture snapshot

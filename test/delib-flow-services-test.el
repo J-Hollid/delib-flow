@@ -401,6 +401,80 @@
       (when (file-directory-p root)
         (delete-directory root t)))))
 
+(ert-deftest delib-flow-discover-reference-material-prefers-direct-source-link-over-journal-noise ()
+  (let ((root (make-temp-file "delib-flow-zk" t))
+        project-file
+        linked-file
+        daily-file)
+    (unwind-protect
+        (progn
+          (setq project-file (expand-file-name "my-projects.org" root))
+          (setq linked-file (expand-file-name "atlas-brief.org" root))
+          (setq daily-file (expand-file-name "daily-2026-05-08.org" root))
+          (with-temp-file project-file
+            (insert "* Atlas Project\n"))
+          (with-temp-file linked-file
+            (insert "#+title: Atlas Brief\nClient requested a revised rollout brief with owners and dates.\n"))
+          (with-temp-file daily-file
+            (insert "#+title: Daily log\nAtlas Project Atlas Project Atlas Project\n"))
+          (let ((delib-flow-zk-root root)
+                (delib-flow-my-projects-file project-file))
+            (let* ((run (delib-flow--initialize-run
+                         (list :title "Atlas Project kickoff"
+                               :content (format "* Atlas Project kickoff\nSee [[file:%s][Atlas Brief]]\n"
+                                                linked-file))))
+                   (inspected (delib-flow-test--accept-inspect
+                               (delib-flow--run-stage-locally run 'inspect-source)))
+                   (matched (delib-flow-test--accept-match
+                             (delib-flow--run-stage-locally inspected 'match-project)))
+                   (retrieved (plist-get (delib-flow--discover-reference-material-result matched)
+                                         :candidates)))
+              (should (equal "Atlas Brief"
+                             (plist-get (car retrieved) :title)))
+              (should (plist-get (car retrieved) :reasons))
+              (when-let ((second (cadr retrieved)))
+                (should (plist-get second :journal-note-p))))))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
+(ert-deftest delib-flow-filter-reference-material-rejects-topic-adjacent-journal-noise ()
+  (let ((linked-file (make-temp-file "delib-flow-note" nil ".org"
+                                     "#+title: Linked brief\nDecision: send revised brief to client.\n"))
+        (daily-file (make-temp-file "daily-2026-05-08" nil ".org"
+                                    "#+title: Daily log\nAtlas Atlas Atlas\n")))
+    (unwind-protect
+        (let* ((candidate-a (list :title "Linked brief"
+                                  :file linked-file
+                                  :score 12
+                                  :journal-note-p nil
+                                  :stub-note-p nil
+                                  :signals (list (list :key 'linked-source-file
+                                                       :contribution 20))
+                                  :reasons '("directly linked from the source")))
+               (candidate-b (list :title "Daily log"
+                                  :file daily-file
+                                  :score 4
+                                  :journal-note-p t
+                                  :stub-note-p nil
+                                  :signals (list (list :key 'title-overlap
+                                                       :contribution 3))
+                                  :reasons '("title overlaps the active topic")))
+               (package (list :working-context
+                              (list :retrieved-candidates
+                                    (list candidate-a candidate-b))))
+               (filtered (delib-flow--filter-reference-material-result package)))
+          (should (equal 1 (plist-get filtered :retained-count)))
+          (should (equal "Linked brief"
+                         (plist-get (car (plist-get filtered :retained-candidates))
+                                    :title)))
+          (should (member "journal-noise"
+                          (plist-get (car (plist-get filtered :rejected-candidates))
+                                     :filter-reasons)))
+          (should (string-match-p "Relevant note: Linked brief"
+                                  (plist-get filtered :retained-context))))
+      (delete-file linked-file)
+      (delete-file daily-file))))
+
 (ert-deftest delib-flow-focused-support-candidates-prioritize-concrete-over-broad-overlaps ()
   (let* ((selected (list :kind 'reference-note
                          :text "Create general PKM note for Project Atlas Pattern"

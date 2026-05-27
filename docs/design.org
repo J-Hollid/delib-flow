@@ -10,6 +10,11 @@ It was copied from the canonical working note at
 `/path/to/zk/wrk/example-design-note.org` on 2026-04-26 and lightly
 normalized for repository use. The substantive workflow design remains the same.
 
+User-facing flow references for this repository copy:
+
+- [[file:stage-flow-overview.org][Phase-travel overview]]
+- [[file:ui-scenario-contracts.org][Executable UI contracts]]
+
 * Implementation status note
 
 - The earlier control-buffer redesign and drift-reduction roadmap is now
@@ -49,8 +54,16 @@ normalized for repository use. The substantive workflow design remains the same.
   - provider-aware cloud routing and sanitization
   - audit logging, debug scenarios, deterministic replay, and walkthrough
     inspection
+- The cockpit now also has an explicit operator-facing debug visibility toggle.
+  Debug commands remain callable at all times, but the normal cockpit keeps
+  debug-only actions hidden until the operator explicitly shows them.
 - The module split and render-contract tests are now part of the maintained
   architecture, not a planned refactor target.
+- Remaining UX-hardening work is now narrow:
+  - enrich persisted travel/detour metadata beyond the current compact reroute
+    record
+  - deepen rejection-reason follow-through and consequence copy
+  - keep narrative docs aligned with the current phase-travel surface
 - Much of the material below remains useful as product intent, but some of the
   milestone language is now historical rather than an implementation to-do
   list.
@@ -186,9 +199,10 @@ memorizing all bindings.
 - Every major work area should support a local context menu.
   - `Now`: run-stage and recommendation actions
   - `Current result`: accept, reject, retry, compare, explain blocked state
-  - `Filing preview`: choose artifact, choose template, preview target, file,
-    open staged buffers
-  - `Current context`: inspect retained evidence, prune, reopen excerpts
+  - `Progress`: queue review, selected-item summary, filing preview, conflict
+    review, staged target preview
+  - `Details`: inspect retained evidence, prune, reopen excerpts, and review
+    accepted context or audit history
 - A control-hints surface should be available at any time.
   - global keys
   - keys valid in the current section
@@ -508,17 +522,12 @@ interaction model for a high-frequency operator workflow.
 - A separate approval-note subtree is not required for version 1; the approval property is sufficient.
 
 * Control-buffer content contract
-- The control buffer should use a stable top-level heading layout in this order: `Source`, `Working context`, `Stage history`, `Current decision`, `Valid next actions`, `Filing preview`, and `Audit status`.
-- The `Source` section should contain the frozen source snapshot captured when the workflow started, along with source type.
-- The `Working context` section should contain the current merged context model, including the latest inspect output, retained snippets, and accepted manual edits.
-- The `Working context` section should also contain a visible subsection for the sanitized cloud package whenever one is being prepared or reviewed.
-- The `Stage history` section should contain one subtree per executed stage.
-- Stage-history subtrees should default to collapsed except for the latest stage.
-- Each stage subtree should show the normalized result prominently, with prompt text, input package, raw output, and related artifacts under foldable subheadings.
-- The `Current decision` section should represent the current unresolved operator choice.
-- The `Valid next actions` section should contain only actions that are currently legal from the present run state.
-- The `Filing preview` section should show rendered Org blocks for approved filing actions when such actions exist.
-- The `Audit status` section should show current run status, audit-path readiness, and whether stage data is ready to append.
+- The control buffer should use a stable top-level heading layout in this order: `Now`, `Recommended`, `Progress`, `Current result`, and `Details`.
+- The `Now` section should summarize current phase, readiness, progress, run status, blocked state, last accepted change, and active detour return target when present.
+- The `Recommended` section should contain one primary recommendation plus nearby alternatives and role-grouped action palettes for the current state.
+- The `Progress` section should contain the current checklist, queue hub, selected-item summary, and the filing-preview compatibility subtree when filing state is present.
+- The `Current result` section should contain one subtree per executed stage result, with the latest normalized result foregrounded and richer details available under foldable subheadings.
+- The `Details` section should hold the frozen source snapshot, accepted working context, cloud-review material, grouped stage history, and audit status.
 
 * Error and interruption semantics
 - If the human explicitly aborts a run, the control buffer should close immediately.

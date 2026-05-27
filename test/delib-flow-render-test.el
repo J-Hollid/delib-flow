@@ -43,10 +43,9 @@
                            (goto-char (point-min))
                            (search-forward heading nil t))
                          '("** Now"
+                           "** Recommended"
+                           "** Progress"
                            "** Current result"
-                           "** Filing preview"
-                           "** Next actions"
-                           "** Current context"
                            "** Details"))))
             (should (seq-every-p #'identity positions))
             (should (apply #'< positions))))
@@ -67,29 +66,22 @@
                       (plist-get (get-text-property (point) 'delib-flow-action)
                                  :id)))
           (goto-char (point-min))
-          (should (search-forward "- Recommended next step: Inspect Source" nil t))
-          (goto-char (point-min))
           (should (search-forward "- Refresh Buffer [available]" nil t))
           (goto-char (point-min))
           (should (search-forward "- Abort Run [available]" nil t))
           (goto-char (point-min))
-          (should (search-forward "*** Decision strip" nil t))
+          (should (search-forward "*** Phase" nil t))
           (goto-char (point-min))
-          (should (search-forward "*** Loop update" nil t))
+          (should (search-forward "*** Status" nil t))
           (goto-char (point-min))
-          (should (search-forward "*** Recommended next pass" nil t))
-          (should (search-forward "*** Quick actions" nil t))
-          (should (search-forward "*** Recovery snapshot" nil t))
-          (should (search-forward "*** Resume guide" nil t))
+          (should (search-forward "*** Recommended action" nil t))
+          (should (search-forward "*** Local primary actions" nil t))
+          (should (search-forward "*** Global actions" nil t))
           (goto-char (point-min))
-          (should (search-forward "- Why:" nil t))
-          (should (search-forward "- Unblock path:" nil t))
+          (should (search-forward "*** Checklist" nil t))
+          (should (search-forward "*** Queue hub" nil t))
           (goto-char (point-min))
-          (should (search-forward "- Jump back: `L` active loop, `K` latest preview" nil t))
-          (goto-char (point-min))
-          (should (search-forward "- Recovery path: `L` resume loop, `K` consequence preview, `U` stage history, `J` audit stage" nil t))
-          (goto-char (point-min))
-          (should (search-forward "*** Control keys" nil t))
+          (should (search-forward "*** Key help" nil t))
           (should (search-forward "- `RET/a`: Run the action at point." nil t))
           (should (search-forward "- `E`: Show the selected draft in the consequence pane." nil t))
           (should (search-forward "- `I`: Show focused support for the selected artifact in the consequence pane." nil t))
@@ -125,15 +117,13 @@
     (unwind-protect
         (with-current-buffer buffer
           (goto-char (point-min))
-          (should (search-forward "** Operator intent" nil t))
-          (should (search-forward "strongly steers source interpretation and project drafting" nil t))
-          (should (search-forward "#+begin_delib-edit context" nil t))
-          (goto-char (point-min))
           (should (search-forward "** Operator notes" nil t))
           (should (search-forward "#+begin_delib-edit notes" nil t))
           (goto-char (point-min))
-          (should (search-forward "**** Reviewed cloud package" nil t))
-          (should (search-forward "#+begin_delib-edit cloud-review" nil t)))
+          (should (search-forward "*** Source snapshot" nil t))
+          (should (search-forward "*** Working context summary" nil t))
+          (goto-char (point-min))
+          (should (search-forward "#+begin_delib-edit context" nil t)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
@@ -323,6 +313,130 @@
     (should (string-match-p "\\*\\*\\* Loop update" text))
     (should (string-match-p "Local consequence: this source classification now controls the next project-matching pass." text))))
 
+(ert-deftest delib-flow-detour-summary-renders-origin-and-conflict-metadata ()
+  (let* ((run (delib-flow--initialize-run (list :title "Example")))
+         (run (plist-put
+               run :travel
+               (list :detour-kind 'conflict
+                     :origin-phase 'selected-item
+                     :origin-action 'file-approved-outputs
+                     :origin-stage 'file-approved-outputs
+                     :return-surface 'filing-workspace
+                     :return-anchor "Selected item"
+                     :selected-item-target "Create follow-up note"
+                     :reroute-reason "Conflict needs review."
+                     :cloud-sanitized-status nil
+                     :cloud-result-status nil
+                     :cloud-reintegration-status nil
+                     :conflict-target "alpha.org::Alpha Project"
+                     :conflict-action-summary "Retry or retarget."
+                     :last-rejection-reason 'wrong-filing-target
+                     :debug-visibility nil)))
+         (text (delib-flow--detour-summary-text run)))
+    (should (string-match-p "Detour: conflict" text))
+    (should (string-match-p "Origin stage: File Approved Outputs" text))
+    (should (string-match-p "Origin action: file-approved-outputs" text))
+    (should (string-match-p "Selected item target: Create follow-up note" text))
+    (should (string-match-p "Conflict target: alpha.org::Alpha Project" text))
+    (should (string-match-p "Last rejection reason: wrong filing target" text))))
+
+(ert-deftest delib-flow-detour-summary-renders-cloud-status-metadata ()
+  (let* ((run (delib-flow--initialize-run (list :title "Example")))
+         (run (plist-put
+               run :travel
+               (list :detour-kind 'cloud
+                     :origin-phase 'reference-context
+                     :origin-action 'run-cloud-stage
+                     :origin-stage 'run-cloud-stage
+                     :return-surface 'cockpit
+                     :return-anchor "Recommended"
+                     :selected-item-target nil
+                     :reroute-reason "Cloud reroute is active."
+                     :cloud-sanitized-status 'approved
+                     :cloud-result-status 'returned
+                     :cloud-reintegration-status 'pending-review
+                     :conflict-target nil
+                     :conflict-action-summary nil
+                     :last-rejection-reason nil
+                     :debug-visibility nil)))
+         (text (delib-flow--detour-summary-text run)))
+    (should (string-match-p "Detour: cloud" text))
+    (should (string-match-p "Origin stage: Run Cloud Stage" text))
+    (should (string-match-p "Origin action: run-cloud-stage" text))
+    (should (string-match-p "Cloud statuses: sanitized=approved, result=returned, reintegration=pending-review" text))))
+
+(ert-deftest delib-flow-recommended-action-why-text-prefers-rejection-route ()
+  (let* ((run (delib-flow--initialize-run (list :title "Example")))
+         (run (plist-put
+               run :travel
+               (plist-put (delib-flow--run-travel run)
+                          :last-rejection-reason
+                          'wrong-project-context)))
+         (run (plist-put run :stage-history
+                         (list :entries (list (list :stage-id 'reject-draft-filing-artifact))
+                               :latest-stage 'reject-draft-filing-artifact
+                               :latest-status 'completed))))
+    (should (string-match-p "project context is wrong"
+                            (delib-flow--recommended-action-why-text run)))))
+
+(ert-deftest delib-flow-recommended-action-why-text-prefers-cloud-detour-status ()
+  (let* ((run (delib-flow--initialize-run (list :title "Example")))
+         (run (plist-put
+               run :travel
+               (plist-put
+                (plist-put
+                 (plist-put (delib-flow--run-travel run)
+                            :cloud-sanitized-status 'approved)
+                 :cloud-result-status 'returned)
+                :cloud-reintegration-status 'pending-review)))
+         (run (plist-put run :stage-history
+                         (list :entries (list (list :stage-id 'run-cloud-stage))
+                               :latest-stage 'run-cloud-stage
+                               :latest-status 'completed))))
+    (should (string-match-p "sanitized=approved, result=returned, reintegration=pending-review"
+                            (delib-flow--recommended-action-why-text run)))))
+
+(ert-deftest delib-flow-filing-loop-update-text-prefers-rejection-route-copy ()
+  (let* ((run (delib-flow--initialize-run (list :title "Example")))
+         (run (plist-put run :travel
+                         (plist-put (delib-flow--run-travel run)
+                                    :last-rejection-reason
+                                    'needs-more-support)))
+         (run (plist-put run :stage-history
+                         (list :entries (list (list :stage-id 'reject-draft-filing-artifact))
+                               :latest-stage 'reject-draft-filing-artifact
+                               :latest-status 'completed)))
+         (text (delib-flow--filing-loop-update-text run)))
+    (should (string-match-p "needs more support before approval" text))
+    (should (string-match-p "follow the rejection route" text))))
+
+(ert-deftest delib-flow-filing-loop-update-text-prefers-conflict-return-copy ()
+  (let* ((run (delib-flow--initialize-run (list :title "Example")))
+         (run (plist-put
+               run :travel
+               (list :detour-kind nil
+                     :origin-phase 'filing
+                     :origin-action 'file-approved-outputs
+                     :origin-stage 'file-approved-outputs
+                     :return-surface 'filing-workspace
+                     :return-anchor "Selected item"
+                     :selected-item-target "Create follow-up note"
+                     :reroute-reason nil
+                     :cloud-sanitized-status nil
+                     :cloud-result-status nil
+                     :cloud-reintegration-status nil
+                     :conflict-target "alpha.org::Alpha Project"
+                     :conflict-action-summary "Retry or retarget."
+                     :last-rejection-reason nil
+                     :debug-visibility nil)))
+         (run (plist-put run :stage-history
+                         (list :entries (list (list :stage-id 'resolve-filing-conflict))
+                               :latest-stage 'resolve-filing-conflict
+                               :latest-status 'completed)))
+         (text (delib-flow--filing-loop-update-text run)))
+    (should (string-match-p "Conflict resolution updated `alpha.org::Alpha Project`" text))
+    (should (string-match-p "returned workspace" text))))
+
 (ert-deftest delib-flow-suggest-reference-notes-current-result-renders-draft-note-preview ()
   (let* ((source-content
           (concat
@@ -374,10 +488,10 @@
                      :content "* Example\nBody line\n")))
          (text (delib-flow--render-details-section run)))
     (should (string-match-p
-             (regexp-quote "*** Accepted working context")
+             (regexp-quote "*** Working context summary")
              text))
     (should (string-match-p
-             (regexp-quote "**** Cloud routing review")
+             (regexp-quote "*** Operator intent")
              text))
     (should (string-match-p
              (regexp-quote "*** Audit status")
@@ -781,13 +895,13 @@
   (let* ((run (delib-flow--initialize-run
                (list :title "Broken steno exercise"
                      :content "* Broken steno exercise\nhttps://example.com/drill?id=one\n")))
-         (context-text (delib-flow--section-content "Current context" run))
+         (details-text (delib-flow--section-content "Details" run))
          (now-text (delib-flow--section-content "Now" run)))
-    (should (string-match-p "This text strongly steers source interpretation and project drafting" context-text))
-    (should (string-match-p "Current value: none" context-text))
-    (should (string-match-p "Saved operator intent steers future stage runs only" context-text))
-    (should (string-match-p "Use the rendered `Edit` action or run `M-x delib-flow-action-edit-operator-intent`" context-text))
-    (should (string-match-p "M-x delib-flow-action-edit-operator-intent" context-text))
+    (should (string-match-p "This text strongly steers source interpretation and project drafting" details-text))
+    (should (string-match-p "Current value: none" details-text))
+    (should (string-match-p "Saved operator intent steers future stage runs only" details-text))
+    (should (string-match-p "Use the rendered `Edit` action or run `M-x delib-flow-action-edit-operator-intent`" details-text))
+    (should (string-match-p "M-x delib-flow-action-edit-operator-intent" details-text))
     (should (string-match-p "M-x delib-flow-action-edit-operator-notes" now-text))))
 
 (ert-deftest delib-flow-render-clean-source-buffer-falls-back-to-source-lines ()

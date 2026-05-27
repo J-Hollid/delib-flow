@@ -108,7 +108,9 @@
   (let ((normalized (downcase (or text ""))))
     (seq-some
      (lambda (keyword)
-       (string-match-p (regexp-quote keyword) normalized))
+       (string-match-p
+        (format "\\b%s\\b" (regexp-quote keyword))
+        normalized))
      delib-flow--issue-note-source-keywords)))
 
 (defun delib-flow--package-source-type (package)
@@ -191,19 +193,21 @@
   "Return drafted action text for ITEM in PACKAGE.
 
 DRAFT-TEXT overrides the deterministic default when non-empty."
-  (let ((clean (and (stringp draft-text)
-                    (not (string-empty-p (string-trim draft-text)))
-                    (string-trim draft-text))))
-    (or clean
-        (string-trim
-         (or (plist-get item :text)
-             (delib-flow--source-title-action package))))))
+  (let* ((clean (and (stringp draft-text)
+                     (not (string-empty-p (string-trim draft-text)))
+                     (string-trim draft-text)))
+         (base (or clean
+                   (string-trim
+                    (or (plist-get item :text)
+                        (delib-flow--source-title-action package))))))
+    (delib-flow--tighten-drafted-action-text base item package)))
 
 (defun delib-flow--drafted-action-item (item package &optional draft-text reason)
   "Return ITEM enriched as a drafted next action for PACKAGE.
 
 DRAFT-TEXT and REASON override deterministic defaults when provided."
-  (let ((draft (copy-tree item)))
+  (let* ((draft (copy-tree item))
+         (strict-rewrite-p (delib-flow--selected-action-strict-rewrite-p package)))
     (setq draft
           (plist-put draft :text
                      (delib-flow--action-drafted-text item package draft-text)))
@@ -214,7 +218,32 @@ DRAFT-TEXT and REASON override deterministic defaults when provided."
                               package 'actions)
                              "Drafted the selected action with a tighter wording pass informed by focused support."
                            "Drafted the selected action with a tighter wording pass."))))
-    (delib-flow--draft-item-with-selected-support package 'actions draft)))
+    (setq draft
+          (delib-flow--draft-item-with-selected-support package 'actions draft))
+    (setq draft
+          (car (delib-flow--annotate-draft-actions (list draft) package)))
+    (when (and strict-rewrite-p
+               (delib-flow--drafted-action-weak-family-p draft))
+      (setq draft
+            (plist-put draft :text
+                       (delib-flow--selected-action-structural-rewrite-text
+                        draft package)))
+      (setq draft
+            (car (delib-flow--annotate-draft-actions (list draft) package))))
+    (when (and strict-rewrite-p
+               (delib-flow--drafted-action-weak-family-p draft))
+      (setq draft
+            (plist-put
+             draft
+             :warnings
+             (append
+              (delib-flow--draft-item-warnings draft)
+              (list
+               (delib-flow--make-artifact-warning
+                'selected-action-belongs-in-context
+                "Repeated drafting is still yielding a weak action shape; this idea likely belongs in context or a note unless you can name one concrete deliverable."
+                'blocking))))))
+    draft))
 
 (defun delib-flow--selected-waiting-for-candidate-from-package (package)
   "Return selected waiting-for candidate from PACKAGE, or nil."
@@ -403,10 +432,16 @@ DRAFT-TEXT overrides the deterministic default when non-empty."
   (let ((clean (and (stringp draft-text)
                     (not (string-empty-p (string-trim draft-text)))
                     (string-trim draft-text))))
-    (or clean
-        (plist-get (or (delib-flow--project-first-item item)
-                       (delib-flow--project-proposal-first-item package))
-                   :text))))
+    (plist-get
+     (or (and clean
+              (not (delib-flow--project-first-item-text-needs-replacement-p clean))
+              (list :text clean))
+         (let ((current (delib-flow--project-first-item item)))
+           (and current
+                (not (delib-flow--project-first-item-needs-replacement-p current))
+                current))
+         (delib-flow--project-proposal-first-item package))
+     :text)))
 
 (defun delib-flow--drafted-project-item
     (item package &optional draft-title draft-state draft-first-item-text
@@ -518,6 +553,9 @@ override deterministic defaults when provided."
 
 (defconst delib-flow--draft-item-warning-remediations
   '((weak-next-action-verb . "Replace the opening verb with the concrete next step or deliverable.")
+    (introspective-next-action . "Rewrite this as an observable task with an artifact, conversation, walkthrough, or validation output.")
+    (exploratory-next-action . "Name the concrete output of the check, review, or investigation, or move it back into context.")
+    (near-duplicate-next-action . "Narrow this into a materially different next step instead of lightly rephrasing the prior attempt.")
     (vague-action-context . "Name the concrete deliverable, recipient, or change instead of generic follow-up wording.")
     (broad-action-scope . "Split this into a smaller next action that fits one focused work session.")
     (decision-state-action . "Rewrite this as a concrete action, or move it back into context if it is only a decision or status statement.")
@@ -581,6 +619,16 @@ override deterministic defaults when provided."
    ((> (delib-flow--draft-item-warning-count item) 0) 'warning)
    (t 'ready)))
 
+(defun delib-flow--draft-item-warning-approval-risk-p (item)
+  "Return non-nil when ITEM is approvable but should be treated as higher risk."
+  (and (eq (delib-flow--draft-item-readiness item) 'warning)
+       (or (delib-flow--draft-item-has-warning-code-p
+            item 'waiting-for-speculative-owner)
+           (delib-flow--draft-item-has-warning-code-p
+            item 'reference-note-candidate-identity)
+           (delib-flow--draft-item-has-warning-code-p
+            item 'reference-note-reuse-justification))))
+
 (defun delib-flow--draft-item-readiness-text (item)
   "Return operator-facing readiness text for draft ITEM."
   (pcase (delib-flow--draft-item-readiness item)
@@ -588,10 +636,29 @@ override deterministic defaults when provided."
      (format "blocked by %s filing-readiness issue(s)"
              (delib-flow--draft-item-blocking-warning-count item)))
     ('warning
-     (format "ready with %s advisory warning(s)"
-             (delib-flow--draft-item-warning-count item)))
+     (if (delib-flow--draft-item-warning-approval-risk-p item)
+         (format "approvable with %s advisory warning(s); draft or verify before filing"
+                 (delib-flow--draft-item-warning-count item))
+       (format "ready with %s advisory warning(s)"
+               (delib-flow--draft-item-warning-count item))))
     (_
      "ready for approval")))
+
+(defun delib-flow--draft-item-priority-score (item)
+  "Return filing-queue priority score for draft ITEM.
+
+Higher scores should appear earlier in operator-facing draft queues."
+  (if (delib-flow--draft-item-warning-approval-risk-p item) 0 1))
+
+(defun delib-flow--prioritize-draft-items (items)
+  "Return ITEMS reordered so advisory-risk choices sink to the end.
+
+This keeps the existing operator-visible order stable for normal ready/blocked
+artifacts while demoting the warn-but-allow items that most often benefit from
+drafting or verification first."
+  (append
+   (seq-remove #'delib-flow--draft-item-warning-approval-risk-p items)
+   (seq-filter #'delib-flow--draft-item-warning-approval-risk-p items)))
 
 (defun delib-flow--draft-item-remediation-lines (item)
   "Return remediation lines for draft ITEM."
@@ -616,7 +683,276 @@ override deterministic defaults when provided."
 
 (defun delib-flow--weak-next-action-verb-p (verb)
   "Return non-nil when VERB signals a weak next-action opener."
-  (member verb '("clarify" "review" "check" "handle" "consider")))
+  (member verb '("clarify" "review" "check" "handle" "consider"
+                 "look" "explore" "think")))
+
+(defconst delib-flow--article-framing-action-regexp
+  (concat
+   "\\b\\("
+   "article\\|essay\\|post\\|newsletter\\|issue\\|story\\|writeup"
+   "\\|content\\|concept map\\|summary note\\|summary\\|overview"
+   "\\)\\b")
+  "Regexp matching article-framing or summary-shaped action wording.")
+
+(defun delib-flow--action-observable-deliverable-p (text)
+  "Return non-nil when TEXT names an observable action output."
+  (let ((normalized (downcase (string-trim (or text "")))))
+    (or (string-match-p
+         "\\b\\(note\\|outline\\|brief\\|agenda\\|questions\\|interview\\|meeting\\|walkthrough\\|draft\\|plan\\|summary\\|update\\|review\\|feedback\\|validation\\|prototype\\|sketch\\|ticket\\|email\\|message\\|report\\|list\\|checklist\\|guidelines\\|example\\|screenshots\\|package\\)\\b"
+         normalized))))
+
+(defun delib-flow--introspective-next-action-p (text)
+  "Return non-nil when TEXT reads like an internal mindset shift."
+  (let ((normalized (downcase (string-trim (or text "")))))
+    (or (string-match-p "\\`put \\(?:my\\)?self\\b" normalized)
+        (string-match-p "\\`stop treating\\b" normalized)
+        (string-match-p "\\`no longer treat\\b" normalized)
+        (string-match-p "\\`no longer treating\\b" normalized)
+        (string-match-p "\\`treat\\b.*\\bnot divorced\\b" normalized)
+        (string-match-p "\\`treat\\b.*\\brole\\b" normalized)
+        (string-match-p "\\`remember\\b" normalized)
+        (string-match-p "\\`be\\b.*\\baware\\b" normalized)
+        (string-match-p "\\`focus on\\b" normalized)
+        (string-match-p "\\`think about\\b" normalized))))
+
+(defun delib-flow--exploratory-next-action-p (text)
+  "Return non-nil when TEXT is exploratory without a concrete output."
+  (let ((normalized (downcase (string-trim (or text "")))))
+    (or (string-match-p "\\`check with\\b" normalized)
+        (string-match-p "\\`look into\\b" normalized)
+        (string-match-p "\\`explore\\b" normalized)
+        (string-match-p "\\`consider\\b" normalized)
+        (string-match-p "\\`review\\b" normalized)
+        (string-match-p "\\`check\\b" normalized)
+        (string-match-p "\\`investigate\\b" normalized)
+        (string-match-p "\\`research\\b" normalized))))
+
+(defun delib-flow--question-shaped-next-action-p (text)
+  "Return non-nil when TEXT still reads like a source question or prompt."
+  (let ((normalized (downcase (string-trim (or text "")))))
+    (or (string-match-p "\\`\\(?:understand\\|ask\\|figure out\\|determine\\|decide\\) why\\b"
+                        normalized)
+        (string-match-p "\\`where does\\b" normalized)
+        (string-match-p "\\`what makes\\b" normalized)
+        (string-match-p "\\`what would make\\b" normalized)
+        (string-match-p "\\`are you\\b" normalized)
+        (string-match-p "\\`does the output\\b" normalized)
+        (string-suffix-p "?" normalized))))
+
+(defun delib-flow--source-line-linked-note-title (line)
+  "Return the first Org link description from LINE, or nil."
+  (when (and (stringp line)
+             (string-match "\\[\\[[^]]+\\]\\[\\([^]]+\\)\\]\\]" line))
+    (string-trim (match-string 1 line))))
+
+(defun delib-flow--source-linked-note-titles (package)
+  "Return linked note titles found in PACKAGE source lines."
+  (delete-dups
+   (delq nil
+         (mapcar #'delib-flow--source-line-linked-note-title
+                 (delib-flow--source-body-lines package)))))
+
+(defun delib-flow--linked-action-concept-title (text package)
+  "Return linked concept title from PACKAGE relevant to action TEXT, or nil."
+  (let ((normalized (downcase (string-trim (or text "")))))
+    (seq-find
+     (lambda (title)
+       (let ((clean-title (string-trim (or title ""))))
+         (and (delib-flow--non-empty-string-p clean-title)
+              (or (string-match-p
+                   (regexp-quote (downcase clean-title))
+                   normalized)
+                  (seq-every-p
+                   (lambda (term)
+                     (string-match-p (regexp-quote term) normalized))
+                   (seq-take (delib-flow--string-words (downcase clean-title)) 1))))))
+     (delib-flow--source-linked-note-titles package))))
+
+(defun delib-flow--source-evidence-focus-fragment (text fallback)
+  "Return a focus fragment from TEXT using FALLBACK when needed."
+  (let* ((clean (string-trim (or text "")))
+         (stripped (replace-regexp-in-string
+                    "\\`\\(?:the idea:[[:space:]]*\\|idea:[[:space:]]*\\|put \\(?:my\\)?self in\\(?:to\\)?\\|stop treating\\|no longer treat\\|no longer treating\\|focus on\\|check with\\|look into\\|explore\\|consider\\|review\\|investigate\\|research\\)\\b"
+                    ""
+                    clean
+                    t
+                    t))
+         (normalized (string-trim stripped)))
+    (if (string-empty-p normalized)
+        (or fallback "the current topic")
+      normalized)))
+
+(defun delib-flow--action-focus-without-purpose (text fallback)
+  "Return action focus text from TEXT, trimming broad purpose clauses.
+
+FALLBACK is used when TEXT does not yield a usable focus."
+  (let* ((clean (delib-flow--capitalize-sentence-start text))
+         (clean
+          (replace-regexp-in-string
+           "\\`Draft \\(?:a \\)?concept map \\(?:illustrating\\|for\\) "
+           ""
+           clean
+           t
+           t))
+         (stripped
+          (replace-regexp-in-string
+           "\\`\\(?:review and extract\\|gather\\|collect\\|compile\\|draft\\|prepare\\|create\\|write\\|review\\|extract\\|analyze\\)\\b[[:space:]]*"
+           ""
+           clean
+           t
+           t))
+         (stripped
+          (replace-regexp-in-string "\\`and[[:space:]]+" "" stripped t t))
+         (trimmed
+          (replace-regexp-in-string
+           "[[:space:]]+to[[:space:]].*\\'"
+           ""
+           stripped
+           t
+           t))
+         (normalized (string-trim trimmed)))
+    (if (string-empty-p normalized)
+        (delib-flow--source-evidence-focus-fragment text fallback)
+      normalized)))
+
+(defun delib-flow--rewrite-weak-action-text (text fallback)
+  "Return rewritten concrete action text from weak TEXT using FALLBACK."
+  (let* ((clean (delib-flow--capitalize-sentence-start text))
+         (normalized (downcase (string-trim (or clean ""))))
+         (focus (delib-flow--source-evidence-focus-fragment text fallback)))
+    (cond
+     ((string-match-p "\\`draft \\(?:a \\)?checklist for the idea:" normalized)
+      (format "Draft checklist for %s" focus))
+     ((string-match-p "\\`put \\(?:my\\)?self\\b\\|\\`focus on\\b" normalized)
+      (format "Draft interview questions about %s" focus))
+     ((string-match-p "\\`stop treating\\b\\|\\`no longer treat\\b\\|\\`no longer treating\\b\\|\\`treat\\b.*\\brole\\b\\|\\`treat\\b.*\\bnot divorced\\b" normalized)
+      (format "Draft workflow note about %s" focus))
+     ((string-match-p "\\`check with\\b" normalized)
+      (format "Prepare stakeholder review agenda for %s" focus))
+     ((string-match-p "\\`look into\\b\\|\\`investigate\\b\\|\\`research\\b\\|\\`explore\\b" normalized)
+      (format "Draft findings note about %s" focus))
+     ((string-match-p "\\`consider\\b\\|\\`review\\b\\|\\`check\\b" normalized)
+      (format "Prepare walkthrough for %s" focus))
+     (t clean))))
+
+(defun delib-flow--tighten-drafted-action-text (text item package)
+  "Return TEXT tightened into a single deliverable when possible.
+
+ITEM and PACKAGE provide source-grounding context."
+  (let* ((clean (delib-flow--capitalize-sentence-start text))
+         (normalized (downcase (string-trim clean)))
+         (focus (delib-flow--action-focus-without-purpose
+                 clean
+                 (or (plist-get item :action-evidence-line)
+                     (delib-flow--source-display-title package)))))
+    (cond
+     ((string-match-p "\\`review and extract\\b" normalized)
+      (if (string-match-p "\\bsuccess cases?\\b\\|\\bexamples?\\b" (downcase focus))
+          (format "Draft list of %s" focus)
+        (format "Draft findings summary for %s" focus)))
+     ((string-match-p "\\`gather\\b\\|\\`collect\\b\\|\\`compile\\b" normalized)
+      (if (string-match-p "\\blist\\b" (downcase focus))
+          (format "Draft %s" focus)
+        (format "Draft list of %s" focus)))
+     ((string-match-p "\\`review\\b" normalized)
+      (if (string-match-p delib-flow--article-framing-action-regexp
+                          (downcase focus))
+          (format "Draft checklist for %s" focus)
+        (format "Prepare review notes for %s" focus)))
+     ((string-match-p "\\`draft \\(?:a \\)?\\(?:concise \\)?\\(?:overview\\|summary\\) of\\b"
+                      normalized)
+      (format "Draft summary note for %s" focus))
+     ((string-match-p "\\`draft \\(?:a \\)?concept map\\b" normalized)
+      (format "Draft checklist for %s" focus))
+     ((string-match-p "\\`understand why\\b" normalized)
+      (format "Draft checklist for %s" focus))
+     ((string-match-p "\\`develop\\b" normalized)
+      (format "Draft outline for %s" focus))
+     ((string-match-p "\\`conduct\\b" normalized)
+      (format "Draft plan for %s" focus))
+     (t clean))))
+
+(defun delib-flow--rewrite-linked-weak-action-item (item package)
+  "Return ITEM rewritten using linked-note context from PACKAGE when possible."
+  (let* ((text (plist-get item :text))
+         (linked-title (delib-flow--linked-action-concept-title text package)))
+    (if (or (not (delib-flow--non-empty-string-p linked-title))
+            (not (delib-flow--exploratory-next-action-p text))
+            (delib-flow--action-observable-deliverable-p text))
+        item
+      (let ((rewritten (plist-put (copy-tree item)
+                                  :text
+                                  (format "Draft applicability note for %s"
+                                          linked-title))))
+        (setq rewritten
+              (plist-put rewritten
+                         :action-evidence-line
+                         (or (plist-get item :action-evidence-line)
+                             text)))
+        (plist-put rewritten
+                   :evidence-summary
+                   (format "linked concept: %s; rewritten from: %s"
+                           linked-title
+                           text))))))
+
+(defun delib-flow--same-action-text-p (left right)
+  "Return non-nil when LEFT and RIGHT are near-identical action texts."
+  (string=
+   (downcase (string-trim (or left "")))
+   (downcase (string-trim (or right "")))))
+
+(defun delib-flow--same-action-anchor-p (left right)
+  "Return non-nil when LEFT and RIGHT point at the same underlying action idea."
+  (let ((left-text (downcase (string-trim (or left ""))))
+        (right-text (downcase (string-trim (or right "")))))
+    (and (not (string-empty-p left-text))
+         (not (string-empty-p right-text))
+         (string= left-text right-text))))
+
+(defconst delib-flow--selected-action-strict-rewrite-threshold 3
+  "Draft attempt count after which selected-action rewriting becomes structural.")
+
+(defun delib-flow--selected-action-draft-attempt-count (package)
+  "Return selected-action draft attempt count already recorded in PACKAGE."
+  (+ (length (or (delib-flow--artifact-family-draft-history package 'actions) nil))
+     (if (delib-flow--artifact-family-selected-draft package 'actions) 1 0)))
+
+(defun delib-flow--selected-action-strict-rewrite-p (package)
+  "Return non-nil when PACKAGE should use strict structural rewriting for actions."
+  (>= (delib-flow--selected-action-draft-attempt-count package)
+      delib-flow--selected-action-strict-rewrite-threshold))
+
+(defun delib-flow--drafted-action-weak-family-p (item)
+  "Return non-nil when drafted action ITEM still matches a weak family."
+  (or (delib-flow--draft-item-has-warning-code-p item 'introspective-next-action)
+      (delib-flow--draft-item-has-warning-code-p item 'exploratory-next-action)
+      (delib-flow--draft-item-has-warning-code-p item 'weak-next-action-verb)))
+
+(defun delib-flow--selected-action-structural-rewrite-text (item package)
+  "Return structural rewrite text for weak drafted ITEM in PACKAGE."
+  (let* ((text (or (plist-get item :text) ""))
+         (rewritten-item (delib-flow--rewrite-linked-weak-action-item item package))
+         (rewritten-text (plist-get rewritten-item :text)))
+    (if (not (string= rewritten-text text))
+        rewritten-text
+      (delib-flow--rewrite-weak-action-text
+       text
+       (delib-flow--source-display-title package)))))
+
+(defun delib-flow--draft-action-evidence (item)
+  "Return compact evidence summary for action ITEM."
+  (let ((summary (plist-get item :evidence-summary)))
+    (when (delib-flow--non-empty-string-p summary)
+      summary)))
+
+(defun delib-flow--draft-action-with-evidence (text source evidence-plist)
+  "Return draft action object for TEXT SOURCE and EVIDENCE-PLIST."
+  (let ((item (delib-flow--make-draft-action text source)))
+    (while evidence-plist
+      (setq item
+            (plist-put item (car evidence-plist) (cadr evidence-plist)))
+      (setq evidence-plist (cddr evidence-plist)))
+    item))
 
 (defun delib-flow--action-warning-weak-verb (item)
   "Return warning when action ITEM starts with a weak verb."
@@ -624,7 +960,54 @@ override deterministic defaults when provided."
     (when (delib-flow--weak-next-action-verb-p verb)
       (delib-flow--make-artifact-warning
        'weak-next-action-verb
-       (format "Starts with \"%s\", which suggests review or clarification rather than a directly executable next action." verb)))))
+       (format "Starts with \"%s\", which suggests review or clarification rather than a directly executable next action." verb)
+       (if (delib-flow--action-observable-deliverable-p (plist-get item :text))
+           'advisory
+         'blocking)))))
+
+(defun delib-flow--action-warning-introspective (item)
+  "Return blocking warning when action ITEM is introspective."
+  (when (delib-flow--introspective-next-action-p (plist-get item :text))
+    (delib-flow--make-artifact-warning
+     'introspective-next-action
+     "Reads like a mindset shift or stance rather than an observable next step."
+     'blocking)))
+
+(defun delib-flow--action-warning-exploratory (item)
+  "Return blocking warning when action ITEM is exploratory without output."
+  (when (and (delib-flow--exploratory-next-action-p (plist-get item :text))
+             (not (delib-flow--action-observable-deliverable-p
+                   (plist-get item :text))))
+    (delib-flow--make-artifact-warning
+     'exploratory-next-action
+     "Reads like open-ended checking or exploration without naming the concrete deliverable."
+     'blocking)))
+
+(defun delib-flow--action-warning-question-shape (item)
+  "Return blocking warning when action ITEM still reads like a source prompt."
+  (when (delib-flow--question-shaped-next-action-p (plist-get item :text))
+    (delib-flow--make-artifact-warning
+     'question-shaped-next-action
+     "Still reads like a source question or discussion prompt rather than one named action output."
+     'blocking)))
+
+(defun delib-flow--action-warning-near-duplicate (item)
+  "Return warning when action ITEM lightly restates a prior candidate."
+  (when-let* ((previous-text (plist-get item :previous-text))
+              (previous-evidence-line
+               (or (plist-get item :previous-evidence-line)
+                   previous-text))
+              (current-evidence-line
+               (or (plist-get item :action-evidence-line)
+                   (plist-get item :text))))
+    (when (and (delib-flow--same-action-anchor-p previous-evidence-line
+                                                 current-evidence-line)
+               (not (plist-get item :resolved-prior-warning-p))
+               (not (plist-get item :materially-different-from-previous-p)))
+      (delib-flow--make-artifact-warning
+       'near-duplicate-next-action
+       "This candidate is not materially different from the prior attempt."
+       'blocking))))
 
 (defun delib-flow--action-warning-vague-context (item)
   "Return warning when action ITEM uses vague context wording."
@@ -635,12 +1018,73 @@ override deterministic defaults when provided."
        'vague-action-context
        "Uses vague context wording and does not yet identify a concrete deliverable or target outcome."))))
 
+(defun delib-flow--action-warning-heading-phrase (item)
+  "Return blocking warning when action ITEM reads like a heading or topic."
+  (let* ((text (string-trim (or (plist-get item :text) "")))
+         (word-count (delib-flow--artifact-text-word-count text))
+         (leading (delib-flow--artifact-leading-word text)))
+    (when (and (not (delib-flow--action-observable-deliverable-p text))
+               (<= word-count 5)
+               (or (null leading)
+                   (not (member leading delib-flow--action-line-verbs))))
+      (delib-flow--make-artifact-warning
+       'heading-phrase-action
+       "Reads like a topic heading or planning label rather than a directly executable next step."
+       'blocking))))
+
+(defun delib-flow--action-warning-strategic-theme (item)
+  "Return blocking warning when action ITEM reads like a broad strategic theme."
+  (let* ((text (string-trim (or (plist-get item :text) "")))
+         (lower (downcase text))
+         (leading (delib-flow--artifact-leading-word text)))
+    (when (and (not (delib-flow--action-observable-deliverable-p text))
+               leading
+               (member leading delib-flow--strategic-theme-action-verbs)
+               (string-match-p delib-flow--strategic-theme-action-nouns-regexp lower))
+      (delib-flow--make-artifact-warning
+       'strategic-theme-action
+       "Reads like a broad strategic theme or desired outcome rather than one concrete next step."
+       'blocking))))
+
 (defun delib-flow--action-warning-broad-scope (item)
   "Return warning when action ITEM appears broad rather than task-sized."
   (when (> (delib-flow--artifact-text-word-count (plist-get item :text)) 12)
     (delib-flow--make-artifact-warning
      'broad-action-scope
      "Looks longer than a pomodoro-sized next action and may need to be narrowed.")))
+
+(defconst delib-flow--broad-initiative-action-verbs
+  '("develop" "conduct" "implement" "launch" "rollout" "establish" "deliver")
+  "Verbs that often signal initiative-sized work rather than one concrete step.")
+
+(defconst delib-flow--broad-initiative-action-nouns-regexp
+  "\\b\\(content\\|program\\|training\\|trainings\\|pilots\\|pilot\\|initiative\\|initiatives\\|effort\\|efforts\\|rollout\\|solution\\|solutions\\|capability\\|capabilities\\)\\b"
+  "Nouns that often indicate initiative-scale work.")
+
+(defun delib-flow--action-warning-broad-initiative (item)
+  "Return blocking warning when ITEM still describes initiative-sized work."
+  (let* ((text (string-trim (or (plist-get item :text) "")))
+         (lower (downcase text))
+         (leading (delib-flow--artifact-leading-word text)))
+    (when (and (not (delib-flow--action-observable-deliverable-p text))
+               leading
+               (member leading delib-flow--broad-initiative-action-verbs)
+               (string-match-p delib-flow--broad-initiative-action-nouns-regexp lower))
+      (delib-flow--make-artifact-warning
+       'broad-initiative-action
+       "Still reads like a larger initiative or multi-step workstream rather than one concrete next deliverable."
+       'blocking))))
+
+(defun delib-flow--action-warning-article-framing (item)
+  "Return blocking warning when ITEM is still shaped like article framing."
+  (let* ((text (string-trim (or (plist-get item :text) "")))
+         (lower (downcase text)))
+    (when (and (string-match-p delib-flow--article-framing-action-regexp lower)
+               (not (delib-flow--action-observable-deliverable-p text)))
+      (delib-flow--make-artifact-warning
+       'article-framing-action
+       "Still reads like article framing or content ideation rather than one operational next step."
+       'blocking))))
 
 (defun delib-flow--action-warning-study-activity (item)
   "Return warning when action ITEM looks like study or practice activity."
@@ -678,12 +1122,82 @@ override deterministic defaults when provided."
   "Return structured warning list for next-action ITEM."
   (delq nil
         (list
+         (delib-flow--action-warning-introspective item)
+         (delib-flow--action-warning-exploratory item)
+         (delib-flow--action-warning-question-shape item)
          (delib-flow--action-warning-weak-verb item)
+         (delib-flow--action-warning-near-duplicate item)
          (delib-flow--action-warning-vague-context item)
+         (delib-flow--action-warning-heading-phrase item)
+         (delib-flow--action-warning-strategic-theme item)
          (delib-flow--action-warning-broad-scope item)
+         (delib-flow--action-warning-broad-initiative item)
+         (delib-flow--action-warning-article-framing item)
          (delib-flow--action-warning-study-activity item)
          (delib-flow--action-warning-generic-repair item)
          (delib-flow--action-warning-decision-state item))))
+
+(defun delib-flow--action-suppression-key (item)
+  "Return duplicate-suppression key for next-action ITEM, or nil."
+  (when (eq (plist-get item :kind) 'next-action)
+    (downcase
+     (string-trim
+      (or (plist-get item :previous-evidence-line)
+          (plist-get item :action-evidence-line)
+          (plist-get item :text)
+          "")))))
+
+(defun delib-flow--action-suppression-score (item)
+  "Return quality score used to keep the best duplicate next-action ITEM."
+  (+ (* 100 (pcase (delib-flow--draft-item-readiness item)
+              ('ready 3)
+              ('warning 2)
+              (_ 1)))
+     (* 10 (if (plist-get item :resolved-prior-warning-p) 1 0))
+     (* 5 (if (plist-get item :materially-different-from-previous-p) 1 0))
+     (- 10 (delib-flow--draft-item-warning-count item))))
+
+(defun delib-flow--action-suppressible-duplicate-p (item)
+  "Return non-nil when next-action ITEM is a duplicate weak idea worth suppressing."
+  (and (eq (plist-get item :kind) 'next-action)
+       (or (plist-get item :previous-evidence-line)
+           (plist-get item :action-evidence-line))
+       (or (not (delib-flow--draft-item-ready-p item))
+           (not (plist-get item :resolved-prior-warning-p))
+           (not (plist-get item :materially-different-from-previous-p)))))
+
+(defun delib-flow--suppress-duplicate-weak-actions (items)
+  "Return ITEMS with weak duplicate next actions suppressed.
+
+The result is a plist with `:actions' and `:suppressed-candidates'."
+  (let ((groups (make-hash-table :test #'equal))
+        ordered
+        kept
+        suppressed)
+    (dolist (item items)
+      (let ((key (and (delib-flow--action-suppressible-duplicate-p item)
+                      (delib-flow--action-suppression-key item))))
+        (if (and key (not (string-empty-p key)))
+            (puthash key (append (gethash key groups) (list item)) groups)
+          (push item kept))
+        (when key
+          (push key ordered))))
+    (dolist (key (delete-dups (nreverse ordered)))
+      (let* ((group (gethash key groups))
+             (winner
+              (car (sort (copy-sequence group)
+                         (lambda (left right)
+                           (> (delib-flow--action-suppression-score left)
+                              (delib-flow--action-suppression-score right)))))))
+        (push winner kept)
+        (dolist (item group)
+          (unless (eq item winner)
+            (push (list :text (plist-get item :text)
+                        :reason-codes '(duplicate-weak-action)
+                        :representative-text (plist-get winner :text))
+                  suppressed)))))
+    (list :actions (nreverse kept)
+          :suppressed-candidates (nreverse suppressed))))
 
 (defun delib-flow--waiting-for-warning-missing-owner (item)
   "Return warning when waiting-for ITEM lacks a clear owner."
@@ -749,12 +1263,18 @@ override deterministic defaults when provided."
          (delib-flow--waiting-for-warning-speculative-blocker item)
          (delib-flow--waiting-for-warning-state-phrasing item))))
 
-(defun delib-flow--annotate-draft-actions (items)
-  "Return action ITEMS annotated with structured warnings."
+(defun delib-flow--annotate-draft-actions (items &optional package)
+  "Return action ITEMS annotated with structured warnings.
+
+When PACKAGE is present, weak exploratory actions may be concretized using
+direct source-linked note context before warning evaluation."
   (mapcar (lambda (item)
-            (delib-flow--draft-item-with-warnings
-             item
-             (delib-flow--action-warnings item)))
+            (let ((rewritten (if package
+                                 (delib-flow--rewrite-linked-weak-action-item item package)
+                               item)))
+              (delib-flow--draft-item-with-warnings
+               rewritten
+               (delib-flow--action-warnings rewritten))))
           items))
 
 (defun delib-flow--annotate-draft-waiting-fors (items)
@@ -802,25 +1322,150 @@ override deterministic defaults when provided."
                    (plist-get inspect-output :body-preview)
                    "")))))))
 
+(defun delib-flow--email-structural-focus-text-p (text)
+  "Return non-nil when TEXT reads like a durable structural claim."
+  (let ((normalized (downcase (string-trim (or text "")))))
+    (and (delib-flow--reference-note-focus-usable-p normalized)
+         (not (string-match-p "\\`\\(?:hi\\|hello\\|best\\|thanks\\|good morning\\)\\b"
+                              normalized))
+         (not (string-match-p
+               "\\`\\(?:this essay is about\\|this newsletter is about\\|for teams starting from scratch, the advice was blunt\\)\\b"
+               normalized))
+         (not (string-match-p "\\`\\(?:also in this issue\\|recommended reading\\|included this week\\|this issue includes\\|case note\\|worth discussing internally\\|question to keep\\)\\b"
+                              normalized))
+         (not (delib-flow--question-shaped-next-action-p normalized))
+         (or (string-match-p "\\b\\(?:when\\|because\\|without\\|instead\\|versus\\|more than\\|less than\\|difference\\|failure mode\\|review\\|checkpoint\\|handoff\\|packet\\|workflow\\|artifact\\|ownership\\|metadata\\|onboarding\\|escalation\\|trust\\|reversible\\|visible\\|operational\\)\\b"
+                             normalized)
+             (>= (delib-flow--reference-note-highlight-fragment-abstract-cue-count
+                  normalized)
+                 2)))))
+
+(defun delib-flow--email-structural-focus-lines (digest)
+  "Return durable structural focus lines extracted from email DIGEST."
+  (let* ((trimmed-lines (delib-flow--email-digest-unwrapped-units digest))
+         (sentences
+          (apply #'append
+                 (mapcar (lambda (line)
+                           (split-string line "[.!?][[:space:]\n]+" t))
+                         trimmed-lines)))
+         focuses)
+    (dolist (line trimmed-lines)
+      (let* ((parts (split-string line "[.!?][[:space:]\n]+" t))
+             (single-sentence-p (<= (length parts) 1))
+             (cleaned
+              (delib-flow--normalize-reference-note-focus
+               (replace-regexp-in-string "\\`[\"']\\|[\"']\\'" ""
+                                         (string-trim (or line ""))))))
+        (when (and single-sentence-p
+                   (delib-flow--email-structural-focus-text-p cleaned))
+          (push cleaned focuses))))
+    (dolist (line sentences)
+      (let ((cleaned
+             (delib-flow--normalize-reference-note-focus
+              (replace-regexp-in-string "\\`[\"']\\|[\"']\\'" ""
+                                        (string-trim (or line ""))))))
+        (when (delib-flow--email-structural-focus-text-p cleaned)
+          (push cleaned focuses))))
+    (delete-dups (nreverse focuses))))
+
+(defun delib-flow--action-text-from-structural-focus (focus)
+  "Return a concrete fallback action seeded from structural FOCUS."
+  (let ((normalized (delib-flow--normalize-reference-note-focus focus)))
+    (cond
+     ((string-match "\\`\\(.+?\\) becomes real when \\(.+\\)\\'" normalized)
+      (let ((clause (string-trim (match-string 2 normalized))))
+        (when (string-match "\\`it \\(.+\\)\\'" clause)
+          (setq clause (string-trim (match-string 1 clause))))
+        (when (string-match "\\`changes \\(.+\\)\\'" clause)
+          (setq clause (string-trim (match-string 1 clause))))
+        (format "Draft checklist for %s" (downcase clause))))
+     ((string-match "\\`The difference was \\(.+\\)\\'" normalized)
+      (format "Draft checklist for %s"
+              (downcase (string-trim (match-string 1 normalized)))))
+     ((string-match "\\`\\(.+\\) mattered more than \\(.+\\)\\'" normalized)
+      (format "Draft %s"
+              (downcase (string-trim (match-string 1 normalized)))))
+     ((string-match-p "\\b\\(?:packet\\|checklist\\|guidelines\\|guide\\|review\\|reviews\\|checkpoint\\|checkpoints\\|draft\\|outline\\|summary\\|questions\\)\\b"
+                      (downcase normalized))
+      (format "Draft %s" (downcase normalized)))
+     ((string-match-p "\\b\\(?:workflow\\|handoff\\|ritual\\|loop\\|artifact\\|process\\)\\b"
+                      (downcase normalized))
+      (format "Draft checklist for %s" (downcase normalized)))
+     (t
+      (format "Draft checklist for %s" (downcase normalized))))))
+
 (defun delib-flow--source-title-action (package)
   "Return a draft action derived from PACKAGE source title."
-  (delib-flow--make-draft-action
-   (or (delib-flow--source-action-line package)
-       (and (delib-flow--package-repair-intent-p package)
-            (delib-flow--capitalize-sentence-start
-             (format "Investigate and reproduce %s"
-                     (delib-flow--repair-project-focus-text package))))
-       (format "Write follow-up note for %s"
-               (delib-flow--source-display-title package)))
-   'source))
+  (let* ((source-line (or (delib-flow--source-action-line package)
+                          (delib-flow--operator-intent-action-line package)))
+         (structural-focus
+          (plist-get (car (delib-flow--source-reference-note-focus-descriptors package))
+                     :focus))
+         (email-fallback
+          (and (delib-flow--package-email-digest package)
+               structural-focus
+               (delib-flow--action-text-from-structural-focus structural-focus)))
+         (fallback-focus (or structural-focus
+                             (delib-flow--source-display-title package)))
+         (rewritten (and source-line
+                         (delib-flow--rewrite-weak-action-text
+                          source-line
+                          fallback-focus)))
+         (text (or rewritten
+                   source-line
+                   (and (delib-flow--package-repair-intent-p package)
+                        (delib-flow--capitalize-sentence-start
+                         (format "Investigate and reproduce %s"
+                                 (delib-flow--repair-project-focus-text package))))
+                   email-fallback
+                   (format "Write follow-up note for %s"
+                           fallback-focus))))
+    (delib-flow--draft-action-with-evidence
+     text
+     'source
+     (list :action-evidence-source 'source
+           :action-evidence-line (or source-line fallback-focus)
+           :evidence-summary
+           (if source-line
+               (if (and rewritten (not (string= rewritten source-line)))
+                   (format "source: %s; rewritten from: %s"
+                           rewritten source-line)
+                 (format "source: %s" source-line))
+             (if email-fallback
+                 (format "source structural fallback: %s" fallback-focus)
+               (format "source title fallback: %s" fallback-focus)))))))
 
 (defun delib-flow--retained-candidate-action (candidate)
   "Return a draft action derived from retained CANDIDATE."
-  (delib-flow--make-draft-action
-   (or (delib-flow--candidate-action-line candidate)
-       (format "Summarize %s into project notes"
-               (plist-get candidate :title)))
-   'retained-context))
+  (let* ((evidence-line (delib-flow--candidate-action-line candidate))
+         (fallback (or (delib-flow--candidate-note-focus-line candidate)
+                       (plist-get candidate :title)))
+         (rewritten (and evidence-line
+                         (delib-flow--rewrite-weak-action-text
+                          evidence-line
+                          fallback)))
+         (text (or rewritten
+                   evidence-line
+                   (format "Summarize %s into project notes"
+                           (plist-get candidate :title)))))
+    (delib-flow--draft-action-with-evidence
+     text
+     'retained-context
+     (list :action-evidence-source 'retained-context
+           :action-evidence-title (plist-get candidate :title)
+           :action-evidence-line (or evidence-line fallback)
+           :evidence-summary
+           (if evidence-line
+               (if (and rewritten (not (string= rewritten evidence-line)))
+                   (format "support note %s: %s; rewritten from: %s"
+                           (plist-get candidate :title)
+                           rewritten
+                           evidence-line)
+                 (format "support note %s: %s"
+                         (plist-get candidate :title)
+                         evidence-line))
+             (format "support note %s"
+                     (plist-get candidate :title)))))))
 
 (defun delib-flow--retained-candidate-actions (package)
   "Return retained-candidate draft actions for PACKAGE."
@@ -863,20 +1508,18 @@ override deterministic defaults when provided."
 (defun delib-flow--repair-project-focus-text (package)
   "Return a concrete repair target phrase derived from PACKAGE."
   (let* ((title (downcase (delib-flow--source-display-title package)))
-         (intent (downcase (delib-flow--operator-intent-text-from-package package))))
+         (intent (downcase (delib-flow--operator-intent-text-from-package package)))
+         (base-title
+          (string-trim
+           (replace-regexp-in-string "\\`broken\\s-+" "" title))))
     (cond
-     ((and (string-match-p "steno" title)
-           (string-match-p "exercise\\|drill" title)
-           (string-match-p "website" intent))
-      "broken steno website exercises")
-     ((string-match-p "\\`broken\\s-+" title)
-      (string-trim (replace-regexp-in-string "\\`broken\\s-+" "" title)))
      ((or (string-match-p "website" intent)
           (string-match-p "website\\|page\\|link" title))
-      (format "broken %s"
-              (string-trim
-               (or (and (string-match-p "website\\|page\\|link" title) title)
-                   (delib-flow--source-display-title package)))))
+      (if (string-match-p "website\\|page\\|link" base-title)
+          (format "broken %s" base-title)
+        (format "broken %s on website" base-title)))
+     ((string-match-p "\\`broken\\s-+" title)
+      base-title)
      (t
       (string-trim (delib-flow--source-display-title package))))))
 
@@ -934,9 +1577,14 @@ override deterministic defaults when provided."
 (defun delib-flow--project-proposal-first-item (package)
   "Return deterministic first project item derived from PACKAGE."
   (car (or (delib-flow--project-proposal-derived-child-items package)
-           (list (delib-flow--project-proposal-fallback-child-item package)))))
+           (let ((fallback
+                  (or (delib-flow--project-proposal-source-type-fallback-child-item
+                       package)
+                      (delib-flow--project-proposal-fallback-child-item
+                       package))))
+             (list fallback)))))
 
-(defun delib-flow--project-proposal-warning-list (item _package)
+(defun delib-flow--project-proposal-warning-list (item package)
   "Return structured warning list for proposed project ITEM."
   (let ((title (or (plist-get item :title) ""))
         (tags (or (plist-get item :tags) 'nil))
@@ -976,6 +1624,13 @@ override deterministic defaults when provided."
        (delib-flow--make-artifact-warning
         'project-first-item-generic
         "First project item is still a generic placeholder or explicit incomplete note instead of a concrete source-derived step."
+        'blocking)
+       warnings))
+    (when (delib-flow--package-conceptual-newsletter-project-p package)
+      (push
+       (delib-flow--make-artifact-warning
+        'project-conceptual-newsletter
+        "Source still reads like a conceptual newsletter or essay; prefer extracting actions or notes unless a concrete initiative is named."
         'blocking)
        warnings))
     (nreverse warnings)))
@@ -1268,9 +1923,40 @@ rejected filing state before NEW-ITEMS are added back into draft state."
          (delib-flow--reference-note-warning-general-reuse item)
          (delib-flow--reference-note-warning-project-context item package))))
 
+(defun delib-flow--normalize-general-reference-note-item (item)
+  "Return ITEM with generalized focus phrasing for durable-note review."
+  (if (not (eq (plist-get item :note-type) 'general-pkm))
+      item
+    (let* ((focus (or (plist-get item :candidate-focus)
+                      (plist-get item :candidate-identity)
+                      (delib-flow--reference-note-title item)))
+           (normalized-focus (delib-flow--normalize-reference-note-focus focus))
+           (descriptor (delib-flow--reference-note-focus-descriptor normalized-focus))
+           (updated (copy-tree item)))
+      (setq updated
+            (plist-put updated :candidate-focus normalized-focus))
+      (setq updated
+            (plist-put updated :candidate-identity
+                       (plist-get descriptor :candidate-identity)))
+      (setq updated
+            (plist-put updated :focus-score
+                       (plist-get descriptor :focus-score)))
+      (setq updated
+            (plist-put updated :reuse-claim
+                       (plist-get descriptor :reuse-claim)))
+      (when (and (plist-get updated :text)
+                 (string-prefix-p "Create general PKM note for "
+                                  (plist-get updated :text)))
+        (setq updated
+              (plist-put updated :text
+                         (format "Create general PKM note for %s"
+                                 normalized-focus))))
+      updated)))
+
 (defun delib-flow--annotate-draft-reference-notes (items package)
   "Return reference-note ITEMS annotated with structured warnings for PACKAGE."
   (mapcar (lambda (item)
+            (setq item (delib-flow--normalize-general-reference-note-item item))
             (delib-flow--draft-item-with-warnings
              item
              (delib-flow--reference-note-warnings item package)))
@@ -1302,6 +1988,16 @@ rejected filing state before NEW-ITEMS are added back into draft state."
     "gather" "fix" "repair" "debug" "investigate")
   "Verbs treated as concrete action starters in source evidence lines.")
 
+(defconst delib-flow--strategic-theme-action-verbs
+  '("create" "design" "develop" "establish" "improve" "prioritize" "address"
+    "standardize" "differentiate" "incorporate" "structure" "focus"
+    "remove" "define" "prove")
+  "Verbs that often signal strategic themes rather than immediate next steps.")
+
+(defconst delib-flow--strategic-theme-action-nouns-regexp
+  "\\b\\(value\\|readiness\\|maturity\\|capability\\|capabilities\\|productivity\\|identity\\|quality\\|velocity\\|foundation\\|foundations\\|solution\\|solutions\\|enablement\\|market\\|development\\|effort\\|efforts\\|strategy\\|strategies\\|checkpoint\\|checkpoints\\|bureaucracy\\)\\b"
+  "Regexp matching broad strategic nouns that usually need a deliverable.")
+
 (defun delib-flow--source-body-lines (package)
   "Return trimmed non-empty source body lines from PACKAGE."
   (seq-filter
@@ -1312,6 +2008,12 @@ rejected filing state before NEW-ITEMS are added back into draft state."
             (delib-flow--source-body-text
              (plist-get (plist-get package :source) :content))
             "\n"))))
+
+(defun delib-flow--source-line-indentation-depth (line)
+  "Return indentation depth for source LINE."
+  (if (string-match "\\`\\([[:space:]]*\\)" (or line ""))
+      (length (match-string 1 line))
+    0))
 
 (defun delib-flow--normalize-source-evidence-line (line)
   "Return LINE normalized for draft-artifact reuse."
@@ -1325,17 +2027,89 @@ rejected filing state before NEW-ITEMS are added back into draft state."
            "" normalized))
     (string-trim-right normalized "[[:space:].:;,-]+")))
 
+(defun delib-flow--meeting-note-heading-source-line-p (raw-line normalized-line)
+  "Return non-nil when RAW-LINE and NORMALIZED-LINE look like meeting headings.
+
+These are useful as context, but too weak to treat as direct action evidence."
+  (let* ((text (string-trim (or normalized-line "")))
+         (word-count (delib-flow--artifact-text-word-count text))
+         (lower (downcase text))
+         (leading (delib-flow--artifact-leading-word text))
+         (deliverable-p (delib-flow--action-observable-deliverable-p text))
+         (depth (delib-flow--source-line-indentation-depth raw-line)))
+    (and (not (string-empty-p text))
+         (not deliverable-p)
+         (or
+          (and (<= word-count 5)
+               (or (null leading)
+                   (not (member leading delib-flow--action-line-verbs))))
+          (and leading
+               (member leading delib-flow--strategic-theme-action-verbs)
+               (string-match-p delib-flow--strategic-theme-action-nouns-regexp
+                               lower))
+          (and (> depth 0)
+               (<= word-count 6)
+               (not (string-match-p "[.?!]\\'" (string-trim (or raw-line "")))))
+          (string-match-p "\\?$" (string-trim (or raw-line "")))
+          (string-match-p "\\b\\(?:objective\\|objectives\\|capability\\|capabilities\\|value creation\\|readiness\\|productivity\\|identity\\)\\b"
+                          lower)))))
+
+(defun delib-flow--source-action-line-usable-p (package raw-line normalized-line)
+  "Return non-nil when RAW-LINE and NORMALIZED-LINE are usable action evidence."
+  (and (delib-flow--action-evidence-line-p normalized-line)
+       (not (and (eq (delib-flow--package-source-type package) 'meeting-note)
+                 (delib-flow--meeting-note-heading-source-line-p
+                  raw-line normalized-line)))))
+
 (defun delib-flow--action-evidence-line-p (line)
   "Return non-nil when LINE looks like a concrete next action."
-  (when-let ((verb (delib-flow--artifact-leading-word line)))
-    (member verb delib-flow--action-line-verbs)))
+  (or (when-let ((verb (delib-flow--artifact-leading-word line)))
+        (member verb delib-flow--action-line-verbs))
+      (delib-flow--introspective-next-action-p line)
+      (delib-flow--exploratory-next-action-p line)))
 
 (defun delib-flow--source-action-line (package)
   "Return best action-like source line from PACKAGE, or nil."
-  (seq-find
-   #'delib-flow--action-evidence-line-p
-   (mapcar #'delib-flow--normalize-source-evidence-line
-           (delib-flow--source-body-lines package))))
+  (seq-some
+   (lambda (raw-line)
+     (let ((normalized (delib-flow--normalize-source-evidence-line raw-line)))
+       (when (delib-flow--source-action-line-usable-p
+              package raw-line normalized)
+         normalized)))
+   (delib-flow--source-body-lines package)))
+
+(defun delib-flow--source-action-lines (package)
+  "Return all action-like source lines from PACKAGE."
+  (delete-dups
+   (delq nil
+         (mapcar
+          (lambda (raw-line)
+            (let ((normalized
+                   (delib-flow--normalize-source-evidence-line raw-line)))
+              (when (delib-flow--source-action-line-usable-p
+                     package raw-line normalized)
+                normalized)))
+          (delib-flow--source-body-lines package)))))
+
+(defun delib-flow--operator-intent-action-line (package)
+  "Return a weak-but-usable action line derived from PACKAGE operator intent."
+  (when-let* ((intent (delib-flow--operator-intent-text-from-package package))
+              (normalized (string-trim intent)))
+    (cond
+     ((string-match
+       "\\`I need to[[:space:]]+\\(check with\\|look into\\|consider\\|review\\|investigate\\|research\\)\\b\\(.*\\)\\'"
+       normalized)
+      (delib-flow--capitalize-sentence-start
+       (string-trim
+        (concat (match-string 1 normalized)
+                (match-string 2 normalized)))))
+     ((string-match
+       "\\`I need to[[:space:]]+\\(?:figure out\\|find out\\|understand\\)\\b\\(.*\\)\\'"
+       normalized)
+      (delib-flow--capitalize-sentence-start
+       (format "Investigate %s"
+               (string-trim (or (match-string 1 normalized) "")))))
+     (t nil))))
 
 (defun delib-flow--normalize-waiting-for-line (line)
   "Return LINE normalized to explicit waiting-for phrasing."
@@ -1385,6 +2159,22 @@ rejected filing state before NEW-ITEMS are added back into draft state."
          "no concrete child item could be derived from this source yet"
          normalized))))
 
+(defun delib-flow--project-first-item-text-needs-replacement-p (text)
+  "Return non-nil when first-item TEXT should be replaced with a concrete step."
+  (let ((normalized (downcase (string-trim (or text "")))))
+    (or (delib-flow--project-proposal-placeholder-first-item-p normalized)
+        (string-prefix-p "investigate and fix " normalized)
+        (string-prefix-p "fix " normalized)
+        (string-prefix-p "address " normalized))))
+
+(defalias 'delib-flow--project-first-item-needs-replacement-text-p
+  #'delib-flow--project-first-item-text-needs-replacement-p)
+
+(defun delib-flow--project-first-item-needs-replacement-p (item)
+  "Return non-nil when project child ITEM is too generic to remain the first step."
+  (delib-flow--project-first-item-text-needs-replacement-p
+   (plist-get item :text)))
+
 (defun delib-flow--project-child-items (item)
   "Return attached child items from project ITEM."
   (or (plist-get item :child-items)
@@ -1405,8 +2195,46 @@ rejected filing state before NEW-ITEMS are added back into draft state."
 (defun delib-flow--project-proposal-derived-child-items (package)
   "Return concrete source-derived child items for a new project PACKAGE."
   (let ((items nil))
-    (when-let ((action-text (delib-flow--source-action-line package)))
-      (push (delib-flow--make-draft-action action-text 'project-proposal) items))
+    (when-let* ((action-lines (delib-flow--source-action-lines package))
+                (annotated-actions
+                 (delib-flow--annotate-draft-actions
+                  (mapcar (lambda (action-text)
+                            (delib-flow--make-draft-action
+                             action-text
+                             'project-proposal))
+                          action-lines)
+                  package))
+                (best-action
+                 (car
+                  (sort
+                   (copy-sequence annotated-actions)
+                   (lambda (left right)
+                     (let ((left-readiness (delib-flow--draft-item-readiness left))
+                           (right-readiness (delib-flow--draft-item-readiness right))
+                           (left-blocking (delib-flow--draft-item-blocking-warning-count left))
+                           (right-blocking (delib-flow--draft-item-blocking-warning-count right))
+                           (left-warnings (delib-flow--draft-item-warning-count left))
+                           (right-warnings (delib-flow--draft-item-warning-count right)))
+                       (cond
+                        ((not (eq left-readiness right-readiness))
+                         (> (pcase left-readiness
+                              ('ready 3)
+                              ('warning 2)
+                              (_ 1))
+                            (pcase right-readiness
+                              ('ready 3)
+                              ('warning 2)
+                              (_ 1))))
+                        ((/= left-blocking right-blocking)
+                         (< left-blocking right-blocking))
+                        ((/= left-warnings right-warnings)
+                         (< left-warnings right-warnings))
+                        (t
+                         (< (delib-flow--artifact-text-word-count
+                             (plist-get left :text))
+                            (delib-flow--artifact-text-word-count
+                             (plist-get right :text)))))))))))
+      (push best-action items))
     (when-let ((waiting-text (delib-flow--source-waiting-for-line package)))
       (push (delib-flow--make-draft-waiting-for waiting-text 'project-proposal)
             items))
@@ -1426,6 +2254,34 @@ rejected filing state before NEW-ITEMS are added back into draft state."
    "No concrete child item could be derived from this source yet"
    'project-proposal))
 
+(defun delib-flow--project-proposal-source-type-fallback-child-item (package)
+  "Return concrete source-type-based fallback child item for PACKAGE, or nil."
+  (pcase (delib-flow--package-source-type package)
+    ('meeting-note
+     (delib-flow--make-draft-action
+      (format "Draft follow-up summary for %s"
+              (delib-flow--project-proposal-title package))
+      'project-proposal))
+    (_ nil)))
+
+(defun delib-flow--package-newsletter-email-p (package)
+  "Return non-nil when PACKAGE source is a newsletter-like email."
+  (let ((digest (delib-flow--package-email-digest package)))
+    (and digest
+         (eq (delib-flow--package-source-type package) 'email)
+         (string-match-p
+          "\\b\\(?:newsletter\\|mailing list\\|digest\\|cohort\\)\\b"
+          (downcase (or (plist-get digest :type-hint) ""))))))
+
+(defun delib-flow--package-conceptual-newsletter-project-p (package)
+  "Return non-nil when PACKAGE reads like a conceptual newsletter, not a project."
+  (and (delib-flow--package-newsletter-email-p package)
+       (not (delib-flow--operator-intent-present-p package))
+       (not (delib-flow--package-repair-intent-p package))
+       (null (delib-flow--source-action-lines package))
+       (null (delib-flow--source-waiting-for-line package))
+       (delib-flow--source-reference-note-focus-descriptors package)))
+
 (defun delib-flow--source-reference-note-type (package)
   "Return preferred source-note type for PACKAGE."
   (if (delib-flow--matched-project-title package)
@@ -1435,18 +2291,18 @@ rejected filing state before NEW-ITEMS are added back into draft state."
 (defconst delib-flow--reference-note-durable-concept-regexp
   (concat
    "\\b\\("
-   "adapted\\|advisor\\|advisors\\|approach\\|capture system\\|foundation"
-   "\\|framework\\|habit\\|idea\\|model\\|moat\\|pattern\\|playbook"
-   "\\|principle\\|prompt\\|strategy\\|system\\|workflow"
+   "approach\\|framework\\|habit\\|idea\\|method\\|model\\|pattern"
+   "\\|playbook\\|practice\\|principle\\|process\\|strategy\\|system"
+   "\\|workflow"
    "\\)\\b")
   "Regexp matching durable-concept phrasing for reference-note candidates.")
 
 (defconst delib-flow--reference-note-generic-focus-regexp
   (concat
-   "\\b\\("
+   "\\`\\(?:"
    "cohort\\|newsletter\\|update\\|week [0-9]+\\|summary\\|overview\\|notes?"
    "\\|context\\|reminder"
-   "\\)\\b")
+   "\\)\\'")
   "Regexp matching overly generic reference-note focus terms.")
 
 (defconst delib-flow--reference-note-heading-framing-regexp
@@ -1483,7 +2339,74 @@ rejected filing state before NEW-ITEMS are added back into draft state."
           (replace-regexp-in-string "[[:space:][:punct:]]+\\'" "" normalized))
     (setq normalized
           (replace-regexp-in-string "[[:space:]\n]+" " " normalized))
+    (setq normalized
+          (replace-regexp-in-string
+           "\\`\\(?:the idea\\|idea\\|key idea\\|main idea\\):[[:space:]]*"
+           ""
+           normalized
+           t
+           t))
+    (when (string-match
+           "\\`\\([^:]+\\):[[:space:]]*focus on[[:space:]]+\\(.+\\)\\'"
+           normalized)
+      (setq normalized
+            (format "%s for %s"
+                    (string-trim (match-string 2 normalized))
+                    (string-trim (match-string 1 normalized)))))
+    (when (string-match
+           "\\`focus on[[:space:]]+\\(.+\\)[[:space:]]+for[[:space:]]+\\(.+\\)\\'"
+           normalized)
+      (setq normalized
+            (format "%s for %s"
+                    (string-trim (match-string 1 normalized))
+                    (string-trim (match-string 2 normalized)))))
     (delib-flow--capitalize-sentence-start normalized)))
+
+(defun delib-flow--email-digest-unwrapped-units (digest)
+  "Return paragraph-like units from email DIGEST with soft wraps removed."
+  (let (units)
+    (dolist (paragraph
+             (seq-filter
+              (lambda (value)
+                (not (string-empty-p (string-trim value))))
+              (split-string (or (plist-get digest :plain-body) "")
+                            "\n[[:space:]\n]*\n+"
+                            t)))
+      (let ((current nil))
+        (dolist (raw-line (split-string paragraph "\n"))
+          (let ((line (string-trim raw-line)))
+            (unless (string-empty-p line)
+              (cond
+               ((or (string-match-p
+                     "\\`\\(?:from\\|to\\|cc\\|bcc\\|subject\\|date\\|reply-to\\|message-id\\|email file\\):"
+                     (downcase line))
+                    (string-match-p "\\`https?://" line)
+                    (string-match-p "\\`[()]\\'" line))
+                nil)
+               ((string-match-p "\\`[-*+][[:space:]]+" line)
+                (when current
+                  (push (string-trim current) units)
+                  (setq current nil))
+                (push (string-trim
+                       (replace-regexp-in-string "\\`[-*+][[:space:]]+" ""
+                                                 line))
+                      units))
+               ((string-match-p "\\`[-=_[:space:]]\\{3,\\}\\'" line)
+                (when current
+                  (push (string-trim current) units)
+                  (setq current nil))
+                (push line units))
+               ((and current
+                     (string-match-p ":[[:space:]]*\\'" current))
+                (push (string-trim current) units)
+                (setq current line))
+               (current
+                (setq current (concat current " " line)))
+               (t
+                (setq current line))))))
+        (when current
+          (push (string-trim current) units))))
+    (nreverse units)))
 
 (defun delib-flow--reference-note-focus-terms (focus)
   "Return significant reusable terms from reference-note FOCUS."
@@ -1546,16 +2469,30 @@ rejected filing state before NEW-ITEMS are added back into draft state."
   "Return seeded reusable-note claim for reference-note FOCUS, or nil."
   (let ((normalized (delib-flow--normalize-reference-note-focus focus)))
     (when (>= (delib-flow--reference-note-focus-score normalized) 8)
-      (cond
-       ((string-match-p "\\badapted\\b" (downcase normalized))
-        (format "Shows how `%s` can be adapted as a reusable operating pattern."
-                normalized))
-       ((string-match-p "\\badvisors?\\b" (downcase normalized))
-        (format "Captures `%s` as a repeatable pattern that can inform later tool, workflow, or agent design."
-                normalized))
-       (t
+      (if (string-match-p "\\b\\(how\\|why\\|when\\|instead of\\)\\b"
+                          (downcase normalized))
+          (format "Distills `%s` into reusable guidance for later decisions, workflows, or designs."
+                  normalized)
         (format "Captures `%s` as a reusable concept rather than a one-off source summary."
-                normalized))))))
+                normalized)))))
+
+(defun delib-flow--reference-note-highlight-fragment-abstract-cue-count (text)
+  "Return count of abstract reusable-concept cues found in TEXT."
+  (let ((lower (downcase (or text ""))))
+    (+ (if (string-match-p delib-flow--reference-note-durable-concept-regexp lower) 1 0)
+       (if (string-match-p "\\b\\(how\\|why\\|when\\|instead of\\|across\\|beyond\\)\\b" lower) 1 0)
+       (if (string-match-p "\\b\\(helps\\|guides\\|supports\\|improves\\|reduces\\|reveals\\|shows\\)\\b" lower) 1 0)
+       (if (string-match-p "\\b\\(tradeoff\\|constraint\\|criteria\\|boundary\\|failure mode\\|decision\\)\\b" lower) 1 0))))
+
+(defun delib-flow--reference-note-highlight-fragment-example-score (text)
+  "Return generic score for concrete example-like TEXT."
+  (let ((lower (downcase (or text ""))))
+    (+ (if (string-match-p "\\`[[:upper:]][[:lower:]]+[[:space:]]+\\b" (or text "")) 2 0)
+       (if (string-match-p "\\b\\(built\\|created\\|launched\\|made\\|used\\|tested\\|wrote\\|runs?\\)\\b"
+                           lower)
+           2
+         0)
+       (if (string-match-p "\\b\\(others are\\|many teams\\|some teams\\)\\b" lower) -2 0))))
 
 (defun delib-flow--reference-note-focus-descriptor (focus)
   "Return structured deterministic descriptor for reference-note FOCUS."
@@ -1656,11 +2593,40 @@ rejected filing state before NEW-ITEMS are added back into draft state."
        (- (delib-flow--draft-item-warning-count item))
        (- (delib-flow--reference-note-item-source-local-penalty item)))))
 
+(defun delib-flow--trim-source-local-reference-note-queue (items)
+  "Return ITEMS with weak source-local note queues narrowed.
+
+When every candidate is still a warned `general-pkm` note, keep only the
+strongest few so the operator sees the best drafting targets instead of a
+long menu of near-equivalent weak options."
+  (if (and (> (length items) 1)
+           (seq-every-p
+            (lambda (item)
+              (and (eq (plist-get item :note-type) 'general-pkm)
+                   (delib-flow--draft-item-warning-approval-risk-p item)))
+            items))
+      (seq-take
+       (sort (copy-sequence items)
+             (lambda (left right)
+               (> (delib-flow--reference-note-item-promotion-score left)
+                  (delib-flow--reference-note-item-promotion-score right))))
+       1)
+    items))
+
+(defun delib-flow--curate-reference-note-items (items)
+  "Return reference-note ITEMS promoted and trimmed for operator review."
+  (delib-flow--trim-source-local-reference-note-queue
+   (delib-flow--promote-reference-note-items items)))
+
 (defun delib-flow--proposed-project-item (package)
   "Return deterministic proposed project artifact derived from PACKAGE."
   (let* ((child-items (or (delib-flow--project-proposal-derived-child-items package)
-                          (list (delib-flow--project-proposal-fallback-child-item
-                                 package))))
+                          (let ((fallback
+                                 (or (delib-flow--project-proposal-source-type-fallback-child-item
+                                      package)
+                                     (delib-flow--project-proposal-fallback-child-item
+                                      package))))
+                            (list fallback))))
          (item
           (delib-flow--project-with-child-items
            (delib-flow--make-draft-project
@@ -1747,10 +2713,11 @@ rejected filing state before NEW-ITEMS are added back into draft state."
 
 (defun delib-flow--normalize-filter-reference-material-output (raw-output)
   "Return normalized filter text from RAW-OUTPUT."
-  (format "- Candidate count: %s\n- Retained count: %s\n- Rejected count: %s\n- Retained candidates:\n%s\n- Rejected candidates:\n%s"
+  (format "- Candidate count: %s\n- Retained count: %s\n- Rejected count: %s\n- Retained context:\n%s\n- Retained candidates:\n%s\n- Rejected candidates:\n%s"
           (plist-get raw-output :candidate-count)
           (plist-get raw-output :retained-count)
           (plist-get raw-output :rejected-count)
+          (or (plist-get raw-output :retained-context) "- none")
           (if-let ((retained (plist-get raw-output :retained-candidates)))
               (mapconcat #'delib-flow--normalize-filter-candidate
                          retained
@@ -1811,9 +2778,31 @@ rejected filing state before NEW-ITEMS are added back into draft state."
           (or (plist-get raw-output :blocking-warning-count) 0)
           (or (plist-get raw-output :blocking-warning-item-count) 0)))
 
+(defun delib-flow--normalized-retry-attempt-count (raw-output)
+  "Return operator-facing retry attempt count from RAW-OUTPUT."
+  (max (or (plist-get raw-output :previous-attempt-count) 0)
+       (or (plist-get (plist-get raw-output :retry-context) :attempt-count) 0)))
+
+(defun delib-flow--normalize-suppressed-candidate-summary (raw-output)
+  "Return normalized suppression summary lines from RAW-OUTPUT, or nil."
+  (when-let ((count (plist-get raw-output :suppressed-candidate-count)))
+    (when (> count 0)
+      (let* ((suppressed (plist-get raw-output :suppressed-candidates))
+             (representatives
+              (delete-dups
+               (delq nil
+                     (mapcar (lambda (candidate)
+                               (plist-get candidate :representative-text))
+                             suppressed)))))
+        (format "- Suppressed weak duplicates: %s\n- Kept representative(s): %s"
+                count
+                (if representatives
+                    (mapconcat #'identity representatives ", ")
+                  "none"))))))
+
 (defun delib-flow--normalize-extract-actions-output (raw-output)
   "Return normalized extract-actions text from RAW-OUTPUT."
-  (format "- Candidate count: %s\n- Operator intent: %s\n- Project context: %s%s\n- Prior attempts: %s\n- Similar to previous attempt: %s\n%s\n%s"
+  (format "- Candidate count: %s\n- Operator intent: %s\n- Project context: %s%s\n- Prior attempts: %s\n- Similar to previous attempt: %s\n- Prior retry context available: %s\n%s%s\n%s"
           (plist-get raw-output :candidate-count)
           (if (delib-flow--non-empty-string-p (plist-get raw-output :operator-intent))
               (plist-get raw-output :operator-intent)
@@ -1822,15 +2811,23 @@ rejected filing state before NEW-ITEMS are added back into draft state."
           (if-let ((title (plist-get raw-output :project-context-title)))
               (format " (%s)" title)
             "")
-          (or (plist-get raw-output :previous-attempt-count) 0)
+          (delib-flow--normalized-retry-attempt-count raw-output)
           (if (plist-get raw-output :similar-to-previous-p) "yes" "no")
+          (if (or (plist-get raw-output :retry-context-present-p)
+                  (plist-get raw-output :retry-context))
+              "yes"
+            "no")
           (delib-flow--normalize-proposal-warning-summary raw-output)
+          (if-let ((suppression (delib-flow--normalize-suppressed-candidate-summary
+                                 raw-output)))
+              (concat "\n" suppression)
+            "")
           (delib-flow--normalize-draft-items-with-warnings
            (plist-get raw-output :actions))))
 
 (defun delib-flow--normalize-extract-waiting-for-output (raw-output)
   "Return normalized extract-waiting-for text from RAW-OUTPUT."
-  (format "- Candidate count: %s\n- Operator intent: %s\n- Project context: %s%s\n- Prior attempts: %s\n- Similar to previous attempt: %s\n%s\n%s"
+  (format "- Candidate count: %s\n- Operator intent: %s\n- Project context: %s%s\n- Prior attempts: %s\n- Similar to previous attempt: %s\n- Prior retry context available: %s\n%s\n%s"
           (plist-get raw-output :candidate-count)
           (if (delib-flow--non-empty-string-p (plist-get raw-output :operator-intent))
               (plist-get raw-output :operator-intent)
@@ -1839,19 +2836,37 @@ rejected filing state before NEW-ITEMS are added back into draft state."
           (if-let ((title (plist-get raw-output :project-context-title)))
               (format " (%s)" title)
             "")
-          (or (plist-get raw-output :previous-attempt-count) 0)
+          (delib-flow--normalized-retry-attempt-count raw-output)
           (if (plist-get raw-output :similar-to-previous-p) "yes" "no")
+          (if (or (plist-get raw-output :retry-context-present-p)
+                  (plist-get raw-output :retry-context))
+              "yes"
+            "no")
           (delib-flow--normalize-proposal-warning-summary raw-output)
           (delib-flow--normalize-draft-items-with-warnings
            (plist-get raw-output :waiting-fors))))
 
+(defun delib-flow--reference-note-queue-source-local-p (items)
+  "Return non-nil when reference-note ITEMS are still source-local."
+  (and items
+       (seq-every-p
+        (lambda (item)
+          (or (delib-flow--draft-item-has-warning-code-p
+               item 'reference-note-candidate-identity)
+              (delib-flow--draft-item-has-warning-code-p
+               item 'reference-note-reuse-justification)))
+        items)))
+
 (defun delib-flow--normalize-suggest-reference-notes-output (raw-output)
   "Return normalized reference-note text from RAW-OUTPUT."
-  (format "- Candidate count: %s\n%s\n%s"
+  (let ((items (plist-get raw-output :reference-notes)))
+    (format "- Candidate count: %s\n%s%s\n%s"
           (plist-get raw-output :candidate-count)
           (delib-flow--normalize-proposal-warning-summary raw-output)
-          (delib-flow--normalize-draft-items-with-warnings
-           (plist-get raw-output :reference-notes))))
+          (if (delib-flow--reference-note-queue-source-local-p items)
+              "\n- Queue quality: these note candidates are still source-local and likely need drafting or support before approval."
+            "")
+          (delib-flow--normalize-draft-items-with-warnings items))))
 
 (defun delib-flow--normalize-draft-selected-action-output (raw-output)
   "Return normalized selected-action draft text from RAW-OUTPUT."
@@ -2437,55 +3452,68 @@ rejected filing state before NEW-ITEMS are added back into draft state."
         (push item kept)))))
 
 (defun delib-flow--email-digest-reference-note-focuses (digest)
- "Return deterministic durable note focuses extracted from email DIGEST."
- (let* ((subject
-         (delib-flow--normalize-reference-note-focus
-          (plist-get digest :subject)))
-        (lines
-         (split-string (or (plist-get digest :plain-body) "") "\n"))
-        body-focuses)
-   (while lines
-     (let* ((line (car lines))
-            (next (cadr lines))
-            (trimmed (string-trim line)))
-       (cond
-        ((and (string-match-p "\\`[-=_[:space:]]\\{3,\\}\\'" trimmed)
-              next (delib-flow--reference-note-focus-usable-p next))
-         (push (delib-flow--normalize-reference-note-focus next)
+  "Return deterministic durable note focuses extracted from email DIGEST."
+  (let* ((subject
+          (delib-flow--normalize-reference-note-focus
+           (plist-get digest :subject)))
+         (lines
+          (delib-flow--email-digest-unwrapped-units digest))
+         (body-focuses
+          (delib-flow--email-structural-focus-lines digest)))
+    (while lines
+      (let* ((line (car lines))
+             (next (cadr lines))
+             (trimmed (string-trim line))
+             (sentences
+              (delib-flow--reference-note-split-unit-sentences trimmed)))
+        (cond
+         ((and (string-match-p "\\`[-=_[:space:]]\\{3,\\}\\'" trimmed)
+               next (delib-flow--reference-note-focus-usable-p next))
+          (push (delib-flow--normalize-reference-note-focus next)
+                body-focuses))
+         (t
+          (dolist (sentence sentences)
+            (cond
+             ((string-match "highlight here is \\(.+\\)\\(?:[.?!]\\|$\\)"
+                            sentence)
+              (push
+               (delib-flow--normalize-reference-note-focus
+                (match-string 1 sentence))
                body-focuses))
-        ((string-match "highlight here is \\(.+?\\)\\(?:[.?!]\\|$\\)"
-                       trimmed)
-         (push
-          (delib-flow--normalize-reference-note-focus
-           (match-string 1 trimmed))
-          body-focuses))
-        ((string-match "was about \\(.+?\\)\\(?:[.?!]\\|$\\)" trimmed)
-         (push
-          (delib-flow--normalize-reference-note-focus
-           (match-string 1 trimmed))
-          body-focuses))
-        ((string-match
-          "\\`The idea:[[:space:]]*\\(.+?\\)\\(?:[.?!]\\|$\\)" trimmed)
-         (push
-          (delib-flow--normalize-reference-note-focus
-           (match-string 1 trimmed))
-          body-focuses))
-        ((string-match
-          "\\`Going up in value:[[:space:]]*\\(.+?\\)\\(?:[.?!]\\|$\\)"
-          trimmed)
-         (push
-          (delib-flow--normalize-reference-note-focus
-           (match-string 1 trimmed))
-          body-focuses))))
-     (setq lines (cdr lines)))
-   (let* ((normalized-body
-           (seq-filter #'delib-flow--reference-note-focus-usable-p
-                       (delete-dups (nreverse body-focuses))))
-          (subject-focus
-           (and (null normalized-body)
-                (delib-flow--reference-note-focus-usable-p subject)
-                (list subject))))
-     (seq-take (delete-dups (append normalized-body subject-focus)) 4))))
+             ((string-match "was about \\(.+\\)\\(?:[.?!]\\|$\\)" sentence)
+              (push
+               (delib-flow--normalize-reference-note-focus
+                (match-string 1 sentence))
+               body-focuses))
+             ((string-match
+               "\\`The idea:[[:space:]]*\\(.+\\)\\(?:[.?!]\\|$\\)" sentence)
+              (push
+               (delib-flow--normalize-reference-note-focus
+                (match-string 1 sentence))
+               body-focuses))
+             ((string-match
+               "\\`Going up in value:[[:space:]]*\\(.+\\)\\(?:[.?!]\\|$\\)"
+               sentence)
+              (push
+               (delib-flow--normalize-reference-note-focus
+                (match-string 1 sentence))
+               body-focuses)))))))
+      (setq lines (cdr lines)))
+    (let* ((normalized-body
+            (delib-flow--promote-reference-note-focus-descriptors
+             (mapcar #'delib-flow--reference-note-focus-descriptor
+                     (seq-filter #'delib-flow--reference-note-focus-usable-p
+                                 (delete-dups body-focuses)))))
+           (subject-focus
+            (and (null normalized-body)
+                 (delib-flow--reference-note-focus-usable-p subject)
+                 (list subject))))
+      (seq-take
+       (append (mapcar (lambda (descriptor)
+                         (plist-get descriptor :focus))
+                       normalized-body)
+               subject-focus)
+       4))))
 
 (defun delib-flow--source-reference-note-focus-descriptors (package)
   "Return structured deterministic source-note focus descriptors for PACKAGE."
@@ -2785,22 +3813,18 @@ rejected filing state before NEW-ITEMS are added back into draft state."
  (let* ((lower (downcase fragment))
         (words (delib-flow--string-words fragment))
         (term-score (length (seq-intersection terms words #'string=)))
+        (word-count (length words))
         (concept-score
-         (+ (if (string-match-p "\\bthe idea\\b" lower) 6 0)
-            (if (string-match-p "\\binstead of\\b" lower) 4 0)
-            (if (string-match-p "\\byou create\\b" lower) 4 0)
-            (if (string-match-p "\\bfits your\\b" lower) 3 0)
-            (if (string-match-p "\\bmore valuable\\b" lower) 3 0)
-            (if (string-match-p "\\bgoing up in value\\b" lower) 3 0)
-            (if (string-match-p "\\bpersonal ai advisors\\b" lower) 5 0)
-            (if (string-match-p "\\bnutrition coach\\b" lower) 3 0)))
+         (+ (* 3 (delib-flow--reference-note-highlight-fragment-abstract-cue-count fragment))
+            (delib-flow--reference-note-highlight-fragment-example-score fragment)
+            (if (string-match-p "\\b\\(because\\|so that\\|rather than\\)\\b" lower) 2 0)
+            (if (and (>= word-count 8) (<= word-count 22)) 2 0)))
         (penalty
          (+ (if (string-match-p "\\bquick update\\b" lower) 4 0)
             (if (string-match-p "\\bweek [0-9]+\\b" lower) 2 0)
             (if (string-match-p "\\bcohort\\b" lower) 2 0)
-            (if (string-match-p "\\blaying the foundation\\b" lower) 3 0)
-            (if (string-match-p "\\bmaster prompt\\b" lower) 3 0)
-            (if (string-match-p "\\bpara\\b" lower) 2 0))))
+            (if (string-match-p "\\b\\(introduction\\|overview\\|summary\\|recap\\|notes?\\)\\b" lower) 2 0)
+            (if (< word-count 6) 2 0))))
    (- (+ term-score concept-score) penalty)))
 
 (defun delib-flow--reference-note-highlight-candidates (item package)
@@ -2972,6 +3996,12 @@ rejected filing state before NEW-ITEMS are added back into draft state."
       (format
        "This note captures supporting context for %s from %s."
        title source-title))
+     ((eq (plist-get item :note-type) 'general-pkm)
+      (if-let ((reuse-claim (plist-get item :reuse-claim)))
+          reuse-claim
+        (format
+         "%s can inform related workflow, design, or decision work."
+         title)))
      (highlights
       (format
        "This note captures %s. The source frames it as: %s"
@@ -2989,8 +4019,62 @@ rejected filing state before NEW-ITEMS are added back into draft state."
 
 (defun delib-flow--reference-note-reuse-angle (item)
   "Return a seeded reuse-angle line for reference-note ITEM."
-  (format "Reuse this when related notes touch %s or adjacent patterns."
-          (downcase (delib-flow--reference-note-title item))))
+  (or (plist-get item :reuse-claim)
+      (if (eq (plist-get item :note-type) 'general-pkm)
+          "Reuse this when you need a concise concept for comparing adjacent decisions, workflows, or patterns."
+        (format "Reuse this when related notes touch %s or adjacent patterns."
+                (downcase (delib-flow--reference-note-title item))))))
+
+(defun delib-flow--reference-note-durable-claim-text (item highlights summary)
+  "Return seeded durable-claim text for reference-note ITEM.
+
+HIGHLIGHTS and SUMMARY provide source-grounding material."
+  (or (and (eq (plist-get item :note-type) 'general-pkm)
+           (plist-get item :reuse-claim))
+      (seq-find
+       (lambda (highlight)
+         (let ((text (string-trim (or highlight ""))))
+           (and (delib-flow--non-empty-string-p text)
+                (not (delib-flow--introspective-next-action-p text))
+                (not (delib-flow--exploratory-next-action-p text))
+                (not (string-match-p "\\`look into\\b\\|\\`check with\\b\\|\\`check\\b"
+                                     (downcase text))))))
+       highlights)
+      (and (eq (plist-get item :note-type) 'general-pkm)
+           (format "%s offers a reusable framing for adjacent workflow, design, or decision work."
+                   (delib-flow--reference-note-title item)))
+      summary
+      "Capture the core claim from the source in your own words."))
+
+(defun delib-flow--reference-note-why-it-matters-text (item summary)
+  "Return seeded why-it-matters text for reference-note ITEM using SUMMARY."
+  (or (and (eq (plist-get item :note-type) 'general-pkm)
+           "Use this to keep related notes, workflows, or decisions aligned without restating the source each time.")
+      summary
+      "Explain why this idea matters beyond the immediate source."))
+
+(defun delib-flow--reference-note-template-summary-line-p (line)
+  "Return non-nil when LINE reads like note-template prose."
+  (let ((lower (downcase (string-trim (or line "")))))
+    (or (string-empty-p lower)
+        (string-prefix-p "this note captures" lower)
+        (string-match-p "\\breusable framing\\b" lower)
+        (string-match-p "\\bdurable concept\\b" lower)
+        (string-prefix-p "reuse this when" lower)
+        (string-prefix-p "distill the durable idea" lower)
+        (string-prefix-p "explain why this note is reusable" lower)
+        (string-prefix-p "link or merge with nearby notes" lower))))
+
+(defun delib-flow--reference-note-usable-summary-line (line)
+  "Return LINE cleaned for working-draft summary use, or nil."
+  (let ((cleaned (delib-flow--reference-note-clean-line line)))
+    (unless (or (delib-flow--reference-note-template-summary-line-p cleaned)
+                (delib-flow--introspective-next-action-p cleaned)
+                (delib-flow--exploratory-next-action-p cleaned)
+                (string-match-p
+                 "\\`\\(?:look into\\|check with\\|check\\)\\b"
+                 (downcase cleaned)))
+      cleaned)))
 
 (defun delib-flow--reference-note-filetag-suggestions (item)
   "Return note filetag suggestions for reference-note ITEM."
@@ -3065,13 +4149,11 @@ rejected filing state before NEW-ITEMS are added back into draft state."
           (delib-flow--reference-note-source-context-lines package))
          (draft-summary
           (delib-flow--reference-note-draft-summary item package))
-         (durable-claim (car highlights))
+         (durable-claim
+          (delib-flow--reference-note-durable-claim-text
+           item highlights draft-summary))
          (why-it-matters
-          (string-remove-prefix
-           (format
-            "This note captures %s. The source frames it as: "
-            (delib-flow--reference-note-title item))
-           draft-summary)))
+          (delib-flow--reference-note-why-it-matters-text item draft-summary)))
     (string-join
      (append
       (list "* Working draft"
@@ -3113,23 +4195,79 @@ rejected filing state before NEW-ITEMS are added back into draft state."
 (defun delib-flow--reference-note-draft-body-with-seed
  (draft-body item package)
  "Return DRAFT-BODY enriched with seeded structure for ITEM and PACKAGE."
- (let* ((clean-draft (string-trim (or draft-body "")))
+  (let* ((clean-draft (string-trim (or draft-body "")))
         (highlights
          (delib-flow--reference-note-source-highlights item package))
         (support-lines
          (delib-flow--reference-note-support-lines package))
         (source-context-lines
          (delib-flow--reference-note-source-context-lines package))
+        (sanitize-draft-line
+         (lambda (value)
+           (let ((cleaned (string-trim (or value ""))))
+             (setq cleaned
+                   (replace-regexp-in-string
+                    "\\`\\(?:Durable claim:\\|Why it matters:\\|Reuse angle:\\)[ \t]*"
+                    ""
+                    cleaned))
+             (delib-flow--reference-note-usable-summary-line cleaned))))
+        (existing-durable-claim
+         (when (string-match "^- Durable claim:[ \t]*\\(.+\\)$" clean-draft)
+           (funcall sanitize-draft-line (match-string 1 clean-draft))))
+        (existing-why-it-matters
+         (when (string-match "^- Why it matters:[ \t]*\\(.+\\)$" clean-draft)
+           (funcall sanitize-draft-line (match-string 1 clean-draft))))
+        (existing-reuse-angle
+         (when (string-match "^- Reuse angle:[ \t]*\\(.+\\)$" clean-draft)
+           (funcall sanitize-draft-line (match-string 1 clean-draft))))
+        (working-summary
+         (let ((section clean-draft)
+               summary-lines)
+           (with-temp-buffer
+             (insert clean-draft)
+             (goto-char (point-min))
+             (when (re-search-forward "^\\* Working draft[ \t]*$" nil t)
+               (forward-line 1)
+               (let ((start (point)))
+                 (if (re-search-forward "^\\* " nil t)
+                     (setq section
+                           (buffer-substring-no-properties
+                            start
+                            (line-beginning-position)))
+                   (setq section
+                         (buffer-substring-no-properties start (point-max)))))))
+           (dolist (line (split-string (string-trim section) "\n" t))
+             (let ((trimmed (string-trim line)))
+               (unless (or (string-prefix-p "- Durable claim:" trimmed)
+                           (string-prefix-p "- Why it matters:" trimmed)
+                           (string-prefix-p "- Reuse angle:" trimmed))
+                 (when-let ((usable
+                             (delib-flow--reference-note-usable-summary-line
+                              trimmed)))
+                   (push usable summary-lines)))))
+           (string-join (nreverse summary-lines) "\n")))
         (draft-sentences
-         (delib-flow--reference-note-split-unit-sentences clean-draft))
-        (durable-claim (or (car draft-sentences) (car highlights)))
-        (why-it-matters (or (cadr draft-sentences) (car highlights))))
+         (delib-flow--reference-note-split-unit-sentences working-summary))
+        (durable-claim
+         (or (and (delib-flow--non-empty-string-p existing-durable-claim)
+                  existing-durable-claim)
+             (and (delib-flow--non-empty-string-p (car draft-sentences))
+                  (car draft-sentences))
+             (delib-flow--reference-note-durable-claim-text
+              item highlights working-summary)))
+        (why-it-matters
+         (or (and (delib-flow--non-empty-string-p existing-why-it-matters)
+                  existing-why-it-matters)
+             (and (delib-flow--non-empty-string-p (cadr draft-sentences))
+                  (cadr draft-sentences))
+             (delib-flow--reference-note-why-it-matters-text
+              item working-summary))))
    (string-join
     (append
      (list "* Working draft"
-           (if (string-empty-p clean-draft)
+           (if (string-empty-p working-summary)
                (delib-flow--reference-note-draft-summary item package)
-             clean-draft)
+             working-summary)
            (format "- Durable claim: %s"
                    (or durable-claim
                        "Capture the core claim from the source in your own words."))
@@ -3137,7 +4275,9 @@ rejected filing state before NEW-ITEMS are added back into draft state."
                    (or why-it-matters
                        "Explain why this idea matters beyond the immediate source."))
            (format "- Reuse angle: %s"
-                   (delib-flow--reference-note-reuse-angle item))
+                   (or (and (delib-flow--non-empty-string-p existing-reuse-angle)
+                            existing-reuse-angle)
+                       (delib-flow--reference-note-reuse-angle item)))
            "" "* Source highlights")
      (if highlights
          (append

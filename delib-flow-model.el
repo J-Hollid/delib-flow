@@ -110,6 +110,76 @@ ANCHOR-ID is the stable in-buffer anchor for the block."
         :selected-action nil
         :last-action nil))
 
+(defconst delib-flow--phase-order
+  '(source-review
+    project-context
+    reference-context
+    artifact-generation
+    queue-review
+    selected-item
+    cloud-reroute
+    filing
+    conflict-resolution
+    done)
+  "Canonical user-facing phases for a run.")
+
+(defconst delib-flow--phase-presentation-alist
+  '((source-review
+     :label "Source review"
+     :goal "Inspect the source and establish a trustworthy starting point.")
+    (project-context
+     :label "Project context"
+     :goal "Confirm the project frame before drafting downstream work.")
+    (reference-context
+     :label "Reference context"
+     :goal "Gather and filter supporting context worth carrying forward.")
+    (artifact-generation
+     :label "Artifact generation"
+     :goal "Generate draft artifacts from the accepted context.")
+    (queue-review
+     :label "Queue review"
+     :goal "Review the available draft queue and pick the next item to work.")
+    (selected-item
+     :label "Selected item"
+     :goal "Refine one selected item in the focused filing workspace.")
+    (cloud-reroute
+     :label "Cloud reroute"
+     :goal "Resolve the cloud detour, then return to the originating phase.")
+    (filing
+     :label "Filing"
+     :goal "Write the approved item to its deterministic target.")
+    (conflict-resolution
+     :label "Conflict resolution"
+     :goal "Resolve the filing conflict and return to the selected item.")
+    (done
+     :label "Done"
+     :goal "The run is complete. Review the result or start a new pass.")))
+
+(defconst delib-flow--readiness-presentation-alist
+  '((minimal . "minimal")
+    (project-matched . "project-matched")
+    (supported . "supported")
+    (filtered . "filtered")
+    (cloud-assisted . "cloud-assisted")))
+
+(defun delib-flow--initial-travel-state ()
+  "Return the initial travel-state plist for a new run."
+  (list :detour-kind nil
+        :origin-phase nil
+        :origin-action nil
+        :origin-stage nil
+        :return-surface 'cockpit
+        :return-anchor "Recommended"
+        :selected-item-target nil
+        :reroute-reason nil
+        :cloud-sanitized-status nil
+        :cloud-result-status nil
+        :cloud-reintegration-status nil
+        :conflict-target nil
+        :conflict-action-summary nil
+        :last-rejection-reason nil
+        :debug-visibility nil))
+
 (defconst delib-flow--artifact-family-keys
   '(actions waiting-fors reference-notes project-proposals)
   "Artifact-family keys used in run state.")
@@ -313,6 +383,55 @@ PRIORITY controls display order."
   "Return the actions plist from RUN."
   (plist-get run :actions))
 
+(defun delib-flow--run-travel (run)
+  "Return the travel plist from RUN."
+  (or (plist-get run :travel)
+      (delib-flow--initial-travel-state)))
+
+(defun delib-flow--set-run-travel (run travel)
+  "Return RUN with TRAVEL stored."
+  (plist-put run :travel travel))
+
+(defun delib-flow--set-travel-field (run field value)
+  "Return RUN with travel FIELD updated to VALUE."
+  (delib-flow--set-run-travel
+   run
+   (plist-put (delib-flow--run-travel run) field value)))
+
+(defun delib-flow--debug-visibility-enabled-p (run)
+  "Return non-nil when debug actions should be visible for RUN."
+  (plist-get (delib-flow--run-travel run) :debug-visibility))
+
+(defun delib-flow--set-debug-visibility (run visible)
+  "Return RUN with explicit debug VISIBILITY stored."
+  (delib-flow--set-travel-field run :debug-visibility visible))
+
+(defun delib-flow--travel-enter-detour (run kind &optional reason)
+  "Return RUN with detour KIND activated and REASON recorded."
+  (let ((phase (delib-flow--run-phase run)))
+    (delib-flow--set-run-travel
+     run
+     (plist-put
+      (plist-put
+       (plist-put
+        (plist-put (delib-flow--run-travel run) :detour-kind kind)
+        :origin-phase phase)
+       :reroute-reason reason)
+      :return-anchor
+      (if (eq phase 'selected-item) "Selected item" "Recommended")))))
+
+(defun delib-flow--travel-clear-detour (run)
+  "Return RUN with any active detour cleared."
+  (delib-flow--set-run-travel
+   run
+   (let ((travel (copy-tree (delib-flow--run-travel run))))
+     (setq travel (plist-put travel :detour-kind nil))
+     (setq travel (plist-put travel :origin-phase nil))
+     (setq travel (plist-put travel :origin-action nil))
+     (setq travel (plist-put travel :origin-stage nil))
+     (setq travel (plist-put travel :reroute-reason nil))
+     travel)))
+
 (defun delib-flow--run-stage-history (run)
   "Return the stage-history plist from RUN."
   (plist-get run :stage-history))
@@ -504,6 +623,234 @@ PRIORITY controls display order."
 (defun delib-flow--latest-stage-id (run)
   "Return the latest executed stage identifier from RUN."
   (plist-get (delib-flow--run-stage-history run) :latest-stage))
+
+(defun delib-flow--phase-presentation (phase)
+  "Return presentation plist for PHASE."
+  (or (alist-get phase delib-flow--phase-presentation-alist)
+      (alist-get 'source-review delib-flow--phase-presentation-alist)))
+
+(defun delib-flow--phase-label (phase)
+  "Return user-facing label for PHASE."
+  (plist-get (delib-flow--phase-presentation phase) :label))
+
+(defun delib-flow--phase-goal (phase)
+  "Return user-facing goal text for PHASE."
+  (plist-get (delib-flow--phase-presentation phase) :goal))
+
+(defun delib-flow--readiness-flags (run)
+  "Return derived readiness flags for RUN."
+  (let* ((working (delib-flow--run-working-context run))
+         (routing (delib-flow--run-routing run))
+         (project (delib-flow--accepted-project-decision run)))
+    (list
+     :inspect-accepted (delib-flow--stage-accepted-p run 'inspect-source)
+     :project-accepted (not (null project))
+     :project-manual (eq (plist-get project :selection-method) 'manual)
+     :references-retrieved (not (null (plist-get working :retrieved-candidates)))
+     :references-filtered
+     (or (delib-flow--non-empty-string-p (plist-get working :filtered-context))
+         (delib-flow--non-empty-string-p (plist-get working :retained-context)))
+     :cloud-sanitized (not (null (plist-get working :cloud-sanitized-context)))
+     :cloud-result-returned (not (null (plist-get working :cloud-returned-context)))
+     :reintegration-approved
+     (eq (plist-get routing :reintegration-status) 'approved)
+     :cloud-failure-present
+     (or (plist-get routing :cloud-failure-stage)
+         (plist-get routing :cloud-failure-message)))))
+
+(defun delib-flow--readiness-label (run)
+  "Return compact readiness label for RUN."
+  (let ((flags (delib-flow--readiness-flags run)))
+    (cond
+     ((or (plist-get flags :cloud-result-returned)
+          (plist-get flags :reintegration-approved))
+      'cloud-assisted)
+     ((plist-get flags :references-filtered)
+      'filtered)
+     ((plist-get flags :references-retrieved)
+      'supported)
+     ((plist-get flags :project-accepted)
+      'project-matched)
+     (t
+      'minimal))))
+
+(defun delib-flow--readiness-label-text (run)
+  "Return compact readiness text for RUN."
+  (or (alist-get (delib-flow--readiness-label run)
+                 delib-flow--readiness-presentation-alist)
+      "minimal"))
+
+(defun delib-flow--progress-checklist (run)
+  "Return progress checklist for RUN."
+  (let ((flags (delib-flow--readiness-flags run)))
+    (list
+     (list :id 'inspect-accepted
+           :label "Inspect accepted"
+           :done (plist-get flags :inspect-accepted))
+     (list :id 'project-accepted
+           :label "Project accepted/manual"
+           :done (plist-get flags :project-accepted))
+     (list :id 'references-retrieved
+           :label "References retrieved"
+           :done (plist-get flags :references-retrieved))
+     (list :id 'references-filtered
+           :label "References filtered"
+           :done (plist-get flags :references-filtered))
+     (list :id 'cloud-sanitized
+           :label "Cloud sanitized"
+           :done (plist-get flags :cloud-sanitized))
+     (list :id 'cloud-result-returned
+           :label "Cloud result returned"
+           :done (plist-get flags :cloud-result-returned))
+     (list :id 'reintegration-approved
+           :label "Reintegration approved"
+           :done (plist-get flags :reintegration-approved))
+     (list :id 'cloud-failure-present
+           :label "Cloud failure present"
+           :done (plist-get flags :cloud-failure-present)))))
+
+(defun delib-flow--progress-string (run)
+  "Return compact checklist progress string for RUN."
+  (let* ((checklist (delib-flow--progress-checklist run))
+         (done 0))
+    (dolist (item checklist)
+      (when (plist-get item :done)
+        (setq done (1+ done))))
+    (format "%d/%d checkpoints" done (length checklist))))
+
+(defun delib-flow--selected-item-family (run)
+  "Return selected family for RUN, if any."
+  (cond
+   ((or (delib-flow--artifact-family-selected-draft run 'actions)
+        (delib-flow--selected-action-candidate-for-drafting run))
+    'actions)
+   ((or (delib-flow--artifact-family-selected-draft run 'waiting-fors)
+        (delib-flow--selected-waiting-for-candidate-for-drafting run))
+    'waiting-fors)
+   ((or (delib-flow--artifact-family-selected-draft run 'reference-notes)
+        (delib-flow--selected-reference-note-candidate-for-drafting run))
+    'reference-notes)
+   ((or (delib-flow--artifact-family-selected-draft run 'project-proposals)
+        (delib-flow--selected-project-candidate-for-drafting run))
+    'project-proposals)))
+
+(defun delib-flow--selected-item (run)
+  "Return the selected artifact item for RUN, if any."
+  (or (delib-flow--artifact-family-selected-draft run 'actions)
+      (delib-flow--selected-action-candidate-for-drafting run)
+      (delib-flow--artifact-family-selected-draft run 'waiting-fors)
+      (delib-flow--selected-waiting-for-candidate-for-drafting run)
+      (delib-flow--artifact-family-selected-draft run 'reference-notes)
+      (delib-flow--selected-reference-note-candidate-for-drafting run)
+      (delib-flow--artifact-family-selected-draft run 'project-proposals)
+      (delib-flow--selected-project-candidate-for-drafting run)))
+
+(defun delib-flow--queue-summary (run)
+  "Return compact queue summary plist for RUN."
+  (let* ((filing (plist-get run :filing))
+         (selected (delib-flow--selected-item run))
+         (staged (plist-get filing :target-locations))
+         (conflicts (plist-get filing :conflicts)))
+    (list
+     :available (length (or (plist-get filing :draft-items) nil))
+     :selected (if selected 1 0)
+     :approved (length (or (plist-get filing :approved-items) nil))
+     :rejected (length (or (plist-get filing :rejected-items) nil))
+     :staged (length (or staged nil))
+     :conflicts (length (or conflicts nil)))))
+
+(defun delib-flow--artifact-candidates-ready-p (run family)
+  "Return non-nil when RUN has candidates or a draft for FAMILY."
+  (let ((state (delib-flow--artifact-family-state run family)))
+    (or (plist-get state :candidates)
+        (plist-get state :selected-draft)
+        (plist-get state :selected-candidate-id))))
+
+(defun delib-flow--cloud-detour-active-p (run)
+  "Return non-nil when RUN is in an active cloud detour."
+  (let ((routing (delib-flow--run-routing run))
+        (travel (delib-flow--run-travel run)))
+    (or (eq (plist-get travel :detour-kind) 'cloud)
+        (plist-get routing :cloud-switch-pending)
+        (plist-get routing :cloud-failure-stage)
+        (memq (plist-get routing :sanitization-status)
+              '(required prepared approved returned))
+        (memq (plist-get routing :reintegration-status)
+              '(pending-review approved)))))
+
+(defun delib-flow--conflict-detour-active-p (run)
+  "Return non-nil when RUN is in an active filing conflict detour."
+  (or (eq (plist-get (delib-flow--run-travel run) :detour-kind) 'conflict)
+      (plist-get (plist-get run :filing) :conflicts)))
+
+(defun delib-flow--run-phase (run)
+  "Return the current user-facing phase for RUN."
+  (cond
+   ((or (delib-flow--stage-executed-p run 'file-approved-outputs)
+        (eq (plist-get (delib-flow--run-session run) :status) 'completed))
+    'done)
+   ((delib-flow--conflict-detour-active-p run)
+    'conflict-resolution)
+   ((delib-flow--cloud-detour-active-p run)
+    'cloud-reroute)
+   ((delib-flow--approved-items-ready-p run)
+    'filing)
+   ((delib-flow--selected-item run)
+    'selected-item)
+   ((delib-flow--draft-items-ready-p run)
+    'queue-review)
+   ((or (delib-flow--artifact-candidates-ready-p run 'actions)
+        (delib-flow--artifact-candidates-ready-p run 'waiting-fors)
+        (delib-flow--artifact-candidates-ready-p run 'reference-notes)
+        (delib-flow--artifact-candidates-ready-p run 'project-proposals)
+        (delib-flow--stage-executed-p run 'extract-actions)
+        (delib-flow--stage-executed-p run 'extract-waiting-for)
+        (delib-flow--stage-executed-p run 'suggest-reference-notes)
+        (delib-flow--stage-executed-p run 'propose-new-project))
+    'artifact-generation)
+   ((or (plist-get (delib-flow--run-working-context run) :retrieved-candidates)
+        (plist-get (delib-flow--run-working-context run) :filtered-context)
+        (plist-get (delib-flow--run-working-context run) :retained-context))
+    'reference-context)
+   ((or (delib-flow--stage-executed-p run 'match-project)
+        (delib-flow--manual-project-selection-active-p run)
+        (delib-flow--accepted-project-decision run))
+    'project-context)
+   (t
+    'source-review)))
+
+(defun delib-flow--travel-summary (run)
+  "Return compact derived phase/travel summary for RUN."
+  (let* ((phase (delib-flow--run-phase run))
+         (travel (delib-flow--run-travel run))
+         (queue (delib-flow--queue-summary run)))
+    (list
+     :phase phase
+     :phase-label (delib-flow--phase-label phase)
+     :phase-goal (delib-flow--phase-goal phase)
+     :readiness (delib-flow--readiness-label run)
+     :readiness-label (delib-flow--readiness-label-text run)
+     :progress-string (delib-flow--progress-string run)
+     :checklist (delib-flow--progress-checklist run)
+     :queue queue
+     :selected-family (delib-flow--selected-item-family run)
+     :selected-item (delib-flow--selected-item run)
+     :selected-item-target (plist-get travel :selected-item-target)
+     :return-target
+     (when (plist-get travel :detour-kind)
+       (list :surface (plist-get travel :return-surface)
+             :anchor (plist-get travel :return-anchor)))
+     :detour-kind (plist-get travel :detour-kind)
+     :origin-phase (plist-get travel :origin-phase)
+     :origin-action (plist-get travel :origin-action)
+     :origin-stage (plist-get travel :origin-stage)
+     :detour-reason (plist-get travel :reroute-reason)
+     :cloud-sanitized-status (plist-get travel :cloud-sanitized-status)
+     :cloud-result-status (plist-get travel :cloud-result-status)
+     :cloud-reintegration-status (plist-get travel :cloud-reintegration-status)
+     :conflict-target (plist-get travel :conflict-target)
+     :conflict-action-summary (plist-get travel :conflict-action-summary)
+     :last-rejection-reason (plist-get travel :last-rejection-reason))))
 
 (defun delib-flow--editable-block (run block-id)
   "Return editable block BLOCK-ID from RUN."
@@ -1024,6 +1371,8 @@ Changing the selected candidate clears any existing selected draft for FAMILY."
              (delib-flow--initial-actions-state)
              :artifacts
              (delib-flow--initial-artifact-state)
+             :travel
+             (delib-flow--initial-travel-state)
              :routing
              (list :default-local-model delib-flow-default-local-model
                    :default-cloud-model delib-flow-default-cloud-model

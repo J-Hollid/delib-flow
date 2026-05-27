@@ -63,7 +63,7 @@
           (goto-char (point-min))
           (should (search-forward "** Now" nil t))
           (goto-char (point-min))
-          (should (search-forward "** Next actions" nil t)))
+          (should (search-forward "** Recommended" nil t)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))
       (setq delib-flow--active-run nil))))
@@ -83,6 +83,23 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer))
       (setq delib-flow--active-run nil))))
+
+(ert-deftest delib-flow-ui-toggle-debug-visibility-rerenders-debug-group ()
+  (let* ((run (delib-flow--initialize-run (list :title "Example")))
+         (delib-flow--active-run run)
+         (buffer (delib-flow--render-control-buffer run)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (goto-char (point-min))
+            (should-not (search-forward "*** Debug actions" nil t)))
+          (delib-flow-toggle-debug-visibility)
+          (with-current-buffer (get-buffer delib-flow-control-buffer-name)
+            (goto-char (point-min))
+            (should (search-forward "*** Debug actions" nil t)))
+          (should (delib-flow--debug-visibility-enabled-p delib-flow--active-run)))
+      (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
+        (kill-buffer (get-buffer delib-flow-control-buffer-name))))))
 
 (ert-deftest delib-flow-ui-render-active-run-buffer-applies-cockpit-visibility ()
   (let* ((run (delib-flow--initialize-run (list :title "Example")))
@@ -140,7 +157,7 @@
             (setq-local delib-flow--active-run-buffer t))
           (delib-flow-refresh-buffer)
           (with-current-buffer (get-buffer delib-flow-control-buffer-name)
-            (should (equal "Filing preview"
+            (should (equal "Progress"
                            (delib-flow--current-section-at-point)))))
       (when (buffer-live-p (get-buffer delib-flow-control-buffer-name))
         (kill-buffer (get-buffer delib-flow-control-buffer-name))))))

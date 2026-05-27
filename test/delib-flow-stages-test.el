@@ -83,6 +83,27 @@
     (should (member "Concrete next step or deliverable"
                     (plist-get guidance :quality-rules)))))
 
+(ert-deftest delib-flow-stage-input-package-includes-retry-context-for-extract-actions ()
+  (delib-flow-test--with-temp-project-file
+      "* Alpha Project\n"
+    (let* ((run (delib-flow--initialize-run
+                 (list :title "Alpha kickoff"
+                       :content "* Alpha kickoff\nCheck with stakeholders\n")))
+           (inspected (delib-flow-test--accept-inspect
+                       (delib-flow--run-stage-locally run 'inspect-source)))
+           (matched (delib-flow-test--accept-match
+                     (delib-flow--run-stage-locally inspected 'match-project)))
+           (once (delib-flow--run-stage-locally matched 'extract-actions))
+           (package (delib-flow--stage-input-package once 'extract-actions))
+           (retry (plist-get package :retry-context))
+           (guidance (plist-get (plist-get package :prompt)
+                                :structured-guidance)))
+      (should (equal 1 (plist-get retry :attempt-count)))
+      (should (member "Prepare stakeholder review agenda for stakeholders"
+                      (plist-get retry :previous-candidate-texts)))
+      (should (member "Name an observable step, artifact, conversation, or decision output"
+                      (plist-get guidance :quality-rules))))))
+
 (ert-deftest delib-flow-stage-input-package-surfaces-operator-intent ()
   (let* ((run (delib-flow--set-operator-intent-directly
                (delib-flow--initialize-run

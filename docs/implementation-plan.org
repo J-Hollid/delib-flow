@@ -10,6 +10,13 @@ current architecture.
 
 * Planning status
 
+- Historical vocabulary note:
+  older milestone notes in this document refer to the pre-phase-travel cockpit
+  using names like `Current context`, `Valid next actions`, and `Filing
+  preview`.
+  In the current UX these responsibilities map primarily to `Details`,
+  `Recommended`, and the filing-preview subtree under `Progress` or the focused
+  selected-item workspace.
 - The architecture roadmap described here is complete enough that the repo is
   no longer in migration mode.
 - Shared runtime infrastructure now owns the main drift-prone paths:
@@ -219,7 +226,8 @@ Acceptance criteria:
   top-to-bottom scrolling.
 - The operator can always tell what is staged, where it goes, and whether it
   is saved.
-- Filing preview remains truthful for both project entries and note captures.
+- The then-current `Filing preview` surface remains truthful for both project
+  entries and note captures.
 
 ** Phase 10: Resume and recovery ergonomics
 
@@ -1035,12 +1043,20 @@ Domain notes:
 - Ensure re-rendering can preserve user edits in designated editable regions.
 
 Deliverables:
-- A documented section and subsection contract for `Source`, `Working context`,
-  `Stage history`, `Current decision`, `Valid next actions`, `Filing preview`,
-  and `Audit status`.
+- A documented section and subsection contract for the then-current cockpit
+  layout: `Source`, the historical `Working context`, the historical `Stage
+  history`, the historical `Current decision`, the historical `Valid next
+  actions`, the historical `Filing preview`, and the historical `Audit
+  status`.
 - A first pass at region ownership rules for the control buffer.
 
 Proposed section schema:
+
+Historical schema note:
+- The section names in this milestone schema are preserved as originally
+  implemented.
+- In the current phase-travel cockpit, these responsibilities are distributed
+  across `Now`, `Recommended`, `Progress`, `Current result`, and `Details`.
 
 `Source`
 - Managed heading and managed subsections only.
@@ -1054,7 +1070,7 @@ Proposed section schema:
   equivalent managed block.
 - No editable blocks in this section during Milestone 1.
 
-`Working context`
+Historical section: `Working context`
 - Managed heading with both managed and editable subsections.
 - Required managed subsections:
   - `Context status`
@@ -1069,7 +1085,7 @@ Proposed section schema:
 - Editable blocks here are the primary Milestone 1 proof of the direct
   in-buffer editing model.
 
-`Stage history`
+Historical section: `Stage history`
 - Managed heading with managed per-stage subtrees.
 - Required managed subsections:
   - `History status`
@@ -1080,7 +1096,7 @@ Proposed section schema:
   editable blocks only where the workflow explicitly allows retry editing.
 - Milestone 1 does not need editable blocks in this section yet.
 
-`Current decision`
+Historical section: `Current decision`
 - Managed heading with mixed managed and editable content.
 - Required managed subsections:
   - `Decision status`
@@ -1090,7 +1106,7 @@ Proposed section schema:
 - `Operator notes` contains a `#+begin_delib-edit` block for human notes that
   may influence the next action choice.
 
-`Valid next actions`
+Historical section: `Valid next actions`
 - Managed heading with managed action entries only.
 - Actions should render as button-like entries with machine-readable identity,
   label, status, and optional reason text.
@@ -1099,7 +1115,7 @@ Proposed section schema:
 - Blocked actions must show why they are unavailable.
 - This section should not contain editable blocks.
 
-`Filing preview`
+Historical section: `Filing preview`
 - Managed heading with managed subsections only in Milestone 1.
 - Required managed subsections:
   - `Preview status`
@@ -1108,7 +1124,7 @@ Proposed section schema:
   preview is available.
 - Editable blocks are deferred here until filing workflow demands them.
 
-`Audit status`
+Historical section: `Audit status`
 - Managed heading with managed subsections only in Milestone 1.
 - Required managed subsections:
   - `Run audit state`
@@ -1157,8 +1173,8 @@ Proposed editable-block object schema:
 
 `(:id context-main
   :kind context
-  :section "Working context"
-  :heading-path ("Working context" "Editable working slice")
+  :section "Working context"  ; historical pre-phase-travel section name
+  :heading-path ("Working context" "Editable working slice")  ; historical path
   :anchor-id "delib-edit-context-main"
   :status clean
   :original-text ""
@@ -1170,7 +1186,8 @@ Proposed editable-block object schema:
 Field notes:
 - `:id` is the stable run-state identifier.
 - `:kind` identifies the workflow role of the block.
-- `:section` and `:heading-path` identify the intended render location.
+- `:section` and `:heading-path` identify the intended render location within
+  the historical milestone schema.
 - `:anchor-id` ties the object to its in-buffer managed anchor.
 - `:original-text` is the last rendered baseline.
 - `:current-text` is the last known buffer content snapshot.
@@ -1180,8 +1197,10 @@ Field notes:
   `conflict`.
 
 Proposed initial editable blocks:
-- `context-main` with `:kind context` under `Working context`.
-- `operator-notes` with `:kind notes` under `Current decision`.
+- `context-main` with `:kind context` under the historical `Working context`
+  section.
+- `operator-notes` with `:kind notes` under the historical `Current
+  decision` section.
 
 4. Run lifecycle and operator flow
 - Replace “close the buffer to abort” as the only lifecycle path with explicit
@@ -1217,7 +1236,7 @@ Proposed valid-action object schema:
   :label "Inspect Source"
   :status placeholder
   :reason "Stage execution is not implemented in Milestone 1."
-  :section "Valid next actions"
+  :section "Valid next actions"  ; historical pre-phase-travel section name
   :priority 10
   :handler delib-flow-action-inspect-source
   :requires-clean-managed-regions t
@@ -1472,8 +1491,9 @@ Delivered refinement slices:
    tuning.
 4. Filtering now preserves salient constraint, decision, and preference notes
    even when raw overlap score is weak.
-5. The `Current context` section now renders separate retrieval review
-   subsections for retrieved, retained, and rejected context.
+5. The then-current `Current context` section now renders separate retrieval
+   review subsections for retrieved, retained, and rejected context.
+   In the current phase-travel cockpit, this material lives under `Details`.
 
 Milestone 4 maintenance notes:
 - Treat inspect/match acceptance gating as fixed upstream contract.
@@ -1513,7 +1533,7 @@ Milestone 5 definition of done:
      - waiting-for weakness
      - reference-note readiness or quality issues
   3. The control buffer makes those warnings reviewable in both the stage result
-     and `Filing preview`, so the operator can see:
+     and the then-current `Filing preview` surface, so the operator can see:
      - what was drafted
      - which artifacts are weak
      - why they are weak
@@ -1548,7 +1568,9 @@ Milestone 5 implementation summary:
   - `Suggest Reference Notes`
 - Each stage produces draft filing artifacts in `:filing :draft-items`,
   records structured warning metadata, and updates both normalized stage output
-  and `Filing preview`.
+  and the then-current `Filing preview` surface.
+  In the current phase-travel cockpit, this renders in `Progress` and the
+  focused selected-item workspace.
 - The filing-review path now supports explicit operator review:
   - `Reject Draft Filing Artifact`
   - `Select Approved Filing Actions`
@@ -1596,7 +1618,8 @@ Main remaining gaps:
 Milestone 5 delivered slices:
 1. Structured validation warnings for `Extract Actions` and
    `Extract Waiting-For`.
-2. Warning rendering in normalized stage output and `Filing preview`.
+2. Warning rendering in normalized stage output and the then-current `Filing
+   preview` surface.
 3. Explicit artifact selection semantics for one-at-a-time approval.
 4. Explicit reject/defer semantics for draft artifacts.
 5. Structured reference-note warnings for note-title, template-readiness, and
@@ -1624,7 +1647,7 @@ Exit criteria:
 - The workflow can produce candidate actions, waiting-for items, and reference
   notes as draft artifacts through the current stage contract.
 - The operator can review artifact-quality warnings in both stage output and
-  `Filing preview`.
+  the then-current `Filing preview` surface.
 - The operator can explicitly approve one artifact, reject one artifact, and
   leave remaining artifacts deferred without rerunning proposal stages.
 - Approved artifacts remain filing-ready for the existing deterministic
@@ -1748,7 +1771,7 @@ Goal: turn approved artifacts into concrete Org changes.
 
 Milestone 7 definition of done:
 - Milestone 7 is not complete merely because draft artifacts can be rendered in
-  `Filing preview`.
+  the then-current `Filing preview` surface.
 - Milestone 7 is complete only when an explicitly approved artifact can be
   turned into deterministic Org changes, conflicts are preflighted before any
   write, and the control buffer remains truthful about what was written versus
@@ -1801,12 +1824,15 @@ Milestone 7 implementation summary:
   - project proposals create new top-level project headings with their first
     child item
   - reference-note suggestions create note files under the configured ZK root
-- Filing preview now renders the full operator-visible filing lifecycle:
+- The then-current `Filing preview` surface now renders the full
+  operator-visible filing lifecycle:
   - draft artifacts
   - approved artifacts
   - rejected artifacts
   - filing conflicts
   - filed target locations
+- In the current phase-travel cockpit, this lifecycle appears in `Progress`
+  and the focused selected-item workspace.
 - Deterministic note creation is template-backed:
   - general PKM notes use `delib-flow-general-note-template`
   - project-support notes use `delib-flow-project-support-note-template`
@@ -1817,7 +1843,7 @@ Current implementation anchors:
 - Artifact approval and rejection state transitions live in [delib-flow.el]
   around `delib-flow--select-approved-filing-actions-result` and
   `delib-flow--reject-draft-filing-artifact-result`.
-- Filing preview rendering lives in [delib-flow.el] around
+- The then-current `Filing preview` rendering lives in [delib-flow.el] around
   `delib-flow--render-filing-preview-section`,
   `delib-flow--filing-conflict-text`, and
   `delib-flow--filed-target-locations-text`.
@@ -2236,8 +2262,8 @@ Why second:
   current implicit one.
 
 3. Action object layer in `delib-flow.el`
-- Replace string-only “Valid next actions” content with structured action
-  objects in `:actions`.
+- Replace string-only then-current `Valid next actions` content with structured
+  action objects in `:actions`.
 - Add a computation function that derives the initial Milestone 1 action set:
   `inspect-source`, `abort-run`, and `refresh-buffer`.
 - Add action status computation for `available`, `blocked`, and `placeholder`.
@@ -2263,7 +2289,8 @@ Why fourth:
 5. Editable-block layer in `delib-flow.el`
 - Add data constructors and lookup helpers for editable-block objects.
 - Render `#+begin_delib-edit context` and `#+begin_delib-edit notes` blocks in
-  the `Working context` and `Current decision` sections.
+  the historical `Working context` and historical `Current decision`
+  sections.
 - Track per-block snapshots so the package can compare original versus current
   text.
 - Define the initial edit lifecycle states `clean` and `edited`.
@@ -2411,8 +2438,8 @@ Rationale:
   before the rendering refactor.
 
 4. Update code that currently assumes the old shape
-- Update `delib-flow--section-content` so the `Source` and `Current decision`
-  sections read from `:source` and `:session`.
+- Update `delib-flow--section-content` so the `Source` section and the
+  historical `Current decision` section read from `:source` and `:session`.
 - Keep placeholder content elsewhere if needed, but make it read from the new
   state shape where applicable.
 - Keep `delib-flow-start` behavior intact while ensuring the active run uses the

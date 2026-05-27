@@ -211,6 +211,28 @@
           (should (search-forward "Write follow-up note for Alpha Project kickoff"
                                   nil t)))))))
 
+(ert-deftest delib-flow-completed-run-audit-records-ended-at-when-session-is-still-open ()
+  (delib-flow-test--with-temp-audit-file
+    (delib-flow-test--with-temp-project-file
+        "* Alpha Project\n"
+      (let* ((run (delib-flow--initialize-run
+                   (list :title "Alpha Project kickoff"
+                         :content "* Alpha Project kickoff\nBody line\n")))
+             (inspected (delib-flow--run-stage-locally run 'inspect-source))
+             (matched (delib-flow--run-stage-locally inspected 'match-project))
+             (drafted (delib-flow--run-stage-locally matched 'extract-actions))
+             (integrated (delib-flow--run-stage-locally drafted 'integrate-into-source))
+             (selected (delib-flow--run-stage-locally
+                        (delib-flow-test--set-filing-selection integrated "1")
+                        'select-approved-filing-actions))
+             (completed (delib-flow--run-stage-locally selected 'file-approved-outputs))
+             (run-record (plist-get (plist-get (plist-get completed :audit) :run-record)
+                                    :ended-at)))
+        (should run-record)
+        (with-temp-buffer
+          (insert-file-contents delib-flow-audit-log-file)
+          (should (re-search-forward "^:ENDED_AT: [0-9]" nil t)))))))
+
 (ert-deftest delib-flow-open-audit-run-jumps-to-active-run-subtree ()
   (delib-flow-test--with-temp-audit-file
     (let* ((run (delib-flow--initialize-run

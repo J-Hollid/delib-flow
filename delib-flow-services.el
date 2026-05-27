@@ -536,6 +536,39 @@ direct child headings beneath the heading matching OUTLINE-PATH."
     note-links
     #'string=)))
 
+(defun delib-flow--discovery-journal-note-p (file title text)
+  "Return non-nil when FILE TITLE and TEXT look like a journal note."
+  (let ((joined (downcase
+                 (string-join
+                  (delq nil (list file title (car (split-string (or text "") "\n" t))))
+                  "\n"))))
+    (or (string-match-p "/journal/" joined)
+        (string-match-p "/daily/" joined)
+        (string-match-p "\\bdaily\\b" joined)
+        (string-match-p "\\blogbook\\b" joined))))
+
+(defun delib-flow--discovery-content-lines (text)
+  "Return meaningful content lines from TEXT."
+  (seq-filter
+   (lambda (line)
+     (and (delib-flow--non-empty-string-p line)
+          (not (string-match-p "\\`#\\+" line))
+          (not (string-match-p "\\`\\*+ " line))))
+   (mapcar #'string-trim (split-string (or text "") "\n"))))
+
+(defun delib-flow--discovery-stub-note-p (text)
+  "Return non-nil when TEXT looks like a stub note."
+  (let* ((lines (delib-flow--discovery-content-lines text))
+         (words (length (split-string (string-join lines " ") "[^[:alnum:]]+" t))))
+    (or (<= (length lines) 1)
+        (< words 12))))
+
+(defun delib-flow--discovery-body-preview (text)
+  "Return a concise explanatory preview from TEXT."
+  (mapconcat #'identity
+             (seq-take (delib-flow--discovery-content-lines text) 2)
+             " "))
+
 (defun delib-flow--discovery-signal (key value weight)
   "Return weighted discovery signal for KEY with VALUE and WEIGHT."
   (list :key key
@@ -598,7 +631,10 @@ direct child headings beneath the heading matching OUTLINE-PATH."
          (source-contact-score
           (delib-flow--discovery-source-contact-score package note-contacts))
          (shared-link-score
-          (delib-flow--discovery-shared-link-score package note-links)))
+          (delib-flow--discovery-shared-link-score package note-links))
+         (journal-note-p (delib-flow--discovery-journal-note-p file title text))
+         (stub-note-p (delib-flow--discovery-stub-note-p text))
+         (body-content-score (if (not stub-note-p) 1 0)))
     (list (delib-flow--discovery-signal 'linked-project-file linked-file-p 12)
           (delib-flow--discovery-signal 'linked-source-file source-linked-file-p 15)
           (delib-flow--discovery-signal 'title-overlap title-score 3)
@@ -609,7 +645,10 @@ direct child headings beneath the heading matching OUTLINE-PATH."
            'shared-project-or-source-link
            shared-link-score
            4)
-          (delib-flow--discovery-signal 'text-overlap text-score 1))))
+          (delib-flow--discovery-signal 'text-overlap text-score 1)
+          (delib-flow--discovery-signal 'body-content body-content-score 2)
+          (delib-flow--discovery-signal 'journal-penalty (if journal-note-p 1 0) -4)
+          (delib-flow--discovery-signal 'stub-penalty (if stub-note-p 1 0) -1))))
 
 (defun delib-flow--discovery-candidate-score (signals)
   "Return retrieval score from discovery SIGNALS."
@@ -624,26 +663,54 @@ direct child headings beneath the heading matching OUTLINE-PATH."
               signals))
 
 (defun delib-flow--signal-description (signal)
-  "Return human-readable description for discovery SIGNAL."
-  (format "%s=%s (+%s)"
-          (plist-get signal :key)
-          (plist-get signal :value)
-          (plist-get signal :contribution)))
+  "Return cons of raw and human-readable description for discovery SIGNAL."
+  (let* ((key (plist-get signal :key))
+         (raw (format "%s=%s (+%s)"
+                      key
+                      (plist-get signal :value)
+                      (plist-get signal :contribution)))
+         (explanation
+          (pcase key
+            ('linked-source-file "directly linked from the source")
+            ('linked-project-file "linked from the matched project")
+            ('shared-project-or-source-link "shares linked concepts with the source/project")
+            ('title-overlap "title overlaps the active topic")
+            ('project-tag-overlap "tags align with the matched project")
+            ('project-contact-overlap "mentions project contacts")
+            ('source-contact-overlap "mentions source contacts")
+            ('text-overlap "body text overlaps the active topic")
+            ('body-content "has explanatory body content")
+            ('journal-penalty "looks like journal noise")
+            ('stub-penalty "looks like a stub note")
+            (_ nil))))
+    (cons raw explanation)))
 
 (defun delib-flow--discovery-reasons (signals)
   "Return human-readable discovery reasons from SIGNALS."
   (let ((positive-signals (delib-flow--positive-discovery-signals signals)))
     (if positive-signals
-        (mapcar #'delib-flow--signal-description positive-signals)
+        (apply #'append
+               (mapcar (lambda (signal)
+                         (let ((description (delib-flow--signal-description signal)))
+                           (delq nil (list (car description) (cdr description)))))
+                       positive-signals))
       '("no-positive-signals"))))
 
 (defun delib-flow--make-discovery-candidate (file signals)
   "Return discovery candidate for FILE with SIGNALS."
-  (list :title (delib-flow--zk-note-title file)
-        :file file
-        :score (delib-flow--discovery-candidate-score signals)
-        :signals signals
-        :reasons (delib-flow--discovery-reasons signals)))
+  (let* ((title (delib-flow--zk-note-title file))
+         (text (delib-flow--zk-note-text file)))
+    (list :title title
+          :file file
+          :score (delib-flow--discovery-candidate-score signals)
+          :signals signals
+          :reasons (delib-flow--discovery-reasons signals)
+          :journal-note-p (delib-flow--discovery-journal-note-p file title text)
+          :stub-note-p (delib-flow--discovery-stub-note-p text)
+          :body-preview (delib-flow--discovery-body-preview text)
+          :body-line-count (length (delib-flow--discovery-content-lines text))
+          :content-word-count
+          (length (split-string (or text "") "[^[:alnum:]]+" t)))))
 
 (defun delib-flow--scored-discovery-candidates (package files)
   "Return scored discovery candidates for PACKAGE across FILES."
@@ -683,12 +750,6 @@ direct child headings beneath the heading matching OUTLINE-PATH."
   "Return retrieved candidates from PACKAGE."
   (plist-get (plist-get package :working-context) :retrieved-candidates))
 
-(defun delib-flow--retained-filter-candidates (candidates)
-  "Return retained subset of CANDIDATES."
-  (seq-filter (lambda (candidate)
-                (> (plist-get candidate :score) 1))
-              candidates))
-
 (defun delib-flow--filter-candidate-text (candidate)
   "Return searchable filter text for CANDIDATE."
   (concat
@@ -708,11 +769,38 @@ direct child headings beneath the heading matching OUTLINE-PATH."
       (push "salient-decision-context" signals))
     (when (string-match-p "\\b\\(prefer\\|preference\\|requested\\|request\\)\\b" text)
       (push "salient-preference-context" signals))
+    (when (string-match-p "\\b\\(waiting for\\|awaiting\\|approval\\|confirm\\|confirmation\\)\\b" text)
+      (push "salient-dependency-context" signals))
     (nreverse signals)))
 
-(defun delib-flow--retain-by-score-threshold-p (candidate)
-  "Return non-nil when CANDIDATE clears the score retention threshold."
-  (> (plist-get candidate :score) 1))
+(defun delib-flow--filter-direct-source-link-p (candidate)
+  "Return non-nil when CANDIDATE is directly linked from the source."
+  (seq-some (lambda (signal)
+              (and (eq (plist-get signal :key) 'linked-source-file)
+                   (> (plist-get signal :contribution) 0)))
+            (plist-get candidate :signals)))
+
+(defun delib-flow--filter-semantic-support-p (candidate)
+  "Return non-nil when CANDIDATE materially elaborates the source topic."
+  (or (delib-flow--filter-direct-source-link-p candidate)
+      (delib-flow--filter-salience-signals candidate)
+      (>= (or (plist-get candidate :score) 0) 4)))
+
+(defun delib-flow--filter-journal-noise-p (candidate)
+  "Return non-nil when CANDIDATE is mostly journal-style noise."
+  (and (plist-get candidate :journal-note-p)
+       (not (delib-flow--filter-direct-source-link-p candidate))
+       (< (or (plist-get candidate :score) 0) 8)))
+
+(defun delib-flow--filter-stub-note-p (candidate)
+  "Return non-nil when CANDIDATE is too thin to help downstream."
+  (plist-get candidate :stub-note-p))
+
+(defun delib-flow--filter-topic-adjacent-only-p (candidate)
+  "Return non-nil when CANDIDATE only matches lexically."
+  (and (not (delib-flow--filter-direct-source-link-p candidate))
+       (null (delib-flow--filter-salience-signals candidate))
+       (< (or (plist-get candidate :score) 0) 6)))
 
 (defun delib-flow--top-fallback-candidate-p (candidate top-candidate)
   "Return non-nil when CANDIDATE should be retained as TOP-CANDIDATE fallback."
@@ -721,10 +809,16 @@ direct child headings beneath the heading matching OUTLINE-PATH."
 
 (defun delib-flow--filter-base-retain-reasons (candidate)
   "Return non-fallback retention reasons for CANDIDATE."
-  (append
-   (when (delib-flow--retain-by-score-threshold-p candidate)
-     '("retained-by-score-threshold"))
-   (delib-flow--filter-salience-signals candidate)))
+  (unless (delib-flow--filter-journal-noise-p candidate)
+    (delq nil
+          (append
+           (when (> (or (plist-get candidate :score) 0) 1)
+             '("retained-by-score-threshold"))
+           (when (delib-flow--filter-direct-source-link-p candidate)
+             '("direct-source-link"))
+           (when (delib-flow--filter-semantic-support-p candidate)
+             '("semantic-support"))
+           (delib-flow--filter-salience-signals candidate)))))
 
 (defun delib-flow--filter-retain-reasons (candidate top-candidate)
   "Return retention reasons for CANDIDATE given TOP-CANDIDATE."
@@ -736,7 +830,15 @@ direct child headings beneath the heading matching OUTLINE-PATH."
 
 (defun delib-flow--filter-reject-reasons (candidate)
   "Return rejection reasons for CANDIDATE."
-  (or (delib-flow--filter-salience-signals candidate)
+  (or (when (delib-flow--filter-journal-noise-p candidate)
+        '("journal-noise"))
+      (when (and (delib-flow--filter-stub-note-p candidate)
+                 (not (delib-flow--filter-semantic-support-p candidate))
+                 (<= (or (plist-get candidate :score) 0) 1))
+        '("stub-note"))
+      (when (and (> (or (plist-get candidate :score) 0) 1)
+                 (delib-flow--filter-topic-adjacent-only-p candidate))
+        '("topic-adjacent-only"))
       '("rejected-below-score-threshold")))
 
 (defun delib-flow--filter-decision-reasons (candidate status top-candidate)
@@ -769,6 +871,12 @@ direct child headings beneath the heading matching OUTLINE-PATH."
                 (delib-flow--filter-retain-reasons candidate nil))
               candidates))
 
+(defun delib-flow--filter-candidate-support-claim (candidate)
+  "Return concise support claim from CANDIDATE."
+  (or (delib-flow--candidate-note-focus-line candidate)
+      (plist-get candidate :body-preview)
+      (plist-get candidate :title)))
+
 (defun delib-flow--filter-reasons-text (candidate)
   "Return human-readable filter reasons for CANDIDATE."
   (mapconcat #'identity
@@ -783,18 +891,29 @@ direct child headings beneath the heading matching OUTLINE-PATH."
          (selected (or retained fallback))
          (annotated (delib-flow--annotated-filter-candidates
                      candidates
-                     selected)))
-    (list :candidate-count (length candidates)
-          :retained-count (length selected)
-          :retained-candidates
+                     selected))
+         (retained-candidates
           (seq-filter (lambda (candidate)
                         (eq (plist-get candidate :filter-status) 'retained))
-                      annotated)
-          :rejected-count (- (length candidates) (length selected))
-          :rejected-candidates
+                      annotated))
+         (rejected-candidates
           (seq-filter (lambda (candidate)
                         (eq (plist-get candidate :filter-status) 'rejected))
-                      annotated))))
+                      annotated))
+         (retained-context
+          (mapconcat
+           (lambda (candidate)
+             (format "- Relevant note: %s - %s"
+                     (plist-get candidate :title)
+                     (delib-flow--filter-candidate-support-claim candidate)))
+           retained-candidates
+           "\n")))
+    (list :candidate-count (length candidates)
+          :retained-count (length selected)
+          :retained-context retained-context
+          :retained-candidates retained-candidates
+          :rejected-count (- (length candidates) (length selected))
+          :rejected-candidates rejected-candidates)))
 
 (delib-flow--define-function delib-flow--selected-family-support-item
                              (package family)
